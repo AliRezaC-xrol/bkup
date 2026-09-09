@@ -23,7 +23,7 @@ restarted automatically if it stops, back on after a reboot.
 
 <div align="center">
 
-<img src="docs/flow-en.svg" alt="Your panels to bkup, then Telegram" width="820">
+<img src="docs/flow-en-2.svg" alt="Your panels to bkup, then Telegram" width="820">
 
 </div>
 
