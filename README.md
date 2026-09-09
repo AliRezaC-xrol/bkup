@@ -21,14 +21,11 @@ on the schedule you set, and sends it to your **Telegram** chat or channel as a
 file. It runs as a systemd service on your own server — CPU and RAM capped,
 restarted automatically if it stops, back on after a reboot.
 
-```
-  3x-ui ────────┐
-  HM Panel ─────┤   bkup pulls a full backup from every enabled panel,
-  PasarGuard ───┘   on the schedule you set
-                                │
-                                ▼
-                      your Telegram chat  ← each backup arrives as a file
-```
+<div align="center">
+
+<img src="docs/flow-en.svg" alt="Your panels to bkup, then Telegram" width="820">
+
+</div>
 
 Each panel is configured separately: enable the ones you use and test every
 connection with one click. The backup interval is set in **seconds**, so the
