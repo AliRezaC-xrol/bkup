@@ -38,12 +38,11 @@ same install covers anything from a few backups a day to one every few minutes.
 - **Your schedule** — interval in seconds, kept across reboots by the systemd service
 - **Web panel** — dashboard, live logs, backup history with per-backup download and delete
 - **Terminal menu** — `bkup` handles status, panel URL, password, port, logs, update and uninstall without opening the web panel
-- **Updates install the real latest release** — the installer and the updater resolve the newest GitHub release, verify the downloaded code against the tag and refuse anything else; your database, settings and backups are never touched
 
 ## Install
 
 ```bash
-sudo bash <(curl -fsSL https://raw.githubusercontent.com/AliRezaC-xrol/bkup/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/AliRezaC-xrol/bkup/main/install.sh)
 ```
 
 The command installs Node.js 20 if it is missing, downloads the **latest
