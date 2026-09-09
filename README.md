@@ -1,24 +1,25 @@
 <div align="center">
 
-# bkup
+<img src="docs/banner.svg" alt="bkup — automatic panel backups to Telegram" width="640">
 
 **Automatic backups of 3x-ui, HM Panel and PasarGuard — delivered to your Telegram.**
 
-One self-contained service with a **web panel** and a **terminal menu**: it connects
-to every panel you configure, takes a **full backup** on your schedule, and ships
-it to your **Telegram** chat or channel as a file.
-
 [![Release](https://img.shields.io/github/v/release/AliRezaC-xrol/bkup?style=flat-square&label=release)](https://github.com/AliRezaC-xrol/bkup/releases/latest)
-[![Stars](https://img.shields.io/github/stars/AliRezaC-xrol/bkup?style=flat-square)](https://github.com/AliRezaC-xrol/bkup/stargazers)
 [![Downloads](https://img.shields.io/github/downloads/AliRezaC-xrol/bkup/total?style=flat-square&label=downloads)](https://github.com/AliRezaC-xrol/bkup/releases)
+[![Stars](https://img.shields.io/github/stars/AliRezaC-xrol/bkup?style=flat-square)](https://github.com/AliRezaC-xrol/bkup/stargazers)
 
-[Install](#install) · [Quick start](#quick-start) · [Features](#features) · [Update](#update) · [CLI menu](#cli-menu) · [مستندات فارسی](README.fa.md)
+<img src="docs/panel.png" alt="bkup web panel" width="820">
+
+[Install](#install) · [First run](#first-run) · [Features](#features) · [Update](#update) · [Terminal menu](#terminal-menu) · [مستندات فارسی](README.fa.md)
 
 </div>
 
----
+## What it does
 
-## How it works
+`bkup` connects to every panel you configure, takes a **full backup** of each one
+on the schedule you set, and sends it to your **Telegram** chat or channel as a
+file. It runs as a systemd service on your own server — CPU and RAM capped,
+restarted automatically if it stops, back on after a reboot.
 
 ```
   3x-ui ────────┐
@@ -29,45 +30,39 @@ it to your **Telegram** chat or channel as a file.
                       your Telegram chat  ← each backup arrives as a file
 ```
 
-`bkup` runs as a hardened systemd service — CPU/RAM capped, auto-restart, starts
-on boot. Every panel is independent: enable any of them, each with its own
-connection test. The interval is set in **seconds**, so you can go from a few
-backups a day to one every few minutes.
+Each panel is configured separately: enable the ones you use and test every
+connection with one click. The backup interval is set in **seconds**, so the
+same install covers anything from a few backups a day to one every few minutes.
+
+## Features
+
+- **3x-ui, HM Panel and PasarGuard in one place** — each panel enabled independently, each with its own connection test
+- **Telegram delivery** — every backup arrives as a file in your chat or channel; nothing to download by hand
+- **Your schedule** — interval in seconds, kept across reboots by the systemd service
+- **Web panel** — dashboard, live logs, backup history with per-backup download and delete
+- **Terminal menu** — `bkup` handles status, panel URL, password, port, logs, update and uninstall without opening the web panel
+- **Updates install the real latest release** — the installer and the updater resolve the newest GitHub release, verify the downloaded code against the tag and refuse anything else; your database, settings and backups are never touched
 
 ## Install
-
-One command as root on the server. It installs Node.js 20 if missing, downloads
-the **latest release**, verifies the code against it, builds and starts the
-service, then prints the panel address and password:
 
 ```bash
 sudo bash <(curl -fsSL https://raw.githubusercontent.com/AliRezaC-xrol/bkup/main/install.sh)
 ```
 
-Re-running the same command on an existing server **updates in place** — the
-database, settings and backups are preserved.
+The command installs Node.js 20 if it is missing, downloads the **latest
+release**, verifies it, builds the app and registers the service — then prints
+the panel address and password. Run it again on the same server and it updates
+in place, keeping every setting and backup.
 
-## Quick start
+## First run
 
 | Step | Where | What to do |
 |---|---|---|
-| **1** | Installer | choose a port (or a random one) and a panel password |
+| **1** | Installer | pick a port (or a random one) and a panel password |
 | **2** | Browser | open `http://<server-ip>:<port>` and log in |
-| **3** | **Settings** | connect 3x-ui / HM Panel / PasarGuard — press the test button |
-| **4** | **Settings** | add your Telegram bot token + chat ID — press the test button |
-| **5** | **Settings** | set the backup interval and flip **Auto backup** ON |
-
-Backups start flowing to Telegram immediately.
-
-## Features
-
-- **All three panels at once** — 3x-ui, HM Panel and PasarGuard, each enabled independently with its own test button
-- **Telegram delivery** — every backup is sent to your chat or channel as a file
-- **Flexible schedule** — interval in seconds, survives reboots via systemd
-- **Web panel** — dashboard, live logs, backup history, download or delete each backup
-- **Terminal menu (`bkup`)** — status, panel URL, password, port, logs, update, uninstall
-- **Safe updates** — the installer and the updater resolve the latest GitHub release, verify the downloaded code against it and refuse anything else; your data is never touched
-- **Resource-friendly** — CPU/RAM limits on the service, backups stream straight to Telegram
+| **3** | **Settings** | connect 3x-ui, HM Panel or PasarGuard — press the test button |
+| **4** | **Settings** | add your Telegram bot token and chat ID — press the test button |
+| **5** | **Settings** | set the backup interval and turn **Auto backup** on |
 
 ## Update
 
@@ -75,34 +70,24 @@ Backups start flowing to Telegram immediately.
 |---|---|
 | Web panel | **System → Check for updates → Update** |
 | Terminal | `bkup` → **Update** |
-| Anywhere | re-run the install command above |
+| Anywhere | re-run the install command |
 
-The version shown in the panel is injected from the release at build time —
-after an update it always reflects the code that is actually running.
+The version shown in the panel comes from the code at build time, so after an
+update it always matches what is actually running.
 
-## CLI menu
+## Terminal menu
 
 Run `bkup` on the server:
 
 | Option | Purpose |
 |---|---|
 | **Status** | service state, installed version, update availability |
-| **Web panel URL** | prints the panel address and port |
-| **Password** | change the web panel password |
-| **Port** | change the web panel port |
-| **Logs** | tail the live service logs |
-| **Update** | pull and install the latest release in place, data preserved |
+| **Web panel URL** | prints the address and port |
+| **Password** | change the panel password |
+| **Port** | change the panel port |
+| **Logs** | follow the live service logs |
+| **Update** | install the latest release in place, data preserved |
 | **Uninstall** | remove the service and the application |
-
-## Uninstall
-
-Run `bkup` → **Uninstall**.
-
-## Screenshots
-
-<div align="center">
-<img src="docs/panel.png" alt="bkup web panel" width="820">
-</div>
 
 ## Server paths
 
@@ -115,6 +100,7 @@ Run `bkup` → **Uninstall**.
 | `bkup` | terminal menu command |
 | `bkup.service` | systemd service |
 
----
+## License
 
-[مستندات فارسی](README.fa.md)
+This project is distributed under a proprietary license — see
+[LICENSE](LICENSE) for the terms.
