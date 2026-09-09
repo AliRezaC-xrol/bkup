@@ -1,0 +1,90 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Singleton row (id = 1) holding all bot configuration
+model BackupConfig {
+  id               Int      @id @default(1)
+  // LEGACY (v3.0): kept only for one-time auto-migration to the per-panel flags below
+  panelType        String   @default("3x-ui")
+  // ── Panel 1: 3x-ui (MHSanaei) — independent connection ──
+  xuiEnabled       Boolean  @default(true)
+  panelUrl         String   @default("")
+  panelBasePath    String   @default("")
+  panelUsername    String   @default("")
+  panelPassword    String   @default("")
+  authMode         String   @default("session") // session | bearer
+  apiToken         String   @default("") // v3 admin API token (Bearer)
+  skipTlsVerify    Boolean  @default(true)
+  // ── Panel 2: HMPanel (neoauroraproject) — fully independent connection ──
+  hmEnabled        Boolean  @default(false)
+  hmUrl            String   @default("")
+  hmUsername       String   @default("")
+  hmPassword       String   @default("")
+  // ── Panel 3: PasarGuard — fully independent connection ──
+  pgEnabled        Boolean  @default(false)
+  pgUrl            String   @default("")
+  pgUsername       String   @default("")
+  pgPassword       String   @default("")
+  // Telegram (shared destination for BOTH panels)
+  telegramApiBase  String   @default("https://api.telegram.org")
+  telegramBotToken String   @default("")
+  telegramChatId   String   @default("")
+  telegramThreadId String   @default("")
+  // Scheduling
+  intervalSeconds  Int      @default(60)
+  enabled          Boolean  @default(false)
+  // Backup behavior
+  backupMode       String   @default("auto") // auto | db | json | local
+  localDbPath      String   @default("/etc/x-ui/x-ui.db")
+  localRetention   Int      @default(288) // keep last N local files (0 = unlimited)
+  tgAutoDeleteKeep Int      @default(0) // keep last N tg messages (0 = never delete)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+// Singleton row (id = 1) holding web-panel security configuration
+model SystemConfig {
+  id              Int      @id @default(1)
+  passwordHash    String   @default("") // scrypt hash of panel password
+  passwordSalt    String   @default("")
+  sessionSecret   String   @default("") // HMAC key for session tokens
+  sessionsVersion Int      @default(0) // bump to invalidate all sessions
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// One row per backup execution
+model BackupRun {
+  id            Int       @id @default(autoincrement())
+  startedAt     DateTime  @default(now())
+  finishedAt    DateTime?
+  status        String // running | success | failed
+  trigger       String // auto | manual
+  panel         String    @default("3x-ui") // 3x-ui | hmpanel | pasarguard — which panel this run belongs to
+  method        String? // db | json | local | hm-full | pg-full
+  fileName      String?
+  filePath      String?
+  fileSize      Int?
+  tgMessageId   Int?
+  tgDeleted     Boolean   @default(false)
+  error         String?
+  durationMs    Int?
+
+  @@index([startedAt])
+}
+
+// System log entries shown in the live log console
+model AppLog {
+  id      Int      @id @default(autoincrement())
+  ts      DateTime @default(now())
+  level   String // info | success | warn | error
+  message String
+
+  @@index([ts])
+}

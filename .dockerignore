@@ -1,0 +1,15 @@
+node_modules
+.next
+.git
+db
+backups
+data
+download
+research
+scripts/mock-tg-received
+*.log
+dev.log
+server.log
+.eslintcache
+Dockerfile
+docker-compose.yml

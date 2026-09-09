@@ -1,0 +1,16 @@
+services:
+  bkup:
+    build: .
+    image: bkup:latest
+    container_name: bkup
+    restart: unless-stopped
+    ports:
+      - "3999:3000" # رابط وب — روی http://SERVER_IP:3999 در دسترس است
+    environment:
+      - TZ=Asia/Tehran
+      - DATABASE_URL=file:/app/data/prod.db
+      - BACKUP_DIR=/app/data/backups
+    volumes:
+      - ./data:/app/data
+      # برای حالت بکاپ «لوکال» وقتی پنل 3x-ui روی همین سرور است، این خط را از کامنت خارج کنید:
+      # - /etc/x-ui:/host-xui:ro
