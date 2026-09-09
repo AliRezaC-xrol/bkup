@@ -29,16 +29,9 @@
 
 </div>
 
-<div dir="ltr" align="center">
+<div align="center">
 
-```
-  3x-ui ────────┐
-  HM Panel ─────┤   bkup pulls a full backup from every enabled panel,
-  PasarGuard ───┘   on the schedule you set
-                                │
-                                ▼
-                      your Telegram chat  ← each backup arrives as a file
-```
+<img src="docs/flow-fa.svg" alt="پنل‌ها به bkup و از bkup به تلگرام" width="820">
 
 </div>
 
