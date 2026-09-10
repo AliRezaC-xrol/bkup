@@ -231,6 +231,16 @@ fi
 info "[5/8] Installing dependencies & building (2–6 min)…"
 cd "$APP_DIR" || die "cannot enter ${APP_DIR}"
 mkdir -p db backups data
+
+# ── low-RAM guard: swap so the build and the app are never OOM-killed ──
+MEM_MB=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+if [ "$MEM_MB" -lt 3000 ] && [ -z "$(swapon --noheadings 2>/dev/null)" ]; then
+  info "small-RAM server (${MEM_MB}MB) detected — creating 2G swap (prevents OOM build/service kills)"
+  fallocate -l 2G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
+  chmod 600 /swapfile && mkswap /swapfile >/dev/null 2>&1 && swapon /swapfile >/dev/null 2>&1 || true
+  grep -q "^/swapfile" /etc/fstab 2>/dev/null || echo "/swapfile none swap sw 0 0" >> /etc/fstab
+  ok "swap enabled"
+fi
 if [ "$PKG_MGR" = "bun" ]; then
   bun install --frozen-lockfile >/dev/null 2>&1 || bun install >/dev/null
   bunx prisma generate >/dev/null
@@ -291,7 +301,7 @@ Type=simple
 WorkingDirectory=${APP_DIR}/.next/standalone
 EnvironmentFile=${APP_DIR}/.env
 Environment=NODE_ENV=production
-Environment=NODE_OPTIONS=--max-old-space-size=256
+Environment=NODE_OPTIONS=--max-old-space-size=768
 ExecStart=$(command -v node || echo /usr/bin/node) ${APP_DIR}/.next/standalone/server.js
 Restart=always
 RestartSec=10
