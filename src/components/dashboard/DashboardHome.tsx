@@ -103,7 +103,7 @@ export function DashboardHome({
     },
 {
       icon: <Boxes className="h-4 w-4" />,
-      label: t("panel_pg"),
+      label: t("panel_rb"),
       ready: panelReadyState(status?.panels?.rebecca),
       onTest: onTestPanel,
     },
