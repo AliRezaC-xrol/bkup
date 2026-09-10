@@ -119,6 +119,47 @@ async function sendOneDocument(
     : fail("ارسال به تلگرام ناموفق بود", "Sending to Telegram failed");
 }
 
+/** Live progress message — one message per backup, edited through the cycle. */
+export async function sendProgressMessage(cfg: AppConfig, text: string): Promise<TgResult<{ messageId: number }>> {
+  if (!cfg.telegramBotToken.trim() || !cfg.telegramChatId.trim()) {
+    return fail("توکن بات یا آیدی چت تلگرام تنظیم نشده است", "The Telegram bot token or chat ID is not configured");
+  }
+  try {
+    const res = await fetch(tgUrl(cfg, "sendMessage"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: cfg.telegramChatId.trim(),
+        ...(cfg.telegramThreadId.trim() ? { message_thread_id: cfg.telegramThreadId.trim() } : {}),
+        text,
+      }),
+    });
+    const body = (await res.json().catch(() => null)) as
+      | { ok?: boolean; result?: { message_id?: number }; description?: string }
+      | null;
+    if (res.ok && body?.ok && body.result?.message_id) return { ok: true, data: { messageId: body.result.message_id } };
+    return { ok: false, error: body?.description ?? `HTTP ${res.status}` };
+  } catch (e: unknown) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** Edit a progress message in place — failures are non-fatal by design. */
+export async function editProgressMessage(cfg: AppConfig, messageId: number, text: string): Promise<void> {
+  try {
+    await fetch(tgUrl(cfg, "editMessageText"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: cfg.telegramChatId.trim(),
+        ...(cfg.telegramThreadId.trim() ? { message_thread_id: cfg.telegramThreadId.trim() } : {}),
+        message_id: messageId,
+        text,
+      }),
+    });
+  } catch { /* progress edits must never break the backup flow */ }
+}
+
 export type TgPanel = "3x-ui" | "hmpanel" | "pasarguard" | "rebecca";
 
 /**
@@ -132,17 +173,21 @@ export async function sendBackupDocument(
   fileName: string,
   method: string,
   panel: TgPanel = "3x-ui"
-): Promise<TgResult<{ messageIds: number[]; parts: number }>> {
+): Promise<TgResult<{ messageIds: number[]; parts: number; deliveredSingleFile?: boolean }>> {
   if (!cfg.telegramBotToken.trim()) return fail("توکن بات تلگرام تنظیم نشده است", "The Telegram bot token is not configured");
   if (!cfg.telegramChatId.trim()) return fail("آیدی چت تلگرام تنظیم نشده است", "The Telegram chat ID is not configured");
 
   const premium = panel === "hmpanel" && Boolean((cfg as { hmPremium?: boolean }).hmPremium);
 
-  if (buf.length <= PART_LIMIT) {
-    const r = await sendOneDocument(cfg, buf, fileName, captionFor(fileName, buf.length, method, panel, premium));
-    if (!r.ok) return { ok: false, error: r.error, errorBi: r.errorBi };
-    return { ok: true, data: { messageIds: [r.data!.messageId], parts: 1 } };
+  // ALWAYS attempt one complete file first — no splitting by default. Only if
+  // the endpoint itself rejects the size (the public Bot API caps at 50 MB)
+  // does the automatic multi-part fallback below kick in.
+  const single = await sendOneDocument(cfg, buf, fileName, captionFor(fileName, buf.length, method, panel, premium));
+  if (single.ok) {
+    return { ok: true, data: { messageIds: [single.data!.messageId], parts: 1, deliveredSingleFile: true } };
   }
+  const sizeRejected = /too (big|large)|entity too large|file is too big|413/i.test(single.errorBi?.en ?? single.error ?? "");
+  if (!sizeRejected) return { ok: false, error: single.error, errorBi: single.errorBi };
 
   // split into parts — every part WILL be delivered
   const total = Math.ceil(buf.length / PART_LIMIT);
@@ -168,7 +213,7 @@ export async function sendBackupDocument(
     }
     messageIds.push(r.data!.messageId);
   }
-  return { ok: true, data: { messageIds, parts: messageIds.length } };
+  return { ok: true, data: { messageIds, parts: messageIds.length, deliveredSingleFile: false } };
 }
 
 /** Send a single document (compat helper — used for small ad-hoc files). */

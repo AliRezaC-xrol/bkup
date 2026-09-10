@@ -56,8 +56,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         ok: true,
         ...okMsg(bi(
-          `اتصال به Rebecca موفق بود ✔ (${res.data!.username} @ ${res.data!.base}) — بکاپ کامل (دیتابیس + تنظیمات) در چرخه بعدی گرفته می‌شود`,
-          `Connected to Rebecca successfully ✔ (${res.data!.username} @ ${res.data!.base}) — a full export (database + configuration) will be pulled on the next cycle`
+          `اتصال به Rebecca موفق بود (${res.data!.username} @ ${res.data!.base}) — بکاپ کامل (دیتابیس + تنظیمات) در چرخه بعدی گرفته می‌شود`,
+          `Connected to Rebecca successfully (${res.data!.username} @ ${res.data!.base}) — a full export (database + configuration) will be pulled on the next cycle`
         )),
       });
     }
@@ -72,8 +72,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         ok: true,
         ...okMsg(bi(
-          `اتصال به PasarGuard موفق بود ✔ (${res.data!.username} @ ${res.data!.base}${v}) — بکاپ کامل (کاربران + هاست‌ها + نودها + کورها + گروه‌ها + تنظیمات) در چرخه بعدی گرفته می‌شود`,
-          `Connected to PasarGuard successfully ✔ (${res.data!.username} @ ${res.data!.base}${v}) — a full snapshot (users + hosts + nodes + cores + groups + settings) will be pulled on the next cycle`
+          `اتصال به PasarGuard موفق بود (${res.data!.username} @ ${res.data!.base}${v}) — بکاپ کامل (کاربران + هاست‌ها + نودها + کورها + گروه‌ها + تنظیمات) در چرخه بعدی گرفته می‌شود`,
+          `Connected to PasarGuard successfully (${res.data!.username} @ ${res.data!.base}${v}) — a full snapshot (users + hosts + nodes + cores + groups + settings) will be pulled on the next cycle`
         )),
       });
     }
@@ -88,12 +88,12 @@ export async function POST(req: NextRequest) {
         await saveConfig({ ...keepUnmasked(body.config!), hmPremium: Boolean(res.data!.premium) });
       }
       const v = res.data!.hmVersion ? ` — ${res.data!.hmVersion}` : "";
-      const prem = res.data!.premium ? " — Premium edition detected" : "";
+      const prem = (res.data!.premium ? " — Premium edition" : " — Free edition");
       return NextResponse.json({
         ok: true,
         ...okMsg(bi(
-          `اتصال به HMPanel موفق بود ✔ (${res.data!.username} @ ${res.data!.base}${v})${prem} — بکاپ کامل (دیتابیس + تنظیمات + آپلودها) در چرخه بعدی گرفته می‌شود`,
-          `Connected to HMPanel successfully ✔ (${res.data!.username} @ ${res.data!.base}${v})${prem} — a full archive (database + config + uploads) will be pulled on the next cycle`
+          `اتصال به HMPanel موفق بود (${res.data!.username} @ ${res.data!.base}${v})${prem} — بکاپ کامل (دیتابیس + تنظیمات + آپلودها) در چرخه بعدی گرفته می‌شود`,
+          `Connected to HMPanel successfully (${res.data!.username} @ ${res.data!.base}${v})${prem} — a full archive (database + config + uploads) will be pulled on the next cycle`
         )),
       });
     }

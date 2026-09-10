@@ -1,6 +1,5 @@
 import axios, { type AxiosInstance } from "axios";
-import https from "node:https";
-import http from "node:http";
+import { sharedHttpAgent, sharedHttpsAgent } from "@/lib/http-agents";
 import zlib from "node:zlib";
 import type { AppConfig } from "@/lib/config-service";
 import { bi, fail, type Bi } from "@/lib/messages";
@@ -44,8 +43,8 @@ const USER_PAGE = 200; // users per page during the snapshot
 function axiosFor(cfg: AppConfig, timeout = REQ_TIMEOUT_MS): AxiosInstance {
   return axios.create({
     timeout,
-    httpAgent: new http.Agent({ keepAlive: true }),
-    httpsAgent: new https.Agent({ rejectUnauthorized: !cfg.skipTlsVerify, keepAlive: true }),
+    httpAgent: sharedHttpAgent(),
+    httpsAgent: sharedHttpsAgent(cfg.skipTlsVerify),
     maxRedirects: 5,
     validateStatus: () => true,
     headers: { "User-Agent": "bkup/1.0", Accept: "application/json" },
