@@ -34,8 +34,6 @@ same install covers anything from a few backups a day to one every few minutes.
 ## Features
 
 - **3x-ui, HM Panel, PasarGuard and Rebecca in one place** — each panel enabled independently, each with its own connection test
-- **HM Panel Free/Premium detection** — the edition is detected automatically; a Premium panel ships its premium data inside the full archive
-- **No size limits** — every backup is one complete archive; large files are delivered to Telegram automatically
 - **Telegram delivery** — every backup arrives as a file in your chat or channel; nothing to download by hand
 - **Your schedule** — interval in seconds, kept across reboots by the systemd service
 - **Web panel** — dashboard, live logs, backup history with per-backup download and delete
@@ -98,15 +96,6 @@ Run `bkup` on the server:
 | `/opt/bkup/backups` | local copies of the backups |
 | `bkup` | terminal menu command |
 | `bkup.service` | systemd service |
-
-## Connecting Rebecca
-
-1. In the Rebecca dashboard, pick (or create) an admin account — bkup talks to the panel's official API.
-2. In bkup → **Settings → Rebecca**: enter the panel URL exactly as you open its dashboard (`https://your-domain:8000`), plus the admin username and password.
-3. Press **Test connection** — bkup logs in through `POST /api/admin/token` and validates the session.
-4. Enable the Rebecca card — every cycle pulls the panel's own complete export (database + configuration: users, inbounds, certificates, settings, traffic) and sends it to Telegram as one file.
-
-> Rebecca backups need a binary-runtime install of the panel — source-only installs answer HTTP 409.
 
 ## License
 

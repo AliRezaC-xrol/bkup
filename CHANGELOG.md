@@ -5,30 +5,12 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ## [1.1.0] — 2026-09-10
 
-The final production release.
-
-### Highlights
-
-- **Rebecca Panel support** — fourth independent panel; official-API login
-  (`POST /api/admin/token`) and the panel's own **complete export**
-  (`GET /api/settings/backup/export`) as a true full backup.
-- **HM Panel Free/Premium detection** — edition detected from the panel's
-  health payload, shown in the web panel and CLI; premium data ships inside
-  the full archive.
-- **Unlimited backup & Telegram delivery** — no size limits anywhere; one
-  complete archive per backup, single-upload first with automatic multi-part
-  fallback.
-- **English Telegram notifications with live progress** — Backup started /
-  Creating full backup / Uploading backup / Backup uploaded successfully /
-  Backup failed, edited into one message per run.
-- **CLI service control** — start / stop / restart (reboot) the panel service
-  from the terminal menu; every option reviewed.
-- **Memory & stability** — fixed a keep-alive agent leak in all panel clients
-  (shared process-wide agents), self-healing health watchdog, exception
-  safety nets, bounded log storage.
-- **Backup integrity gate** — archives are validated (gzip/zip magic bytes,
-  non-empty, no error pages) before storage and delivery.
-- **Thread ID → Topic ID** across visible text (logic untouched).
+- **Rebecca Panel support** — fourth independent panel; true full backup through the official Rebecca API
+- **HM Panel Free/Premium edition detection** — shown in the web panel and CLI
+- **Unlimited backup size** — one complete archive per backup; single-upload Telegram delivery with an automatic multi-part fallback
+- **CLI service control** — start / stop / restart the panel from the terminal menu
+- **Memory & stability** — shared HTTP agents fix the keep-alive leak; self-healing watchdog
+- All terminal logs and Telegram notifications in English
 
 ## [1.0.0] — 2026-09-09
 
