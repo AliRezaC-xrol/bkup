@@ -2,7 +2,7 @@
 
 <img src="docs/banner.svg" alt="bkup — automatic panel backups to Telegram" width="640">
 
-**Automatic backups of 3x-ui, HM Panel, PasarGuard and Rebecca — delivered to your Telegram.**
+**Automatic backups of 3x-ui, HM Panel, PasarGuard, Rebecca — delivered to your Telegram.**
 
 [![Release](https://img.shields.io/github/v/release/AliRezaC-xrol/bkup?style=flat-square&label=release)](https://github.com/AliRezaC-xrol/bkup/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/AliRezaC-xrol/bkup/total?style=flat-square&label=downloads)](https://github.com/AliRezaC-xrol/bkup/releases)
@@ -71,17 +71,6 @@ in place, keeping every setting and backup.
 The version shown in the panel comes from the code at build time, so after an
 update it always matches what is actually running.
 
-## Large backups (over 50 MB)
-
-Telegram's public servers accept up to 50 MB per upload. bkup removes that
-limit with its own local Bot API server — set up once from the terminal:
-
-1. Run `bkup` and choose **Setup Telegram Bot API**.
-2. Paste your free `api_id` / `api_hash` from [my.telegram.org](https://my.telegram.org).
-3. Done — backups up to **2 GB** are delivered to Telegram as **one complete file**.
-
-Without the local server, larger backups are still delivered completely —
-automatically split into 45 MB parts that rejoin with a single `cat` command.
 
 ## Terminal menu
 

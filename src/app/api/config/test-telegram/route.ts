@@ -44,10 +44,18 @@ export async function POST(req: NextRequest) {
       messageBi: bi("پیام تست با موفقیت به تلگرام ارسال شد", "The test message was sent to Telegram successfully"),
     });
   } catch (e: unknown) {
-    const t = e instanceof Error ? e.message : "خطای نامشخص";
-    return NextResponse.json(
-      { ok: false, error: t, errorBi: bi(t, e instanceof Error ? e.message : "Unknown error") },
-      { status: 200 }
-    );
+    const raw = e instanceof Error ? e.message : String(e ?? "unknown");
+    const cause = (e as { cause?: { code?: string } })?.cause?.code ?? "";
+    let en: string;
+    if (raw.includes("fetch failed") || cause === "ENOTFOUND") {
+      en = "Could not reach api.telegram.org from this server - check the server's internet/DNS (or run: curl -s https://api.telegram.org), then try again";
+    } else if (cause === "ECONNREFUSED" || raw.includes("ECONNREFUSED")) {
+      en = "The connection to api.telegram.org was refused - check the server's firewall/outbound access";
+    } else if (cause === "ETIMEDOUT" || cause === "ECONNABORTED" || raw.includes("timeout")) {
+      en = "The connection to api.telegram.org timed out - the server may be blocking Telegram or the route is unstable";
+    } else {
+      en = e instanceof Error ? e.message : "Unknown error";
+    }
+    return NextResponse.json({ ok: false, error: en, errorBi: bi(en, en) }, { status: 200 });
   }
 }

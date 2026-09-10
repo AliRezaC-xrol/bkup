@@ -339,8 +339,7 @@ menu() {
   ${B}8)${N}  Start web panel service
   ${B}9)${N}  Stop web panel service
   ${B}10)${N} Restart web panel service
-  ${B}11)${N} Setup Telegram Bot API (single-file uploads up to 2GB)
-  ${B}12)${N} Uninstall
+  ${B}11)${N} Uninstall
   ${B}0)${N}  Exit
 
   ${D}backups & settings → web panel (option 2)${N}
@@ -358,8 +357,7 @@ MENU
       8) svc_control_flow start; pause ;;
       9) svc_control_flow stop; pause ;;
       10) svc_control_flow restart; pause ;;
-      11) bash "$APP_DIR/scripts/setup-botapi.sh"; pause ;;
-      12) uninstall_flow; [ -f "$APP_DIR/cli.sh" ] || exit 0; pause ;;
+      11) uninstall_flow; [ -f "$APP_DIR/cli.sh" ] || exit 0; pause ;;
       0|"q"|"Q") exit 0 ;;
       *) ;;
     esac
