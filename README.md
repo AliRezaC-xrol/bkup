@@ -42,7 +42,7 @@ same install covers anything from a few backups a day to one every few minutes.
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/AliRezaC-xrol/bkup/main/install.sh -o bkup-install.sh && sudo bash bkup-install.sh
+bash <(curl -fsSL https://raw.githubusercontent.com/AliRezaC-xrol/bkup/main/install.sh)
 ```
 
 The command installs Node.js 20 if it is missing, downloads the **latest
@@ -82,7 +82,9 @@ Run `bkup` on the server:
 | **Password** | change the panel password |
 | **Port** | change the panel port |
 | **Logs** | follow the live service logs |
-| **Start / Stop / Restart** | control the web panel service from the terminal |
+| **Start panel** | start the web panel service |
+| **Stop panel** | stop the web panel service |
+| **Restart panel** | restart the web panel service |
 | **Update** | install the latest release in place, data preserved |
 | **Uninstall** | remove the service and the application |
 

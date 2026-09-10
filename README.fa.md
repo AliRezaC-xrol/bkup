@@ -54,7 +54,7 @@
 </div>
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/AliRezaC-xrol/bkup/main/install.sh -o bkup-install.sh && sudo bash bkup-install.sh
+bash <(curl -fsSL https://raw.githubusercontent.com/AliRezaC-xrol/bkup/main/install.sh)
 ```
 
 <div dir="rtl" align="right">
@@ -92,6 +92,9 @@ curl -fsSL https://raw.githubusercontent.com/AliRezaC-xrol/bkup/main/install.sh 
 | **Password** | تغییر رمز پنل وب |
 | **Port** | تغییر پورت پنل وب |
 | **Logs** | دنبال‌کردن زندهٔ لاگ سرویس |
+| **Start panel** | روشن‌کردن سرویس وب‌پنل |
+| **Stop panel** | خاموش‌کردن سرویس وب‌پنل |
+| **Restart panel** | ری‌استارت سرویس وب‌پنل |
 | **Update** | نصب آخرین نسخه درجا، با حفظ دیتا |
 | **Uninstall** | حذف سرویس و برنامه |
 
