@@ -125,6 +125,16 @@ fi
 
 say "==> [2/6] Code updated → v$NEW_VERSION  ${WEB_MODE:+(release $TAG)}"
 
+
+# ── low-RAM guard: swap so the build and the app are never OOM-killed ──
+MEM_MB=$(awk '/MemTotal/{print int($2/1024)}' /proc/memsay 2>/dev/null || echo 0)
+if [ "$MEM_MB" -lt 3000 ] && [ -z "$(swapon --noheadings 2>/dev/null)" ]; then
+  say "small-RAM server (${MEM_MB}MB) detected — creating 2G swap (prevents OOM build/service kills)"
+  fallocate -l 2G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
+  chmod 600 /swapfile && mkswap /swapfile >/dev/null 2>&1 && swapon /swapfile >/dev/null 2>&1 || true
+  grep -q "^/swapfile" /etc/fstab 2>/dev/null || echo "/swapfile none swap sw 0 0" >> /etc/fstab
+  ok "swap enabled"
+fi
 say "==> [3/6] Installing dependencies + generating Prisma client…"
 bash "$SCRIPT_DIR/build-native.sh" || {
   write_state error "$FROM_V" "" "build failed"
@@ -160,6 +170,9 @@ if command -v systemctl >/dev/null 2>&1; then
   fi
 fi
 if [ -n "$SVC" ]; then
+  # ensure the running service gets a sane heap (old installs had 256MB — OOM crash loop)
+  sed -i 's/max-old-space-size=[0-9]*/max-old-space-size=768/' "/etc/systemd/system/${SVC}.service" 2>/dev/null || true
+  systemctl daemon-reload >/dev/null 2>&1
   systemctl enable "$SVC" >/dev/null 2>&1
   systemctl restart "$SVC" && say "    systemctl restart ${SVC}: OK"
 else
@@ -184,6 +197,7 @@ if [ "$OK" = "1" ]; then
   exit 0
 else
   write_state error "$FROM_V" "$NEW_VERSION" "health check failed"
-  say "[WARN] Update applied but health check failed — check: journalctl -u ${SVC:-bkup} -n 50"
+  say "[WARN] Update applied but health check failed — service logs (last 30 lines):"
+  journalctl -u "${SVC:-bkup}" -n 30 --no-pager 2>/dev/null | tail -30 || true
   exit 1
 fi
