@@ -33,6 +33,7 @@ apt-get update -qq >/dev/null 2>&1 || true
 apt-get install -y -qq git cmake g++ make libssl-dev zlib1g-dev >/dev/null 2>&1 || true
 
 mkdir -p /var/lib/telegram-bot-api
+chmod 777 /var/lib/telegram-bot-api  # the container runs as a non-root user
 RUN_ARGS="--api-id=${API_ID} --api-hash=${API_HASH} --local --http-port=8081 --dir=/var/lib/telegram-bot-api --temp-dir=/var/lib/telegram-bot-api/tmp"
 
 install_via_docker() {
@@ -97,8 +98,20 @@ EOF
 fi
 
 info "waiting for the local server…"
-UP=0; for i in $(seq 1 30); do sleep 2; curl -sf -o /dev/null "http://127.0.0.1:8081" && { UP=1; break; }; done
-[ "$UP" = "1" ] || { fail "server did not come up — check: journalctl -u telegram-bot-api -n 30"; exit 1; }
+# ANY HTTP answer counts (the local server answers 404 on /) — only a dead
+# connection (000) means it is not up
+UP=0; for i in $(seq 1 30); do
+  sleep 2
+  CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "http://127.0.0.1:8081" 2>/dev/null || echo 000)
+  [ "$CODE" != "000" ] && { UP=1; break; }
+done
+if [ "$UP" != "1" ]; then
+  fail "the local server did not come up — diagnostics:"
+  command -v docker >/dev/null 2>&1 && docker ps -a --filter name=telegram-bot-api --format '{{.Names}}: {{.Status}}' 2>/dev/null
+  command -v docker >/dev/null 2>&1 && docker logs telegram-bot-api --tail 20 2>/dev/null | tail -20
+  journalctl -u telegram-bot-api -n 20 --no-pager 2>/dev/null | tail -20 || true
+  exit 1
+fi
 ok "local Bot API server is up on 127.0.0.1:8081"
 
 # point bkup at it (direct config write, same DB the panel uses)
