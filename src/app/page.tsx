@@ -240,10 +240,11 @@ function App() {
           toast({ title: tr(t("panel_conn_fail"), { name }), description: resolveText(data.errorBi ?? data.error, "en"), variant: "destructive" });
         }
       }
+      loadCore(); // re-fetch config so a newly detected edition (e.g. HM Panel Premium) shows immediately
     } catch {
       toast({ title: t("network_error"), variant: "destructive" });
     }
-  }, [config, toast, t]);
+  }, [config, toast, t, loadCore]);
 
   const testTg = useCallback(async () => {
     try {
