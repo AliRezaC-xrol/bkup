@@ -76,3 +76,6 @@ scripts/test-*.png
 tool-results/
 
 .test-install/
+prisma/data/
+data/
+*.db
