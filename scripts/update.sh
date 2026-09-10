@@ -64,13 +64,14 @@ TAG="$(curl -sf "${AUTH[@]}" --max-time 15 --retry 2 \
         | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4)" || TAG=""
 if [ -z "$TAG" ]; then
   write_state error "$FROM_V" "" "cannot determine latest release"
-  say "✗ could not determine the LATEST release from GitHub (network / token?) — running version left untouched"
+  say "[FAIL] could not determine the LATEST release from GitHub (network / token?) — running version left untouched"
   exit 1
 fi
 
 if [ "v$FROM_V" = "$TAG" ]; then
   write_state done "$FROM_V" "$FROM_V"
-  say "✔ Already on the latest release ($TAG)"
+  say "[OK] Already on the latest release ($TAG)"
+  rm -f /tmp/.bkup-update-notice
   exit 0
 fi
 
@@ -94,7 +95,7 @@ fi
 if [ -z "$SRC" ]; then
   rm -rf /tmp/abx-update /tmp/abx-update.tar.gz
   write_state error "$FROM_V" "" "download of ${TAG} failed"
-  say "✗ could not download release ${TAG} — running version left untouched"
+  say "[FAIL] could not download release ${TAG} — running version left untouched"
   exit 1
 fi
 
@@ -102,7 +103,7 @@ GOT="$(grep -o '"version": *"[^"]*"' "$SRC/package.json" 2>/dev/null | head -1 |
 if [ "$GOT" != "${TAG#v}" ]; then
   rm -rf /tmp/abx-update /tmp/abx-update.tar.gz
   write_state error "$FROM_V" "" "version mismatch: got v${GOT:-unknown}, expected ${TAG}"
-  say "✗ version mismatch (downloaded v${GOT:-unknown} ≠ release ${TAG}) — running version left untouched"
+  say "[FAIL] version mismatch (downloaded v${GOT:-unknown} != release ${TAG}) — running version left untouched"
   exit 1
 fi
 
@@ -118,7 +119,7 @@ rm -rf /tmp/abx-update /tmp/abx-update.tar.gz
 NEW_VERSION="$(grep -o '"version": *"[^"]*"' "$APP_DIR/package.json" | head -1 | cut -d'"' -f4)"
 if [ "$NEW_VERSION" != "${TAG#v}" ]; then
   write_state error "$FROM_V" "" "post-copy verification failed"
-  say "✗ post-copy verification failed (disk has v${NEW_VERSION:-unknown}) — running version left untouched"
+  say "[FAIL] post-copy verification failed (disk has v${NEW_VERSION:-unknown}) — running version left untouched"
   exit 1
 fi
 
@@ -127,7 +128,7 @@ say "==> [2/6] Code updated → v$NEW_VERSION  ${WEB_MODE:+(release $TAG)}"
 say "==> [3/6] Installing dependencies + generating Prisma client…"
 bash "$SCRIPT_DIR/build-native.sh" || {
   write_state error "$FROM_V" "" "build failed"
-  say "✗ build failed — previous version is still running"; exit 1
+  say "[FAIL] build failed — previous version is still running"; exit 1
 }
 
 say "==> [4/6] Applying database migrations (data preserved)…"
@@ -178,10 +179,11 @@ done
 
 if [ "$OK" = "1" ]; then
   write_state done "$FROM_V" "$NEW_VERSION"
-  say "✔ Update complete: v$FROM_V → v$NEW_VERSION  (latest release ✓ — service is healthy)"
+  rm -f /tmp/.bkup-update-notice
+  say "[OK] Update complete: v$FROM_V -> v$NEW_VERSION (service is healthy — web panel and CLI are now on v$NEW_VERSION)"
   exit 0
 else
   write_state error "$FROM_V" "$NEW_VERSION" "health check failed"
-  say "⚠ Update applied but health check failed — check: journalctl -u ${SVC:-bkup} -n 50"
+  say "[WARN] Update applied but health check failed — check: journalctl -u ${SVC:-bkup} -n 50"
   exit 1
 fi

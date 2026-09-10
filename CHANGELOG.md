@@ -10,6 +10,7 @@ Versions follow [Semantic Versioning](https://semver.org/).
 - **Unlimited backup size** — one complete archive per backup; single-upload Telegram delivery with an automatic multi-part fallback
 - **CLI service control** — start / stop / restart the panel from the terminal menu
 - **Memory & stability** — shared HTTP agents fix the keep-alive leak; self-healing watchdog
+- **Update flow fixes** — the web panel always reports the installed version, the update notice clears right after updating
 - All terminal logs and Telegram notifications in English
 
 ## [1.0.0] — 2026-09-09
