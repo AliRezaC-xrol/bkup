@@ -185,11 +185,25 @@ export async function hmLogin(
     (nested && typeof nested.token === "string" && nested.token) ||
     "";
   if (res.status >= 200 && res.status < 300 && tokenRaw) {
+    // Edition: the panel's own license endpoint (GET /platform/license) is the
+    // source of truth — the health payload's mode only mirrors RELEASE_MODE.
+    let premium = Boolean(probe.data.premium);
+    try {
+      const lic = await ax.get(`${probe.data.base}/platform/license`, {
+        headers: { Authorization: `Bearer ${String(tokenRaw)}` },
+        timeout: 8000,
+      });
+      const licBody = (lic.data ?? {}) as Record<string, unknown>;
+      const licNested = licBody.license as Record<string, unknown> | undefined;
+      const edition = String(licBody.edition ?? licNested?.edition ?? "").toUpperCase();
+      if (edition === "PREMIUM") premium = true;
+      else if (edition === "COMMUNITY" || edition === "FREE") premium = false;
+    } catch { /* endpoint missing on old builds — keep the health-based signal */ }
     const session: HmSession & { key: string } = {
       token: String(tokenRaw),
       base: probe.data.base,
       hmVersion: probe.data.hmVersion,
-      premium: probe.data.premium,
+      premium,
       loggedInAt: Date.now(),
       key: cfgKey(cfg),
     };
