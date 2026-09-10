@@ -77,6 +77,13 @@ export async function getConfig(): Promise<AppConfig> {
   if (cfg.panelType === "hmpanel" && cfg.hmUrl.trim() === "") {
     cfg = await migrateLegacy(cfg);
   }
+  // Telegram delivery is pinned to the official public endpoint. Older builds
+  // allowed a custom base (e.g. a local Bot API server); if such a value is
+  // still stored, reset it here so connectivity always works.
+  const OFFICIAL_TG = "https://api.telegram.org";
+  if (cfg.telegramApiBase.trim() !== OFFICIAL_TG) {
+    cfg = await db.backupConfig.update({ where: { id: 1 }, data: { telegramApiBase: OFFICIAL_TG } });
+  }
   return cfg;
 }
 
