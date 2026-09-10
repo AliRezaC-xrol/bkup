@@ -23,7 +23,8 @@ export interface TgResult<T = unknown> {
 const PART_LIMIT = 45 * 1024 * 1024;
 
 function tgUrl(cfg: AppConfig, method: string): string {
-  const base = cfg.telegramApiBase.trim().replace(/\/+$/, "") || "https://api.telegram.org";
+  // Telegram delivery always goes through the official public endpoint.
+  const base = "https://api.telegram.org";
   return `${base}/bot${cfg.telegramBotToken.trim()}/${method}`;
 }
 
@@ -119,6 +120,16 @@ async function sendOneDocument(
     : fail("ارسال به تلگرام ناموفق بود", "Sending to Telegram failed");
 }
 
+/** Translate low-level fetch failures into a plain English cause. */
+function fetchCause(e: unknown): string | null {
+  const raw = e instanceof Error ? e.message : String(e ?? "");
+  const cause = (e as { cause?: { code?: string } })?.cause?.code ?? "";
+  if (raw.includes("fetch failed") || cause === "ENOTFOUND") return "api.telegram.org is unreachable from this server - check the server's internet/DNS";
+  if (cause === "ECONNREFUSED" || raw.includes("ECONNREFUSED")) return "the connection to api.telegram.org was refused - check the firewall/outbound access";
+  if (cause === "ETIMEDOUT" || cause === "ECONNABORTED" || raw.includes("timeout")) return "the connection to api.telegram.org timed out";
+  return null;
+}
+
 /** Live progress message — one message per backup, edited through the cycle. */
 export async function sendProgressMessage(cfg: AppConfig, text: string): Promise<TgResult<{ messageId: number }>> {
   if (!cfg.telegramBotToken.trim() || !cfg.telegramChatId.trim()) {
@@ -140,7 +151,7 @@ export async function sendProgressMessage(cfg: AppConfig, text: string): Promise
     if (res.ok && body?.ok && body.result?.message_id) return { ok: true, data: { messageId: body.result.message_id } };
     return { ok: false, error: body?.description ?? `HTTP ${res.status}` };
   } catch (e: unknown) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    return { ok: false, error: fetchCause(e) ?? (e instanceof Error ? e.message : String(e)) };
   }
 }
 
@@ -243,7 +254,7 @@ export async function deleteMessage(cfg: AppConfig, messageId: number): Promise<
       ? { ok: false, error: body.description }
       : { ok: false, error: `HTTP ${res.status}` };
   } catch (e: unknown) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    return { ok: false, error: fetchCause(e) ?? (e instanceof Error ? e.message : String(e)) };
   }
 }
 
@@ -265,7 +276,7 @@ export async function sendMessage(cfg: AppConfig, text: string): Promise<TgResul
     if (res.ok && body?.ok) return { ok: true };
     return { ok: false, error: body?.description ?? `HTTP ${res.status}` };
   } catch (e: unknown) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    return { ok: false, error: fetchCause(e) ?? (e instanceof Error ? e.message : String(e)) };
   }
 }
 

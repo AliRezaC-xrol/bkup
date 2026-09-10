@@ -2,7 +2,7 @@
 
 <img src="docs/banner.svg" alt="bkup — بکاپ خودکار پنل‌ها به تلگرام" width="640">
 
-**بکاپ خودکار از پنل‌های 3x-ui ، HM Panel ، PasarGuard و Rebecca — تحویل مستقیم در تلگرام**
+**بکاپ خودکار از پنل‌های 3x-ui ، HM Panel ، PasarGuard , Rebecca — تحویل مستقیم در تلگرام**
 
 [![Release](https://img.shields.io/github/v/release/AliRezaC-xrol/bkup?style=flat-square&label=release)](https://github.com/AliRezaC-xrol/bkup/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/AliRezaC-xrol/bkup/total?style=flat-square&label=downloads)](https://github.com/AliRezaC-xrol/bkup/releases)
@@ -80,18 +80,6 @@ bash <(curl -fsSL https://raw.githubusercontent.com/AliRezaC-xrol/bkup/main/inst
 
 شمارهٔ نسخه‌ای که در پنل دیده می‌شود در زمان بیلد از خود کد تزریق می‌شود؛ پس
 از آپدیت همیشه با چیزی که واقعاً روی سرور اجراست یکی است.
-
-## بکاپ‌های بزرگ (بالای ۵۰ مگابایت)
-
-سرویس عمومی تلگرام سقف ۵۰ مگابایت برای هر فایل دارد. bkup این محدودیت را با
-سرور محلی Bot API برمی‌دارد — فقط یک‌بار از ترمینال:
-
-۱. `bkup` را اجرا و گزینهٔ **Setup Telegram Bot API** را بزنید.
-۲. کلیدهای رایگان `api_id` و `api_hash` را از [my.telegram.org](https://my.telegram.org) وارد کنید.
-۳. تمام — بکاپ‌های تا **۲ گیگابایت** به‌صورت **یک فایل کامل** به تلگرام می‌روند.
-
-بدون این سرور هم بکاپ‌های بزرگ کامل می‌رسند — خودکار به بخش‌های ۴۵ مگابایتی
-تقسیم و با یک دستور `cat` دوباره یکپارچه می‌شوند.
 
 ## منوی ترمینال
 
