@@ -8,7 +8,7 @@
 export const dict = {
   appName: "bkup",
   appBrand: "bkup",
-  appTagline: "Automatic 3x-ui, HM Panel & PasarGuard backups delivered to Telegram",
+  appTagline: "Automatic 3x-ui, HM Panel, PasarGuard & Rebecca backups delivered to Telegram",
 
   // nav
   nav_dashboard: "Dashboard",
@@ -130,7 +130,7 @@ export const dict = {
   running_now: "Running",
 
   // settings tab
-  dual_panels_hint: "Three panels (3x-ui, HM Panel, PasarGuard) are fully independent — each has its own connection. Every enabled panel gets its own full backup each cycle and its file is sent to the same Telegram chat.",
+  dual_panels_hint: "Four panels (3x-ui, HM Panel, PasarGuard, Rebecca) are fully independent — each has its own connection. Every enabled panel gets its own full backup each cycle and its file is sent to the same Telegram chat.",
   xui_card_desc: "Independent connection to your 3x-ui (MHSanaei) panel for full database backups",
   hm_card_desc: "Independent connection to HMPanel for full archives (database + config + uploads)",
   pg_card_desc: "Independent connection to a PasarGuard panel for a full snapshot (users + hosts + nodes + cores + groups + settings)",
