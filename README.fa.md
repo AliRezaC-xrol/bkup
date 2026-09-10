@@ -2,7 +2,7 @@
 
 <img src="docs/banner.svg" alt="bkup — بکاپ خودکار پنل‌ها به تلگرام" width="640">
 
-**بکاپ خودکار از پنل‌های 3x-ui ، HM Panel ، PasarGuard — تحویل مستقیم در تلگرام**
+**بکاپ خودکار از پنل‌های 3x-ui ، HM Panel ، PasarGuard و Rebecca — تحویل مستقیم در تلگرام**
 
 [![Release](https://img.shields.io/github/v/release/AliRezaC-xrol/bkup?style=flat-square&label=release)](https://github.com/AliRezaC-xrol/bkup/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/AliRezaC-xrol/bkup/total?style=flat-square&label=downloads)](https://github.com/AliRezaC-xrol/bkup/releases)
@@ -39,7 +39,7 @@
 
 ## امکانات
 
-- **هر سه پنل، یک‌جا** — 3x-ui، HM Panel، PasarGuard و Rebecca؛ هر پنل مستقل فعال می‌شود و دکمهٔ تست اتصال خودش را دارد
+- **هر چهار پنل، یک‌جا** — 3x-ui، HM Panel، PasarGuard و Rebecca؛ هر پنل مستقل فعال می‌شود و دکمهٔ تست اتصال خودش را دارد
 - **تحویل در تلگرام** — هر بکاپ به‌صورت فایل به چت یا کانال شما می‌رسد؛ چیزی برای دانلود دستی باقی نمی‌ماند
 - **زمان‌بندی به سلیقهٔ شما** — فاصلهٔ بکاپ بر حسب ثانیه؛ سرویس systemd آن را بعد از ری‌بوت هم ادامه می‌دهد
 - **پنل وب** — داشبورد، لاگ زنده و تاریخچهٔ بکاپ، با دانلود یا حذف هر نسخه
@@ -66,7 +66,7 @@ curl -fsSL https://raw.githubusercontent.com/AliRezaC-xrol/bkup/main/install.sh 
 |---|---|---|
 | **۱** | نصب‌کننده | انتخاب پورت (یا پورت تصادفی) و رمز پنل |
 | **۲** | مرورگر | باز کردن `http://<server-ip>:<port>` و ورود با رمز |
-| **۳** | **Settings** | وصل کردن 3x-ui / HM Panel / PasarGuard و زدن دکمهٔ تست |
+| **۳** | **Settings** | وصل کردن 3x-ui / HM Panel / PasarGuard / Rebecca و زدن دکمهٔ تست |
 | **۴** | **Settings** | وارد کردن توکن بات تلگرام و آیدی چت و زدن دکمهٔ تست |
 | **۵** | **Settings** | تعیین فاصلهٔ بکاپ و روشن کردن **Auto backup** |
 
