@@ -1,6 +1,13 @@
 import type { AppConfig } from "@/lib/config-service";
 import { bi, fail, type Bi } from "@/lib/messages";
 
+// Telegram delivery always uses the official public endpoint. Force IPv4-first
+// DNS (broken IPv6 routes on some hosts cause silent "fetch failed") and apply
+// a hard timeout so a stuck connection can never spin the UI forever.
+import dns from "node:dns";
+dns.setDefaultResultOrder("ipv4first");
+const TG_FETCH_TIMEOUT = 15000;
+
 /**
  * Telegram Bot API helper (sendDocument / deleteMessage / sendMessage).
  * Uses native fetch + FormData — works on Node 18+ and Bun.
@@ -90,7 +97,8 @@ async function sendOneDocument(
         fileName
       );
 
-      const res = await fetch(tgUrl(cfg, "sendDocument"), { method: "POST", body: fd });
+      const res = await fetch(tgUrl(cfg, "sendDocument"), {
+      signal: AbortSignal.timeout(TG_FETCH_TIMEOUT), method: "POST", body: fd });
       const body = (await res.json().catch(() => null)) as
         | { ok?: boolean; result?: { message_id?: number }; description?: string }
         | null;
@@ -137,6 +145,7 @@ export async function sendProgressMessage(cfg: AppConfig, text: string): Promise
   }
   try {
     const res = await fetch(tgUrl(cfg, "sendMessage"), {
+      signal: AbortSignal.timeout(TG_FETCH_TIMEOUT),
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -159,6 +168,7 @@ export async function sendProgressMessage(cfg: AppConfig, text: string): Promise
 export async function editProgressMessage(cfg: AppConfig, messageId: number, text: string): Promise<void> {
   try {
     await fetch(tgUrl(cfg, "editMessageText"), {
+      signal: AbortSignal.timeout(TG_FETCH_TIMEOUT),
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -244,6 +254,7 @@ export async function sendDocument(
 export async function deleteMessage(cfg: AppConfig, messageId: number): Promise<TgResult> {
   try {
     const res = await fetch(tgUrl(cfg, "deleteMessage"), {
+      signal: AbortSignal.timeout(TG_FETCH_TIMEOUT),
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chat_id: cfg.telegramChatId.trim(), message_id: messageId }),
@@ -264,6 +275,7 @@ export async function sendMessage(cfg: AppConfig, text: string): Promise<TgResul
   if (!cfg.telegramChatId.trim()) return fail("آیدی چت تلگرام تنظیم نشده است", "The Telegram chat ID is not configured");
   try {
     const res = await fetch(tgUrl(cfg, "sendMessage"), {
+      signal: AbortSignal.timeout(TG_FETCH_TIMEOUT),
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -286,6 +298,7 @@ export async function sendTestMessage(cfg: AppConfig): Promise<TgResult> {
   if (!cfg.telegramChatId.trim()) return fail("آیدی چت تلگرام را وارد کنید", "Enter the Telegram chat ID");
   try {
     const res = await fetch(tgUrl(cfg, "sendMessage"), {
+      signal: AbortSignal.timeout(TG_FETCH_TIMEOUT),
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
