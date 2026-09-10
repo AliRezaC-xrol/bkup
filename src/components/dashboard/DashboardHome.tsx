@@ -101,6 +101,12 @@ export function DashboardHome({
       ready: panelReadyState(status?.panels?.pg),
       onTest: onTestPanel,
     },
+{
+      icon: <Boxes className="h-4 w-4" />,
+      label: t("panel_pg"),
+      ready: panelReadyState(status?.panels?.rebecca),
+      onTest: onTestPanel,
+    },
     {
       icon: <Send className="h-4 w-4" />,
       label: t("telegram_conn"),
