@@ -73,13 +73,13 @@ async function checkOnce() {
       const res = await sendMessage(
         cfg,
         [
-          `⬆️ A new bkup version has been released: ${tag}`,
-          `نصب‌شده روی این سرور: v${APP_VERSION}`,
-          "",
-          "به‌روزرسانی بدون از دست رفتن دیتا:",
-          "• وب‌پنل → سیستم → به‌روزرسانی از گیت‌هاب",
-          "• یا ترمینال: bkup → گزینه 7",
-        ].join("\n")
+          [
+        `A new bkup version has been released: ${tag} (installed: v${APP_VERSION})`,
+        "",
+        "Update without losing data:",
+        "- Web panel: System -> Update from GitHub",
+        "- Or terminal: bkup -> option 7",
+      ].join("\n")
       );
       if (res.ok) writeNotified(tag);
     } else {

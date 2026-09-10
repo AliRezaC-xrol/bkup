@@ -234,7 +234,7 @@ check_update_flow() {
   else
     local lv="${latest#v}"
     if [ "$(printf '%s\n' "$local_v" "$lv" | sort -V | head -1)" = "$local_v" ] && [ "$local_v" != "$lv" ]; then
-      echo -e "${G}⬆ update available: v${local_v} → ${latest}${N}   ${D}(menu → 7 to install)${N}"
+      echo -e "${G}update available: v${local_v} -> ${latest}${N}   ${D}(menu -> 7 to install)${N}"
     else
       echo -e "${G}✔ up to date (v${local_v})${N}"
     fi
@@ -305,7 +305,7 @@ update_notice() {
   # quick check (cached 1h in /tmp) — shown above the menu when a new release exists
   local cache="/tmp/.bkup-update-notice"
   if [ -s "$cache" ] && [ "$(find "$cache" -mmin -60 2>/dev/null)" ]; then
-    [ "$(cat "$cache")" != "-" ] && echo -e "  ${Y}⬆ $(cat "$cache")  ${D}→ menu 7 to install${N}"
+    [ "$(cat "$cache")" != "-" ] && echo -e "  ${Y}$(cat "$cache")  ${D}-> menu 7 to install${N}"
     return
   fi
   local -a hdr=()
@@ -316,7 +316,7 @@ update_notice() {
     local lv="${latest#v}"
     if [ "$(printf '%s\n' "$local_v" "$lv" | sort -V | head -1)" = "$local_v" ] && [ "$local_v" != "$lv" ]; then
       echo "new release ${latest} available (installed v${local_v})" > "$cache"
-      echo -e "  ${Y}⬆ new release ${latest} available  ${D}(installed v${local_v}) → menu 7 to install${N}"
+      echo -e "  ${Y}new release ${latest} available  ${D}(installed v${local_v}) -> menu 7 to install${N}"
       return
     fi
   fi
