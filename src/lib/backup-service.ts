@@ -7,7 +7,7 @@ import { login, getDb, getJsonExport, invalidateSession } from "@/lib/panel-clie
 import { hmFullBackup } from "@/lib/hmpanel-client";
 import { pgFullBackup } from "@/lib/pasarguard-client";
 import { rbFullBackup } from "@/lib/rebecca-client";
-import { sendBackupDocument, deleteMessage } from "@/lib/telegram";
+import { sendBackupDocument, sendProgressMessage, editProgressMessage, deleteMessage } from "@/lib/telegram";
 import { bi, fail, storeBi, throwBi, errorBiOf, type Bi } from "@/lib/messages";
 
 export type PanelId = "3x-ui" | "hmpanel" | "pasarguard" | "rebecca";
@@ -130,6 +130,14 @@ async function runPanelBackup(
 
   let outcome: BackupOutcome;
 
+  // live Telegram progress message — one message, edited through the cycle
+  const tgConfigured = Boolean(cfg.telegramBotToken.trim() && cfg.telegramChatId.trim());
+  let progressId: number | null = null;
+  if (tgConfigured) {
+    const p = await sendProgressMessage(cfg, `🚀 Backup started — ${panelTitle(panel)}\n⏳ Creating full backup…`);
+    if (p.ok && p.data) progressId = p.data.messageId;
+  }
+
   try {
     // 1) Obtain the backup payload
     let buf: Buffer;
@@ -208,6 +216,10 @@ async function runPanelBackup(
       }
     }
 
+    // integrity gate — the archive must be a real, complete backup file
+    const integrity = verifyArchive(fileName, buf);
+    if (!integrity.ok) throwBi(integrity.error!, integrity.errorBi!.en);
+
     // 2) Persist locally
     const dir = backupDir();
     const filePath = path.join(dir, fileName);
@@ -226,6 +238,14 @@ async function runPanelBackup(
       `[${panelTitle(panel)}] بکاپ کامل با موفقیت به تلگرام ارسال شد (چت ${cfg.telegramChatId})`,
       `[${panelTitle(panel)}] the full backup was sent to Telegram successfully (chat ${cfg.telegramChatId})`
     ));
+
+    if (progressId) {
+      await editProgressMessage(
+        cfg,
+        progressId,
+        `✅ Backup uploaded successfully — ${panelTitle(panel)}\n💾 ${fileName}\n📦 ${formatSize(buf.length)} · ⏱ ${((Date.now() - started) / 1000).toFixed(1)}s`
+      );
+    }
 
     if (warnNoteBi) await log("warn", warnNoteBi);
 
@@ -264,10 +284,36 @@ async function runPanelBackup(
       data: { status: "failed", finishedAt: new Date(), error: storeBi(errBi, error), durationMs },
     });
     await log("error", bi(`[${panelTitle(panel)}] بکاپ ناموفق بود: ${error}`, `[${panelTitle(panel)}] the backup failed: ${errBi?.en ?? error}`));
+    if (progressId) {
+      await editProgressMessage(cfg, progressId, `❌ Backup failed — ${panelTitle(panel)}\n${errBi?.en ?? error}`);
+    }
     outcome = { runId: run.id, panel, status: "failed", error, errorBi: errBi, durationMs };
   }
 
   return outcome;
+}
+
+/** Archive integrity gate — a delivered backup must be a real archive, never an error page. */
+function verifyArchive(fileName: string, buf: Buffer): { ok: true } | { ok: false; error: string; errorBi: Bi } {
+  if (buf.length === 0) return fail("فایل بکاپ خالی بود", "The backup file was empty");
+  const head = buf.subarray(0, 4);
+  const isGzip = head[0] === 0x1f && head[1] === 0x8b;
+  const isZip = head[0] === 0x50 && head[1] === 0x4b;
+  const lower = fileName.toLowerCase();
+  if ((lower.endsWith(".gz") || lower.endsWith(".tgz")) && !isGzip) {
+    return fail("فایل بکاپ ساختار gzip معتبر ندارد", "The backup file is not a valid gzip archive");
+  }
+  if (lower.endsWith(".zip") && !isZip) {
+    return fail("فایل بکاپ ساختار zip معتبر ندارد", "The backup file is not a valid zip archive");
+  }
+  // a JSON error body or an HTML error page must never be stored/sent as a backup
+  const looksJson = head[0] === 0x7b || head[0] === 0x5b;
+  const looksHtml = head[0] === 0x3c;
+  const isPlaintextFormat = lower.endsWith(".json") || lower.endsWith(".db");
+  if (!isGzip && !isZip && !isPlaintextFormat && (looksJson || looksHtml)) {
+    return fail("پنل به‌جای فایل بکاپ پیام خطا برگرداند", "The panel answered with an error message instead of the backup file");
+  }
+  return { ok: true };
 }
 
 function panelTitle(panel: PanelId): string {

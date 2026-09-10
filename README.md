@@ -2,7 +2,7 @@
 
 <img src="docs/banner.svg" alt="bkup — automatic panel backups to Telegram" width="640">
 
-**Automatic backups of 3x-ui, HM Panel and PasarGuard — delivered to your Telegram.**
+**Automatic backups of 3x-ui, HM Panel, PasarGuard and Rebecca — delivered to your Telegram.**
 
 [![Release](https://img.shields.io/github/v/release/AliRezaC-xrol/bkup?style=flat-square&label=release)](https://github.com/AliRezaC-xrol/bkup/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/AliRezaC-xrol/bkup/total?style=flat-square&label=downloads)](https://github.com/AliRezaC-xrol/bkup/releases)
@@ -33,7 +33,9 @@ same install covers anything from a few backups a day to one every few minutes.
 
 ## Features
 
-- **3x-ui, HM Panel and PasarGuard in one place** — each panel enabled independently, each with its own connection test
+- **3x-ui, HM Panel, PasarGuard and Rebecca in one place** — each panel enabled independently, each with its own connection test
+- **HM Panel Free/Premium detection** — the edition is detected automatically; a Premium panel ships its premium data inside the full archive
+- **No size limits** — every backup is one complete archive; large files are delivered to Telegram automatically
 - **Telegram delivery** — every backup arrives as a file in your chat or channel; nothing to download by hand
 - **Your schedule** — interval in seconds, kept across reboots by the systemd service
 - **Web panel** — dashboard, live logs, backup history with per-backup download and delete
@@ -56,7 +58,7 @@ in place, keeping every setting and backup.
 |---|---|---|
 | **1** | Installer | pick a port (or a random one) and a panel password |
 | **2** | Browser | open `http://<server-ip>:<port>` and log in |
-| **3** | **Settings** | connect 3x-ui, HM Panel or PasarGuard — press the test button |
+| **3** | **Settings** | connect 3x-ui, HM Panel, PasarGuard or Rebecca — press the test button |
 | **4** | **Settings** | add your Telegram bot token and chat ID — press the test button |
 | **5** | **Settings** | set the backup interval and turn **Auto backup** on |
 
@@ -82,6 +84,7 @@ Run `bkup` on the server:
 | **Password** | change the panel password |
 | **Port** | change the panel port |
 | **Logs** | follow the live service logs |
+| **Start / Stop / Restart** | control the web panel service from the terminal |
 | **Update** | install the latest release in place, data preserved |
 | **Uninstall** | remove the service and the application |
 
@@ -95,6 +98,15 @@ Run `bkup` on the server:
 | `/opt/bkup/backups` | local copies of the backups |
 | `bkup` | terminal menu command |
 | `bkup.service` | systemd service |
+
+## Connecting Rebecca
+
+1. In the Rebecca dashboard, pick (or create) an admin account — bkup talks to the panel's official API.
+2. In bkup → **Settings → Rebecca**: enter the panel URL exactly as you open its dashboard (`https://your-domain:8000`), plus the admin username and password.
+3. Press **Test connection** — bkup logs in through `POST /api/admin/token` and validates the session.
+4. Enable the Rebecca card — every cycle pulls the panel's own complete export (database + configuration: users, inbounds, certificates, settings, traffic) and sends it to Telegram as one file.
+
+> Rebecca backups need a binary-runtime install of the panel — source-only installs answer HTTP 409.
 
 ## License
 

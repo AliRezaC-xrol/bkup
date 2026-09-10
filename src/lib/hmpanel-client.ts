@@ -1,6 +1,5 @@
 import axios, { type AxiosInstance } from "axios";
-import https from "node:https";
-import http from "node:http";
+import { sharedHttpAgent, sharedHttpsAgent } from "@/lib/http-agents";
 import type { AppConfig } from "@/lib/config-service";
 import { bi, fail, type Bi } from "@/lib/messages";
 
@@ -10,7 +9,7 @@ import { bi, fail, type Bi } from "@/lib/messages";
  * Verified against the OFFICIAL repo source + a live panel (2026-09):
  *  - GET  {base}/api/health   (NO auth) -> { status, version, mode, services }
  *  - POST {base}/api/auth/login  {username,password} -> HTTP **201** (!) { accessToken, refreshToken, admin }
- *    ⚠ NestJS @Post default = 201 Created and the official auth controller has no
+ *    NestJS @Post default = 201 Created and the official auth controller has no
  *      @HttpCode(200) — so a SUCCESSFUL login answers 201, not 200. Any 2xx is
  *      accepted here (rejecting 201 was exactly the bug users saw in v3.2.0).
  *    (JWT Bearer; access token TTL 24h; login is rate-limited by nginx → cache the token)
@@ -87,8 +86,8 @@ export function hmBaseCandidates(rawUrl: string): string[] {
 function axiosFor(cfg: AppConfig, timeout = 20000): AxiosInstance {
   return axios.create({
     timeout,
-    httpAgent: new http.Agent({ keepAlive: true }),
-    httpsAgent: new https.Agent({ rejectUnauthorized: !cfg.skipTlsVerify, keepAlive: true }),
+    httpAgent: sharedHttpAgent(),
+    httpsAgent: sharedHttpsAgent(cfg.skipTlsVerify),
     maxRedirects: 5,
     validateStatus: () => true,
     headers: { "User-Agent": "bkup/1.0", Accept: "application/json" },

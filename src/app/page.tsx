@@ -197,7 +197,7 @@ function App() {
       } else if (failCount === 0) {
         toast({
           title: t("manual_ok"),
-          description: outcomes.map((o) => `${o.panel}: ${o.fileName ?? "✔"}`).join(" — "),
+          description: outcomes.map((o) => `${o.panel}: ${o.fileName ?? "-"}`).join(" — "),
         });
       } else {
         const failed = outcomes.filter((o) => o.status === "failed");

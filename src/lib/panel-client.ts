@@ -1,6 +1,5 @@
 import axios, { type AxiosInstance } from "axios";
-import https from "node:https";
-import http from "node:http";
+import { sharedHttpAgent, sharedHttpsAgent } from "@/lib/http-agents";
 import type { AppConfig } from "@/lib/config-service";
 import { bi, fail, type Bi } from "@/lib/messages";
 
@@ -44,13 +43,10 @@ export function buildBaseUrl(cfg: Pick<AppConfig, "panelUrl" | "panelBasePath">)
 }
 
 function axiosFor(cfg: AppConfig, timeout = 15000): AxiosInstance {
-  const insecure = cfg.skipTlsVerify;
-  const httpAgent = new http.Agent({ keepAlive: true });
-  const httpsAgent = new https.Agent({ rejectUnauthorized: !insecure, keepAlive: true });
   return axios.create({
     timeout,
-    httpAgent,
-    httpsAgent,
+    httpAgent: sharedHttpAgent(),
+    httpsAgent: sharedHttpsAgent(cfg.skipTlsVerify),
     maxRedirects: 5,
     validateStatus: () => true, // handle status codes ourselves
     headers: { "User-Agent": "bkup/1.0" },

@@ -73,7 +73,7 @@ async function checkOnce() {
       const res = await sendMessage(
         cfg,
         [
-          `⬆️ نسخه جدید bkup منتشر شد: ${tag}`,
+          `⬆️ A new bkup version has been released: ${tag}`,
           `نصب‌شده روی این سرور: v${APP_VERSION}`,
           "",
           "به‌روزرسانی بدون از دست رفتن دیتا:",

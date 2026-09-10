@@ -359,6 +359,11 @@ export function SettingsTab({ config, onSaved, onPasswordChanged }: Props) {
                   Premium
                 </span>
               )}
+              {!form.hmPremium && (
+                              <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold text-amber-600 dark:text-amber-400">
+                                Free
+                              </span>
+                            )}
             </CardTitle>
             <div className="flex items-center gap-2">
               {stateLabel(form.hmEnabled)}
