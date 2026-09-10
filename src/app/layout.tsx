@@ -9,14 +9,6 @@ export const metadata: Metadata = {
   icons: {
     icon: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>b</text></svg>",
   },
-},
-{
-  title: "bkup",
-  description:
-    "bkup — automatic backups of 3x-ui, HM Panel and Rebecca panels delivered to Telegram. Scheduler, password-protected web panel, CLI and one-command updates.",
-  icons: {
-    icon: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>b</text></svg>",
-  },
 };
 
 export const viewport: Viewport = {

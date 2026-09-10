@@ -65,7 +65,7 @@ export function Brand({ compact }: { compact?: boolean }) {
       {!compact && (
         <div className="leading-tight">
           <p className="text-sm font-extrabold tracking-wide" dir="ltr">bkup</p>
-          <p className="text-[11px] text-muted-foreground" dir="ltr">3x-ui / HMPanel / PasarGuard → Telegram</p>
+          <p className="text-[11px] text-muted-foreground" dir="ltr">3x-ui / HMPanel / PasarGuard / Rebecca → Telegram</p>
         </div>
       )}
     </div>
