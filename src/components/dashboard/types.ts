@@ -17,6 +17,11 @@ export interface AppConfigDTO {
   pgUrl: string;
   pgUsername: string;
   pgPassword: string;
+  hmPremium: boolean;
+  rebeccaEnabled: boolean;
+  rebeccaUrl: string;
+  rebeccaUsername: string;
+  rebeccaPassword: string;
   telegramApiBase: string;
   telegramBotToken: string;
   telegramChatId: string;
@@ -36,12 +41,13 @@ export interface BackupRunDTO {
   finishedAt: string | null;
   status: "running" | "success" | "failed";
   trigger: "auto" | "manual";
-  panel: "3x-ui" | "hmpanel" | "pasarguard";
-  method: "db" | "json" | "local" | "hm-full" | "pg-full" | null;
+  panel: "3x-ui" | "hmpanel" | "pasarguard" | "rebecca";
+  method: "db" | "json" | "local" | "hm-full" | "pg-full" | "rb-full" | null;
   fileName: string | null;
   filePath: string | null;
   fileSize: number | null;
   tgMessageId: number | null;
+  tgMessageIds: string | null;
   tgDeleted: boolean;
   error: string | null;
   durationMs: number | null;
@@ -55,7 +61,7 @@ export interface BackupCycleDTO {
 
 export interface BackupOutcomeDTO {
   runId: number;
-  panel: "3x-ui" | "hmpanel" | "pasarguard";
+  panel: "3x-ui" | "hmpanel" | "pasarguard" | "rebecca";
   status: "success" | "failed" | "skipped";
   method?: string;
   fileName?: string;
@@ -77,8 +83,9 @@ export interface StatusDTO {
   lastRun: BackupRunDTO | null;
   panels: {
     xui: { enabled: boolean; ready: boolean };
-    hm: { enabled: boolean; ready: boolean };
+    hm: { enabled: boolean; ready: boolean; premium?: boolean };
     pg: { enabled: boolean; ready: boolean };
+    rebecca: { enabled: boolean; ready: boolean };
     anyEnabled: boolean;
     anyReady: boolean;
   };

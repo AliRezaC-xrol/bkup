@@ -3,6 +3,7 @@ import { saveConfig } from "@/lib/config-service";
 import { testConnection } from "@/lib/panel-client";
 import { hmTestConnection } from "@/lib/hmpanel-client";
 import { pgTestConnection } from "@/lib/pasarguard-client";
+import { rbTestConnection } from "@/lib/rebecca-client";
 import { requireAuthOrCli } from "@/lib/auth";
 import { bi } from "@/lib/messages";
 
@@ -37,7 +38,29 @@ export async function POST(req: NextRequest) {
     }
 
     const cfg = merged as Parameters<typeof testConnection>[0];
-    const panel = body.panel === "hmpanel" ? "hmpanel" : body.panel === "pasarguard" ? "pasarguard" : "3x-ui";
+    const panel =
+      body.panel === "hmpanel"
+        ? "hmpanel"
+        : body.panel === "pasarguard"
+          ? "pasarguard"
+          : body.panel === "rebecca"
+            ? "rebecca"
+            : "3x-ui";
+
+    if (panel === "rebecca") {
+      const res = await rbTestConnection(cfg);
+      if (!res.ok) {
+        return NextResponse.json({ ok: false, error: res.error, errorBi: res.errorBi }, { status: 200 });
+      }
+      if (body.save && body.config) await saveConfig(keepUnmasked(body.config!));
+      return NextResponse.json({
+        ok: true,
+        ...okMsg(bi(
+          `اتصال به Rebecca موفق بود ✔ (${res.data!.username} @ ${res.data!.base}) — بکاپ کامل (دیتابیس + تنظیمات) در چرخه بعدی گرفته می‌شود`,
+          `Connected to Rebecca successfully ✔ (${res.data!.username} @ ${res.data!.base}) — a full export (database + configuration) will be pulled on the next cycle`
+        )),
+      });
+    }
 
     if (panel === "pasarguard") {
       const res = await pgTestConnection(cfg);
@@ -60,13 +83,17 @@ export async function POST(req: NextRequest) {
       if (!res.ok) {
         return NextResponse.json({ ok: false, error: res.error, errorBi: res.errorBi }, { status: 200 });
       }
-      if (body.save && body.config) await saveConfig(keepUnmasked(body.config!));
+      // persist the DETECTED edition next to the saved credentials
+      if (body.save && body.config) {
+        await saveConfig({ ...keepUnmasked(body.config!), hmPremium: Boolean(res.data!.premium) });
+      }
       const v = res.data!.hmVersion ? ` — ${res.data!.hmVersion}` : "";
+      const prem = res.data!.premium ? " — Premium edition detected" : "";
       return NextResponse.json({
         ok: true,
         ...okMsg(bi(
-          `اتصال به HMPanel موفق بود ✔ (${res.data!.username} @ ${res.data!.base}${v}) — بکاپ کامل (دیتابیس + تنظیمات + آپلودها) در چرخه بعدی گرفته می‌شود`,
-          `Connected to HMPanel successfully ✔ (${res.data!.username} @ ${res.data!.base}${v}) — a full archive (database + config + uploads) will be pulled on the next cycle`
+          `اتصال به HMPanel موفق بود ✔ (${res.data!.username} @ ${res.data!.base}${v})${prem} — بکاپ کامل (دیتابیس + تنظیمات + آپلودها) در چرخه بعدی گرفته می‌شود`,
+          `Connected to HMPanel successfully ✔ (${res.data!.username} @ ${res.data!.base}${v})${prem} — a full archive (database + config + uploads) will be pulled on the next cycle`
         )),
       });
     }

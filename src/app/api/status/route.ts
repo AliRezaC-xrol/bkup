@@ -34,6 +34,7 @@ export async function GET(req: Request) {
       : Boolean(cfg.panelUsername && cfg.panelPassword));
   const hmReady = Boolean(cfg.hmUrl && cfg.hmUsername && cfg.hmPassword);
   const pgReady = Boolean(cfg.pgUrl && cfg.pgUsername && cfg.pgPassword);
+  const rebeccaReady = Boolean(cfg.rebeccaUrl && cfg.rebeccaUsername && cfg.rebeccaPassword);
 
   return NextResponse.json({
     scheduler: {
@@ -45,14 +46,15 @@ export async function GET(req: Request) {
     lastRun,
     panels: {
       xui: { enabled: cfg.xuiEnabled, ready: xuiReady },
-      hm: { enabled: cfg.hmEnabled, ready: hmReady },
+      hm: { enabled: cfg.hmEnabled, ready: hmReady, premium: Boolean(cfg.hmPremium) },
       pg: { enabled: cfg.pgEnabled, ready: pgReady },
-      anyEnabled: cfg.xuiEnabled || cfg.hmEnabled || cfg.pgEnabled,
-      anyReady: (cfg.xuiEnabled && xuiReady) || (cfg.hmEnabled && hmReady) || (cfg.pgEnabled && pgReady),
+      rebecca: { enabled: cfg.rebeccaEnabled, ready: rebeccaReady },
+      anyEnabled: cfg.xuiEnabled || cfg.hmEnabled || cfg.pgEnabled || cfg.rebeccaEnabled,
+      anyReady: (cfg.xuiEnabled && xuiReady) || (cfg.hmEnabled && hmReady) || (cfg.rebeccaEnabled && rebeccaReady) || (cfg.pgEnabled && pgReady),
     },
     // legacy single-panel fields (kept for CLI/older clients)
     configReady: {
-      panel: (cfg.xuiEnabled && xuiReady) || (cfg.hmEnabled && hmReady) || (cfg.pgEnabled && pgReady),
+      panel: (cfg.xuiEnabled && xuiReady) || (cfg.hmEnabled && hmReady) || (cfg.rebeccaEnabled && rebeccaReady) || (cfg.pgEnabled && pgReady),
       telegram: Boolean(cfg.telegramBotToken && cfg.telegramChatId),
     },
     panelType: cfg.panelType === "hmpanel" ? "hmpanel" : "3x-ui",

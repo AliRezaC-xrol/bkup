@@ -6,10 +6,13 @@ import { getConfig } from "@/lib/config-service";
 import { login, getDb, getJsonExport, invalidateSession } from "@/lib/panel-client";
 import { hmFullBackup } from "@/lib/hmpanel-client";
 import { pgFullBackup } from "@/lib/pasarguard-client";
-import { sendDocument, deleteMessage } from "@/lib/telegram";
+import { rbFullBackup } from "@/lib/rebecca-client";
+import { sendBackupDocument, deleteMessage } from "@/lib/telegram";
 import { bi, fail, storeBi, throwBi, errorBiOf, type Bi } from "@/lib/messages";
 
-export type PanelId = "3x-ui" | "hmpanel" | "pasarguard";
+export type PanelId = "3x-ui" | "hmpanel" | "pasarguard" | "rebecca";
+
+const ALL_PANELS: PanelId[] = ["3x-ui", "hmpanel", "pasarguard", "rebecca"];
 
 export interface BackupOutcome {
   runId: number;
@@ -49,9 +52,9 @@ const g = globalThis as unknown as { __xuiRunning?: boolean };
 
 /**
  * Run one full backup CYCLE across ALL enabled panels.
- * x-ui and HM Panel are independent connections — each enabled panel gets its
- * own full backup, its own local file and its own Telegram document.
- * A failing panel never blocks the other one.
+ * Every panel is an independent connection — each enabled panel gets its
+ * own full backup, its own local file and its own Telegram delivery.
+ * A failing panel never blocks the others.
  */
 export async function runBackup(trigger: "auto" | "manual"): Promise<CycleResult> {
   if (g.__xuiRunning) {
@@ -79,10 +82,11 @@ export async function runBackup(trigger: "auto" | "manual"): Promise<CycleResult
   if (cfg.xuiEnabled) targets.push("3x-ui");
   if (cfg.hmEnabled) targets.push("hmpanel");
   if (cfg.pgEnabled) targets.push("pasarguard");
+  if (cfg.rebeccaEnabled) targets.push("rebecca");
 
   if (targets.length === 0) {
     g.__xuiRunning = false;
-    await log("warn", bi("هیچ پنلی فعال نیست — ابتدا اتصال 3x-ui، HMPanel یا PasarGuard را در تنظیمات فعال کنید", "No panel is enabled — first enable a 3x-ui, HMPanel or PasarGuard connection in Settings"));
+    await log("warn", bi("هیچ پنلی فعال نیست — ابتدا اتصال یکی از پنل‌ها را در تنظیمات فعال کنید", "No panel is enabled — first enable a panel connection in Settings"));
     return { outcomes: [], ok: false, durationMs: 0 };
   }
 
@@ -130,11 +134,12 @@ async function runPanelBackup(
     // 1) Obtain the backup payload
     let buf: Buffer;
     let fileName: string;
-    let method: "db" | "json" | "local" | "hm-full" | "pg-full";
+    let method: "db" | "json" | "local" | "hm-full" | "pg-full" | "rb-full";
     let warnNoteBi: Bi | null = null;
 
     if (panel === "hmpanel") {
-      // ── HMPanel: FULL archive via official API (db + config + uploads) ──
+      // ── HMPanel: FULL archive via official API (db + config + uploads,
+      //    premium data included when the panel is a Premium edition) ──
       const hm = await hmFullBackup(cfg);
       if (!hm.ok || !hm.data) throwBi(hm.error ?? "بکاپ HMPanel ناموفق بود", hm.errorBi?.en ?? "The HMPanel backup failed");
       buf = hm.data.buf;
@@ -148,6 +153,13 @@ async function runPanelBackup(
       buf = pg.data.buf;
       fileName = pg.data.fileName;
       method = "pg-full";
+    } else if (panel === "rebecca") {
+      // ── Rebecca: FULL export via official API (database + configuration) ──
+      const rb = await rbFullBackup(cfg);
+      if (!rb.ok || !rb.data) throwBi(rb.error ?? "بکاپ Rebecca ناموفق بود", rb.errorBi?.en ?? "The Rebecca backup failed");
+      buf = rb.data.buf;
+      fileName = rb.data.fileName;
+      method = "rb-full";
     } else {
       const mode = cfg.backupMode;
       if (mode === "local") {
@@ -205,8 +217,8 @@ async function runPanelBackup(
       `[${panelTitle(panel)}] backup file saved: ${fileName} (${formatSize(buf.length)})`
     ));
 
-    // 3) Send to Telegram
-    const tg = await sendDocument(cfg, buf, fileName, method, panel);
+    // 3) Send to Telegram — ANY size; large files go out as parts
+    const tg = await sendBackupDocument(cfg, buf, fileName, method, panel);
     if (!tg.ok) {
       throwBi(`ارسال به تلگرام ناموفق بود: ${tg.error}`, `Sending to Telegram failed: ${tg.errorBi?.en ?? tg.error}`);
     }
@@ -227,7 +239,8 @@ async function runPanelBackup(
         fileName,
         filePath,
         fileSize: buf.length,
-        tgMessageId: tg.data!.messageId,
+        tgMessageId: tg.data!.messageIds[0],
+        tgMessageIds: JSON.stringify(tg.data!.messageIds),
         durationMs,
       },
     });
@@ -239,7 +252,7 @@ async function runPanelBackup(
       method,
       fileName,
       fileSize: buf.length,
-      tgMessageId: tg.data!.messageId,
+      tgMessageId: tg.data!.messageIds[0],
       durationMs,
     };
   } catch (e: unknown) {
@@ -258,7 +271,13 @@ async function runPanelBackup(
 }
 
 function panelTitle(panel: PanelId): string {
-  return panel === "hmpanel" ? "HMPanel" : panel === "pasarguard" ? "PasarGuard" : "3x-ui";
+  return panel === "hmpanel"
+    ? "HMPanel"
+    : panel === "pasarguard"
+      ? "PasarGuard"
+      : panel === "rebecca"
+        ? "Rebecca"
+        : "3x-ui";
 }
 
 function readLocalDb(p: string): { ok: true; buf: Buffer } | { ok: false; error: string; errorBi: Bi } {
@@ -284,7 +303,7 @@ function readLocalDb(p: string): { ok: true; buf: Buffer } | { ok: false; error:
 async function cleanupTelegramOld(cfg: Awaited<ReturnType<typeof getConfig>>) {
   const keep = cfg.tgAutoDeleteKeep;
   if (!keep || keep < 1) return;
-  for (const panel of ["3x-ui", "hmpanel", "pasarguard"] as PanelId[]) {
+  for (const panel of ALL_PANELS) {
     const candidates = await db.backupRun.findMany({
       where: { status: "success", panel, tgMessageId: { not: null }, tgDeleted: false },
       orderBy: { startedAt: "desc" },
@@ -292,17 +311,25 @@ async function cleanupTelegramOld(cfg: Awaited<ReturnType<typeof getConfig>>) {
       take: 50,
     });
     for (const row of candidates) {
-      const res = await deleteMessage(cfg, row.tgMessageId!);
-      if (res.ok) {
+      // multi-part sends store every message id; older rows only have the first one
+      let ids: number[] = [];
+      try {
+        if (row.tgMessageIds) ids = JSON.parse(row.tgMessageIds) as number[];
+      } catch { /* fall back below */ }
+      if (ids.length === 0) ids = [row.tgMessageId!];
+      let allDeleted = true;
+      for (const id of ids) {
+        const res = await deleteMessage(cfg, id);
+        if (res.ok) continue;
+        if (/message to delete not found|message can'?t be deleted/i.test(res.error ?? "")) continue;
+        allDeleted = false;
+        break; // stop on unexpected errors this cycle
+      }
+      if (allDeleted) {
         await db.backupRun.update({ where: { id: row.id }, data: { tgDeleted: true } });
-        await log("info", bi(`بکاپ قدیمی تلگرام حذف شد (پیام ${row.tgMessageId})`, `Old Telegram backup deleted (message ${row.tgMessageId})`));
+        await log("info", bi(`بکاپ قدیمی تلگرام حذف شد (پیام ${ids[0]})`, `Old Telegram backup deleted (message ${ids[0]})`));
       } else {
-        // message probably already gone — mark deleted to avoid retry loops
-        if (/message to delete not found|message can'?t be deleted/i.test(res.error ?? "")) {
-          await db.backupRun.update({ where: { id: row.id }, data: { tgDeleted: true } });
-        } else {
-          break; // stop on unexpected errors this cycle
-        }
+        break;
       }
     }
   }
@@ -319,6 +346,7 @@ async function cleanupLocalFiles(cfg: Awaited<ReturnType<typeof getConfig>>) {
       f.startsWith("x-ui-backup-") ||
       f.startsWith("hmpanel-backup-") ||
       f.startsWith("pasarguard_full_") ||
+      f.startsWith("rebecca-backup-") ||
       f.startsWith("backup_")
     )
     .sort()

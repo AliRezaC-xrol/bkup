@@ -32,15 +32,19 @@ try {
       ? Boolean(cfg?.apiToken)
       : Boolean(cfg?.panelUsername && cfg?.panelPassword));
   const hmReady = Boolean(cfg?.hmUrl && cfg?.hmUsername && cfg?.hmPassword);
+  const pgReady = Boolean(cfg?.pgUrl && cfg?.pgUsername && cfg?.pgPassword);
+  const rbReady = Boolean(cfg?.rebeccaUrl && cfg?.rebeccaUsername && cfg?.rebeccaPassword);
   const xui = { enabled: Boolean(cfg?.xuiEnabled), ready: xuiReady };
-  const hm = { enabled: Boolean(cfg?.hmEnabled), ready: hmReady };
+  const hm = { enabled: Boolean(cfg?.hmEnabled), ready: hmReady, premium: Boolean(cfg?.hmPremium) };
+  const pg = { enabled: Boolean(cfg?.pgEnabled), ready: pgReady };
+  const rebecca = { enabled: Boolean(cfg?.rebeccaEnabled), ready: rbReady };
 
   console.log(
     JSON.stringify({
       version: pkg.version ?? "?",
       enabled: Boolean(cfg?.enabled),
       intervalSeconds: cfg?.intervalSeconds ?? 60,
-      panels: { xui, hm },
+      panels: { xui, hm, pg, rebecca },
       // legacy single-panel view (kept for compatibility)
       panelType,
       panelReady: (xui.enabled && xui.ready) || (hm.enabled && hm.ready),

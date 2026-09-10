@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================
 #  bkup — Interactive Terminal Menu
-#  Auto Backup for 3x-ui + HM Panel + PasarGuard → Telegram
+#  Auto Backup for 3x-ui + HM Panel + PasarGuard + Rebecca → Telegram
 #  Focused CLI: status, web-panel URL, password, port, logs,
 #  updates and uninstall. Everything else lives in the web panel.
 # =============================================================
@@ -38,7 +38,7 @@ banner() {
   ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝
 ART
   echo -e "${W}     b k u p${N}"
-  echo -e "${D}     3x-ui / HMPanel / PasarGuard → Telegram${N}"
+  echo -e "${D}     3x-ui / HMPanel / PasarGuard / Rebecca → Telegram${N}"
   echo ""
 }
 
@@ -130,6 +130,8 @@ show_status() {
   xui_line=$(panel_state "d['panels']['xui']['enabled']" "d['panels']['xui']['ready']")
   hm_line=$(panel_state "d['panels']['hm']['enabled']" "d['panels']['hm']['ready']")
   pg_line=$(panel_state "(d['panels']['pg'] or {}).get('enabled', False)" "(d['panels']['pg'] or {}).get('ready', False)")
+  rb_line=$(panel_state "(d['panels']['rebecca'] or {}).get('enabled', False)" "(d['panels']['rebecca'] or {}).get('ready', False)")
+  hm_prem=$(echo "$j" | jsonget b "((d['panels']['hm'] or {}).get('premium')) or False" | grep -q True && echo yes || echo no)
   tg=$(echo "$j" | jsonget b "d['telegramReady']" | grep -q True && echo "${G}ready${N}" || echo "${Y}not set${N}")
 
   local stc="$R"; [ "$st" = "active" ] && stc="$G"
@@ -146,8 +148,9 @@ show_status() {
   echo -e ""
   echo -e "${B}──────────────── Connections ─────────────${N}"
   echo -e "  3x-ui panel    : $xui_line"
-  echo -e "  HM Panel       : $hm_line"
+  echo -e "  HM Panel       : $hm_line$([ "$hm_prem" = "yes" ] && echo -e " ${Y}⭐ Premium${N}")"
   echo -e "  PasarGuard     : $pg_line"
+  echo -e "  Rebecca        : $rb_line"
   echo -e "  Telegram bot   : $tg"
   echo -e ""
   echo -e "${B}──────────────── Version ─────────────────${N}"
@@ -243,6 +246,31 @@ update_flow() {
   bash "$APP_DIR/scripts/update.sh"
 }
 
+# start / stop / restart the bkup web panel service
+svc_control_flow() {
+  local action="$1"
+  if ! has_systemd; then
+    echo -e "${Y}systemd not available — control the process manually${N}"
+    return
+  fi
+  echo -e "${C}==> systemctl ${action} ${SERVICE}${N}"
+  if systemctl "$action" "$SERVICE"; then
+    echo -e "${G}✔ service ${action} — OK${N}"
+  else
+    echo -e "${R}✗ systemctl ${action} failed — check: journalctl -u ${SERVICE} -n 30${N}"
+    return
+  fi
+  if [ "$action" != "stop" ]; then
+    local ok=0
+    for _ in $(seq 1 15); do
+      sleep 2
+      curl -sf -o /dev/null --max-time 3 "http://127.0.0.1:${PORT}/api/auth/state" && { ok=1; break; }
+    done
+    [ "$ok" = "1" ] && echo -e "${G}✔ web panel is answering on port ${PORT}${N}" \
+      || echo -e "${Y}⚠ not answering yet — check: journalctl -u ${SERVICE} -n 30${N}"
+  fi
+}
+
 logs_flow() {
   if has_systemd; then
     journalctl -u "$SERVICE" -f --no-pager
@@ -308,7 +336,10 @@ menu() {
   ${B}5)${N}  Live service logs
   ${B}6)${N}  Check for updates
   ${B}7)${N}  Update from GitHub
-  ${B}8)${N}  Uninstall
+  ${B}8)${N}  Start web panel service
+  ${B}9)${N}  Stop web panel service
+  ${B}10)${N} Restart web panel service
+  ${B}11)${N} Uninstall
   ${B}0)${N}  Exit
 
   ${D}backups & settings → web panel (option 2)${N}
@@ -323,7 +354,10 @@ MENU
       5) logs_flow ;;
       6) check_update_flow; pause ;;
       7) update_flow; pause ;;
-      8) uninstall_flow; [ -f "$APP_DIR/cli.sh" ] || exit 0; pause ;;
+      8) svc_control_flow start; pause ;;
+      9) svc_control_flow stop; pause ;;
+      10) svc_control_flow restart; pause ;;
+      11) uninstall_flow; [ -f "$APP_DIR/cli.sh" ] || exit 0; pause ;;
       0|"q"|"Q") exit 0 ;;
       *) ;;
     esac

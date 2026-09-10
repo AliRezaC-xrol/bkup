@@ -2,9 +2,14 @@ import type { AppConfig } from "@/lib/config-service";
 import { bi, fail, type Bi } from "@/lib/messages";
 
 /**
- * Telegram Bot API helper (sendDocument / deleteMessage).
+ * Telegram Bot API helper (sendDocument / deleteMessage / sendMessage).
  * Uses native fetch + FormData — works on Node 18+ and Bun.
  * apiBase is configurable so users behind filtered networks can point to a mirror.
+ *
+ * SIZE POLICY — backups are sent NO MATTER HOW BIG they are:
+ * the Bot API hard-caps one sendDocument at 50 MB, so larger backups are
+ * SPLIT into 45 MB parts and every part is delivered (filename.partNNofNN).
+ * There is no "file too large" rejection anywhere in the pipeline anymore.
  */
 
 export interface TgResult<T = unknown> {
@@ -14,55 +19,62 @@ export interface TgResult<T = unknown> {
   errorBi?: Bi;   // bilingual pair for the web panel
 }
 
+/** One sendDocument may carry at most 50 MB — stay safely below it. */
+const PART_LIMIT = 45 * 1024 * 1024;
+
 function tgUrl(cfg: AppConfig, method: string): string {
   const base = cfg.telegramApiBase.trim().replace(/\/+$/, "") || "https://api.telegram.org";
   return `${base}/bot${cfg.telegramBotToken.trim()}/${method}`;
 }
 
-function captionFor(fileName: string, size: number, method: string, panel = "3x-ui"): string {
-  const now = new Intl.DateTimeFormat("fa-IR", {
+function captionFor(fileName: string, size: number, method: string, panel: string, premium = false): string {
+  const now = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Asia/Tehran",
-    dateStyle: "full",
+    dateStyle: "medium",
     timeStyle: "medium",
   }).format(new Date());
   const sizeStr = size >= 1024 * 1024
-    ? `${(size / 1024 / 1024).toFixed(2)} مگابایت`
-    : `${(size / 1024).toFixed(1)} کیلوبایت`;
+    ? `${(size / 1024 / 1024).toFixed(2)} MB`
+    : `${(size / 1024).toFixed(1)} KB`;
   const isHm = panel === "hmpanel" || method === "hm-full";
   const isPg = panel === "pasarguard" || method === "pg-full";
-  const methodFa = isPg
-    ? "بکاپ کامل (کاربران + هاست‌ها + نودها + کورها + گروه‌ها + تنظیمات)"
+  const isRb = panel === "rebecca" || method === "rb-full";
+  const methodEn = isPg
+    ? "Full backup (users + hosts + nodes + cores + groups + settings)"
     : isHm
-      ? "بکاپ کامل (دیتابیس + تنظیمات + آپلودها)"
-      : method === "db"
-        ? "فایل دیتابیس"
-        : method === "local"
-          ? "فایل دیتابیس (لوکال)"
-          : "خروجی JSON";
-  const title = isPg ? "🗄 بکاپ خودکار PasarGuard" : isHm ? "🗄 بکاپ خودکار HM Panel" : "🗄 بکاپ خودکار 3X-UI";
-  return [
+      ? "Full backup (database + settings + uploads)"
+      : isRb
+        ? "Full backup (database + configuration)"
+        : method === "db"
+          ? "Database file"
+          : method === "local"
+            ? "Database file (local copy)"
+            : "JSON export";
+  const title = isPg
+    ? "🗄 PasarGuard automatic backup"
+    : isHm
+      ? "🗄 HM Panel automatic backup"
+      : isRb
+        ? "🗄 Rebecca automatic backup"
+        : "🗄 3X-UI automatic backup";
+  const lines = [
     title,
-    `⏰ ${now}`,
+    `🕒 ${now}`,
     `💾 ${fileName}`,
     `📦 ${sizeStr}`,
-    `🔧 نوع: ${methodFa}`,
-  ].join("\n");
+    `🔧 Type: ${methodEn}`,
+  ];
+  if (isHm && premium) lines.push(`⭐ Edition: Premium (full premium data included)`);
+  return lines.join("\n");
 }
 
-/** Send a file as a document message. Retries up to 2 times on transient failures. */
-export async function sendDocument(
+/** One sendDocument call — no size check here, callers go through sendBackupDocument. */
+async function sendOneDocument(
   cfg: AppConfig,
   buf: Buffer,
   fileName: string,
-  method: string,
-  panel: "3x-ui" | "hmpanel" | "pasarguard" = "3x-ui"
+  caption: string
 ): Promise<TgResult<{ messageId: number }>> {
-  if (!cfg.telegramBotToken.trim()) return fail("توکن بات تلگرام تنظیم نشده است", "The Telegram bot token is not configured");
-  if (!cfg.telegramChatId.trim()) return fail("آیدی چت تلگرام تنظیم نشده است", "The Telegram chat ID is not configured");
-  if (buf.length > 48 * 1024 * 1024) {
-    return fail("حجم فایل بیش از حد مجاز تلگرام (50MB) است", "The file exceeds the Telegram size limit (50MB)");
-  }
-
   let lastError: Bi | null = null;
   for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt > 0) await new Promise((r) => setTimeout(r, attempt * 3000));
@@ -70,7 +82,7 @@ export async function sendDocument(
       const fd = new FormData();
       fd.append("chat_id", cfg.telegramChatId.trim());
       if (cfg.telegramThreadId.trim()) fd.append("message_thread_id", cfg.telegramThreadId.trim());
-      fd.append("caption", captionFor(fileName, buf.length, method, panel));
+      fd.append("caption", caption);
       fd.append(
         "document",
         new Blob([new Uint8Array(buf)], { type: "application/octet-stream" }),
@@ -105,6 +117,71 @@ export async function sendDocument(
   return lastError
     ? { ok: false, error: lastError.fa, errorBi: lastError }
     : fail("ارسال به تلگرام ناموفق بود", "Sending to Telegram failed");
+}
+
+export type TgPanel = "3x-ui" | "hmpanel" | "pasarguard" | "rebecca";
+
+/**
+ * Send a backup to Telegram — ANY size. Files above the Bot API single-file
+ * limit are split into ≤45 MB parts and every part is sent with its own
+ * "part i of N" caption. Returns ALL message ids (for auto-cleanup).
+ */
+export async function sendBackupDocument(
+  cfg: AppConfig,
+  buf: Buffer,
+  fileName: string,
+  method: string,
+  panel: TgPanel = "3x-ui"
+): Promise<TgResult<{ messageIds: number[]; parts: number }>> {
+  if (!cfg.telegramBotToken.trim()) return fail("توکن بات تلگرام تنظیم نشده است", "The Telegram bot token is not configured");
+  if (!cfg.telegramChatId.trim()) return fail("آیدی چت تلگرام تنظیم نشده است", "The Telegram chat ID is not configured");
+
+  const premium = panel === "hmpanel" && Boolean((cfg as { hmPremium?: boolean }).hmPremium);
+
+  if (buf.length <= PART_LIMIT) {
+    const r = await sendOneDocument(cfg, buf, fileName, captionFor(fileName, buf.length, method, panel, premium));
+    if (!r.ok) return { ok: false, error: r.error, errorBi: r.errorBi };
+    return { ok: true, data: { messageIds: [r.data!.messageId], parts: 1 } };
+  }
+
+  // split into parts — every part WILL be delivered
+  const total = Math.ceil(buf.length / PART_LIMIT);
+  const width = String(total).padStart(2, "0");
+  const dot = fileName.lastIndexOf(".");
+  const stem = dot > 0 ? fileName.slice(0, dot) : fileName;
+  const ext = dot > 0 ? fileName.slice(dot) : "";
+  const messageIds: number[] = [];
+  for (let i = 0; i < total; i++) {
+    const part = buf.subarray(i * PART_LIMIT, Math.min((i + 1) * PART_LIMIT, buf.length));
+    const partName = `${stem}.part${String(i + 1).padStart(2, "0")}of${width}${ext}`;
+    const caption =
+      captionFor(partName, part.length, method, panel, premium) +
+      `\n🧩 Part ${i + 1} of ${total} — rejoin with: cat ${stem}.part*of*${ext} > ${fileName}`;
+    const r = await sendOneDocument(cfg, part, partName, caption);
+    if (!r.ok) {
+      return {
+        ok: false,
+        error: r.error,
+        errorBi: r.errorBi,
+        ...(messageIds.length ? { data: { messageIds, parts: messageIds.length } } : {}),
+      };
+    }
+    messageIds.push(r.data!.messageId);
+  }
+  return { ok: true, data: { messageIds, parts: messageIds.length } };
+}
+
+/** Send a single document (compat helper — used for small ad-hoc files). */
+export async function sendDocument(
+  cfg: AppConfig,
+  buf: Buffer,
+  fileName: string,
+  method: string,
+  panel: TgPanel = "3x-ui"
+): Promise<TgResult<{ messageId: number }>> {
+  const r = await sendBackupDocument(cfg, buf, fileName, method, panel);
+  if (!r.ok || !r.data) return { ok: false, error: r.error, errorBi: r.errorBi };
+  return { ok: true, data: { messageId: r.data.messageIds[0] } };
 }
 
 /** Delete a previously sent backup message (for auto-cleanup). */
@@ -147,7 +224,7 @@ export async function sendMessage(cfg: AppConfig, text: string): Promise<TgResul
   }
 }
 
-/** Send a plain text message — used by the "تست تلگرام" button. */
+/** Send a plain text message — used by the "Test Telegram" button. */
 export async function sendTestMessage(cfg: AppConfig): Promise<TgResult> {
   if (!cfg.telegramBotToken.trim()) return fail("توکن بات تلگرام را وارد کنید", "Enter the Telegram bot token");
   if (!cfg.telegramChatId.trim()) return fail("آیدی چت تلگرام را وارد کنید", "Enter the Telegram chat ID");
@@ -158,7 +235,7 @@ export async function sendTestMessage(cfg: AppConfig): Promise<TgResult> {
       body: JSON.stringify({
         chat_id: cfg.telegramChatId.trim(),
         ...(cfg.telegramThreadId.trim() ? { message_thread_id: cfg.telegramThreadId.trim() } : {}),
-        text: "✅ اتصال بات bkup برقرار است.\nاز این پس بکاپ‌ها به این چت ارسال می‌شوند.",
+        text: "✅ bkup bot connection is live.\nBackups will be delivered to this chat from now on.",
       }),
     });
     const body = (await res.json().catch(() => null)) as
