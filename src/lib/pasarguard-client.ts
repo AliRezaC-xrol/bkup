@@ -208,14 +208,14 @@ export async function pgFullBackup(
           status: res.status,
         };
       } else {
-        notes.push(`${sec.name}: HTTP ${res.status} — رد شد`);
+        notes.push(`${sec.name}: HTTP ${res.status} - skipped`);
       }
     } catch (e: unknown) {
       if (sec.required) {
         const m = pgErrMsg(e);
         return fail(`دریافت «${sec.name}» ناموفق بود: ${m.fa}`, `Fetching "${sec.name}" failed: ${m.en}`);
       }
-      notes.push(`${sec.name}: ${pgErrMsg(e).fa} — رد شد`);
+      notes.push(`${sec.name}: ${pgErrMsg(e).en} - skipped`);
     }
   }
 

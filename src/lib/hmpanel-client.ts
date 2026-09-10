@@ -133,7 +133,7 @@ export async function hmDetectBase(cfg: AppConfig): Promise<HmResult<HmProbe>> {
       }
       tried.push(`${base}/health → HTTP ${res.status}`);
     } catch (e: unknown) {
-      tried.push(`${base}/health → ${hmErrMsg(e).fa}`);
+      tried.push(`${base}/health -> ${hmErrMsg(e).en}`);
     }
   }
   return fail(
