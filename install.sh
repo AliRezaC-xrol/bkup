@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================
 #  bkup — installer
-#  Auto Backup for 3x-ui + HM Panel + PasarGuard → Telegram
+#  Auto Backup for 3x-ui + HM Panel + PasarGuard + Rebecca → Telegram
 #
 #  ONE SOURCE OF TRUTH: the LATEST GitHub RELEASE.
 #  The installer resolves the newest published release, downloads
@@ -38,7 +38,7 @@ banner() {
   ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝
 ART
   echo -e "${W}     b k u p${N}  ${D}installer${N}"
-  echo -e "${D}     Auto Backup for 3x-ui + HM Panel + PasarGuard → Telegram${N}"
+  echo -e "${D}     Auto Backup for 3x-ui + HM Panel + PasarGuard + Rebecca → Telegram${N}"
   echo ""
 }
 
@@ -292,7 +292,7 @@ fi
 info "[7/8] Creating systemd service…"
 cat > "/etc/systemd/system/${SERVICE}.service" <<EOF
 [Unit]
-Description=bkup — 3x-ui + HM Panel + PasarGuard full backups → Telegram
+Description=bkup — 3x-ui + HM Panel + PasarGuard + Rebecca full backups → Telegram
 After=network-online.target
 Wants=network-online.target
 

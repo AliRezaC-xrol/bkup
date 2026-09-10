@@ -42,7 +42,7 @@ function captionFor(fileName: string, size: number, method: string, panel: strin
   const methodEn = isPg
     ? "Full backup (users + hosts + nodes + cores + groups + settings)"
     : isHm
-      ? "Full backup (database + settings + uploads)"
+      ? (premium ? "Full backup (database + config + uploads + premium modules)" : "Full backup (database + config + uploads)")
       : isRb
         ? "Full backup (database + configuration)"
         : method === "db"
