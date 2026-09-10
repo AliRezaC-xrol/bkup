@@ -83,6 +83,7 @@ export const dict = {
   panel_3xui: "3x-ui panel",
   panel_hm: "HM Panel",
   panel_pg: "PasarGuard Panel",
+  panel_rb: "Rebecca Panel",
   configured: "Configured",
   not_configured: "Not configured",
   test_now: "Test",
