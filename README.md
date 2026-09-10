@@ -42,7 +42,7 @@ same install covers anything from a few backups a day to one every few minutes.
 ## Install
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/AliRezaC-xrol/bkup/main/install.sh)
+curl -fsSL https://raw.githubusercontent.com/AliRezaC-xrol/bkup/main/install.sh -o bkup-install.sh && sudo bash bkup-install.sh
 ```
 
 The command installs Node.js 20 if it is missing, downloads the **latest
