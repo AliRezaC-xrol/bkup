@@ -18,7 +18,9 @@ const PRUNE_EVERY_MS = 30 * 60 * 1000; // prune check at most once per 30 min
  */
 export async function log(level: LogLevel, message: LogMessage): Promise<void> {
   const isBi = typeof message === "object" && message !== null;
-  const consoleText = isBi ? message.fa : message;
+  // server console (CLI / journalctl) is ALWAYS English — the bilingual JSON
+  // row keeps both variants for the web console to pick from
+  const consoleText = isBi ? (message.en || message.fa) : message;
   const line = `[${level.toUpperCase()}] ${consoleText}`;
   if (level === "error") console.error(line);
   else if (level === "warn") console.warn(line);

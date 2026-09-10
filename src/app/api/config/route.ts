@@ -30,6 +30,11 @@ const ALLOWED = new Set([
   "pgUrl",
   "pgUsername",
   "pgPassword",
+  "hmPremium",
+  "rebeccaEnabled",
+  "rebeccaUrl",
+  "rebeccaUsername",
+  "rebeccaPassword",
   "telegramApiBase",
   "telegramBotToken",
   "telegramChatId",
@@ -117,6 +122,11 @@ export async function PUT(req: NextRequest) {
       const err = validateUrl(patch.pgUrl, "PasarGuard");
       if (err) return NextResponse.json({ ...failMsg(err) }, { status: 400 });
       patch.pgUrl = String(patch.pgUrl).trim().replace(/\/+$/, "");
+    }
+    if (patch.rebeccaUrl !== undefined) {
+      const err = validateUrl(patch.rebeccaUrl, "Rebecca");
+      if (err) return NextResponse.json({ ...failMsg(err) }, { status: 400 });
+      patch.rebeccaUrl = String(patch.rebeccaUrl).trim().replace(/\/+$/, "");
     }
 
     const updated = await saveConfig(patch);

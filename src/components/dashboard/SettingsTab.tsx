@@ -29,6 +29,7 @@ export function SettingsTab({ config, onSaved, onPasswordChanged }: Props) {
   const [testingXui, setTestingXui] = useState(false);
   const [testingHm, setTestingHm] = useState(false);
   const [testingPg, setTestingPg] = useState(false);
+  const [testingRebecca, setTestingRebecca] = useState(false);
   const [testingTg, setTestingTg] = useState(false);
   // ⚡ per-key toggle persistence: switches save INSTANTLY (optimistic) and
   // revert automatically if the request fails — a switch never silently
@@ -67,7 +68,7 @@ export function SettingsTab({ config, onSaved, onPasswordChanged }: Props) {
   };
 
   /** Flip a boolean setting NOW (optimistic) and persist it immediately. */
-  async function setNow(key: "enabled" | "xuiEnabled" | "hmEnabled" | "pgEnabled" | "skipTlsVerify", value: boolean) {
+  async function setNow(key: "enabled" | "xuiEnabled" | "hmEnabled" | "pgEnabled" | "rebeccaEnabled" | "skipTlsVerify", value: boolean) {
     if (!form) return;
     const prev = form[key];
     if (prev === value) return;
@@ -127,8 +128,15 @@ export function SettingsTab({ config, onSaved, onPasswordChanged }: Props) {
     }
   }
 
-  async function testPanel(panel: "3x-ui" | "hmpanel" | "pasarguard") {
-    const setter = panel === "hmpanel" ? setTestingHm : panel === "pasarguard" ? setTestingPg : setTestingXui;
+  async function testPanel(panel: "3x-ui" | "hmpanel" | "pasarguard" | "rebecca") {
+    const setter =
+      panel === "hmpanel"
+        ? setTestingHm
+        : panel === "pasarguard"
+          ? setTestingPg
+          : panel === "rebecca"
+            ? setTestingRebecca
+            : setTestingXui;
     setter(true);
     try {
       const res = await fetch("/api/config/test-panel", {
@@ -346,6 +354,11 @@ export function SettingsTab({ config, onSaved, onPasswordChanged }: Props) {
             <CardTitle className="flex items-center gap-2 text-base">
               <Server className="h-4 w-4" />
               {t("panel_type_hm")}
+              {form.hmPremium && (
+                <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold text-amber-600 dark:text-amber-400">
+                  Premium
+                </span>
+              )}
             </CardTitle>
             <div className="flex items-center gap-2">
               {stateLabel(form.hmEnabled)}
@@ -447,6 +460,63 @@ export function SettingsTab({ config, onSaved, onPasswordChanged }: Props) {
             </div>
             <Button variant="outline" onClick={() => testPanel("pasarguard")} disabled={testingPg} className="w-full sm:w-auto">
               {testingPg ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
+              {t("test_panel")}
+            </Button>
+          </CardContent>
+        )}
+      </Card>
+
+      {/* ===== Panel 4: Rebecca ===== */}
+      <Card className={form.rebeccaEnabled ? "border-primary/40" : undefined}>
+        <CardHeader>
+          <div className="flex items-center justify-between gap-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Boxes className="h-4 w-4" />
+              {t("panel_type_rb")}
+            </CardTitle>
+            <div className="flex items-center gap-2">
+              {stateLabel(form.rebeccaEnabled)}
+              <Switch checked={form.rebeccaEnabled} disabled={toggling.has("rebeccaEnabled")} onCheckedChange={(v) => void setNow("rebeccaEnabled", v)} aria-label="Rebecca enable" />
+            </div>
+          </div>
+          <CardDescription>{t("rb_card_desc")}</CardDescription>
+        </CardHeader>
+        {form.rebeccaEnabled && (
+          <CardContent className="space-y-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2 sm:col-span-2">
+                <Label htmlFor="rebeccaUrl">{t("panel_url")}</Label>
+                <Input
+                  id="rebeccaUrl" dir="ltr" className="text-start"
+                  placeholder={t("rb_url_ph")}
+                  value={form.rebeccaUrl}
+                  onChange={(e) => set("rebeccaUrl", e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">{t("rb_url_hint")}</p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="rebeccaUsername">{t("panel_user")}</Label>
+                <Input id="rebeccaUsername" dir="ltr" className="text-start" autoComplete="off"
+                  value={form.rebeccaUsername} onChange={(e) => set("rebeccaUsername", e.target.value)} />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="rebeccaPassword">{t("panel_pass")}</Label>
+                <Input id="rebeccaPassword" dir="ltr" className="text-start" type="password" autoComplete="new-password"
+                  placeholder={form.rebeccaPassword ? "••••••••" : ""}
+                  value={form.rebeccaPassword} onChange={(e) => set("rebeccaPassword", e.target.value)} />
+              </div>
+            </div>
+            <p className="flex items-center gap-1 text-xs text-muted-foreground">
+              <Info className="h-3 w-3" /> {t("panel_type_rb_desc")}
+            </p>
+            <div className="flex items-center justify-between rounded-lg border p-3">
+              <div className="space-y-0.5">
+                <Label>{t("settings_backup")}</Label>
+              </div>
+              <Input disabled className="w-44 text-center" value={t("method_rb_full")} />
+            </div>
+            <Button variant="outline" onClick={() => testPanel("rebecca")} disabled={testingRebecca} className="w-full sm:w-auto">
+              {testingRebecca ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
               {t("test_panel")}
             </Button>
           </CardContent>

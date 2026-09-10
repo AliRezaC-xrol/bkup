@@ -32,12 +32,14 @@ export interface HmSession {
   token: string;
   base: string; // the base URL that works (…/api or bare backend)
   hmVersion?: string;
+  premium?: boolean;
   loggedInAt: number;
 }
 
 export interface HmProbe {
   base: string;
   hmVersion?: string;
+  premium?: boolean;
 }
 
 export interface HmResult<T = unknown> {
@@ -123,6 +125,8 @@ export async function hmDetectBase(cfg: AppConfig): Promise<HmResult<HmProbe>> {
         const probe: HmProbe & { key: string } = {
           base,
           hmVersion: res.data.version ? String(res.data.version) : undefined,
+          // Premium edition detection — the health payload carries mode/version
+          premium: /premium/i.test(`${res.data.mode ?? ""} ${res.data.version ?? ""}`),
           key,
         };
         g.__hmBase = probe;
@@ -186,6 +190,7 @@ export async function hmLogin(
       token: String(tokenRaw),
       base: probe.data.base,
       hmVersion: probe.data.hmVersion,
+      premium: probe.data.premium,
       loggedInAt: Date.now(),
       key: cfgKey(cfg),
     };
@@ -310,7 +315,7 @@ export async function hmFullBackup(
 /** Connection test used by the «تست اتصال» button: detect base → login → report version. */
 export async function hmTestConnection(
   cfg: AppConfig
-): Promise<HmResult<{ base: string; username: string; hmVersion?: string }>> {
+): Promise<HmResult<{ base: string; username: string; hmVersion?: string; premium?: boolean }>> {
   const sess = await hmLogin(cfg, true); // force → also re-detects the base after URL edits
   if (!sess.ok || !sess.data) return { ok: false, error: sess.error, errorBi: sess.errorBi };
   return {
@@ -319,6 +324,7 @@ export async function hmTestConnection(
       base: sess.data.base,
       username: cfg.hmUsername.trim(),
       hmVersion: sess.data.hmVersion,
+      premium: Boolean(sess.data.premium),
     },
   };
 }

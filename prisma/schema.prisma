@@ -31,6 +31,13 @@ model BackupConfig {
   pgUrl            String   @default("")
   pgUsername       String   @default("")
   pgPassword       String   @default("")
+  // HM Panel edition — detected from the panel's own health payload
+  hmPremium        Boolean  @default(false)
+  // ── Panel 4: Rebecca — fully independent connection ──
+  rebeccaEnabled   Boolean  @default(false)
+  rebeccaUrl       String   @default("")
+  rebeccaUsername  String   @default("")
+  rebeccaPassword  String   @default("")
   // Telegram (shared destination for BOTH panels)
   telegramApiBase  String   @default("https://api.telegram.org")
   telegramBotToken String   @default("")
@@ -72,7 +79,8 @@ model BackupRun {
   filePath      String?
   fileSize      Int?
   tgMessageId   Int?
-  tgDeleted     Boolean   @default(false)
+  tgMessageIds  String? // JSON array — ALL message ids (multi-part sends)
+  tgDeleted     Boolean  @default(false)
   error         String?
   durationMs    Int?
 

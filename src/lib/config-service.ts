@@ -23,6 +23,11 @@ const DEFAULTS: Omit<BackupConfig, "id" | "createdAt" | "updatedAt"> = {
   pgUrl: "",
   pgUsername: "",
   pgPassword: "",
+  hmPremium: false,
+  rebeccaEnabled: false,
+  rebeccaUrl: "",
+  rebeccaUsername: "",
+  rebeccaPassword: "",
   telegramApiBase: "https://api.telegram.org",
   telegramBotToken: "",
   telegramChatId: "",
@@ -91,6 +96,7 @@ export function maskConfig(cfg: AppConfig) {
     panelPassword: mask(cfg.panelPassword),
     hmPassword: mask(cfg.hmPassword),
     pgPassword: mask(cfg.pgPassword),
+    rebeccaPassword: mask(cfg.rebeccaPassword),
     apiToken: mask(cfg.apiToken),
     telegramBotToken: mask(cfg.telegramBotToken),
   };
@@ -99,4 +105,4 @@ export function maskConfig(cfg: AppConfig) {
 export type MaskedConfig = ReturnType<typeof maskConfig>;
 
 /** Which fields the client is allowed to send as "unchanged" (masked value). */
-export const SECRET_FIELDS = ["panelPassword", "hmPassword", "pgPassword", "apiToken", "telegramBotToken"] as const;
+export const SECRET_FIELDS = ["panelPassword", "hmPassword", "pgPassword", "rebeccaPassword", "apiToken", "telegramBotToken"] as const;
