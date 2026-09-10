@@ -59,8 +59,8 @@ import type { SystemInfoDTO } from "@/components/dashboard/types";
 export function Brand({ compact }: { compact?: boolean }) {
   return (
     <div className="flex items-center gap-3">
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground">
-        <DatabaseBackup className="h-5 w-5" />
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl">
+        <img src="/logo-mark.png" alt="bkup logo" className="h-10 w-10 object-contain" />
       </div>
       {!compact && (
         <div className="leading-tight">
