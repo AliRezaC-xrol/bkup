@@ -73,7 +73,6 @@ async function checkOnce() {
       const res = await sendMessage(
         cfg,
         [
-          [
         `A new bkup version has been released: ${tag} (installed: v${APP_VERSION})`,
         "",
         "Update without losing data:",
