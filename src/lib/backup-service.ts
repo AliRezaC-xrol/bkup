@@ -110,14 +110,22 @@ export async function runBackup(trigger: "auto" | "manual"): Promise<CycleResult
     outcomes.push(await runPanelBackup(panel, cfg, trigger));
   }
 
-  // post-cycle cleanup (non-fatal, once per cycle)
+  // post-cycle cleanups — each in its OWN try/catch so one failing
+  // (e.g. a busy SQLite moment) can never skip the other one
   try {
     await cleanupTelegramOld(cfg);
-    await cleanupLocalFiles(cfg);
   } catch (e: unknown) {
     await log("warn", bi(
-      `پاک‌سازی دوره‌ای با خطا مواجه شد: ${e instanceof Error ? e.message : String(e)}`,
-      `Periodic cleanup hit an error: ${e instanceof Error ? e.message : String(e)}`
+      `پاک‌سازی تلگرام با خطا مواجه شد: ${e instanceof Error ? e.message : String(e)}`,
+      `Telegram cleanup hit an error: ${e instanceof Error ? e.message : String(e)}`
+    ));
+  }
+  try {
+    await sweepOrphanFiles(cfg);
+  } catch (e: unknown) {
+    await log("warn", bi(
+      `پاک‌سازی فایل‌های بی‌صاحب با خطا مواجه شد: ${e instanceof Error ? e.message : String(e)}`,
+      `Orphan-file cleanup hit an error: ${e instanceof Error ? e.message : String(e)}`
     ));
   }
 
@@ -266,6 +274,11 @@ async function runPanelBackup(
       },
     });
 
+    // per-panel local retention — enforced after EVERY successful backup
+    try {
+      await enforceLocalRetention(cfg, panel);
+    } catch { /* retention is best-effort and must never fail the backup */ }
+
     outcome = {
       runId: run.id,
       panel,
@@ -380,43 +393,50 @@ async function cleanupTelegramOld(cfg: Awaited<ReturnType<typeof getConfig>>) {
 }
 
 /**
- * Local file retention — keep only the newest N backup FILES (0 = unlimited).
- * Enforced after every successful backup cycle. Files are ordered by their
- * REAL time (DB startedAt; orphans by mtime) — never by file name, because
- * every panel names its archive differently. Orphan files (a cycle that
- * crashed after writing the archive) are swept with the same rule.
+ * Per-panel local retention — keep only the newest N local backups of THIS
+ * panel (0 = unlimited). Enforced after every successful backup, fully
+ * dynamic: N is read fresh from the config each time. Ordering is by the
+ * REAL time (DB startedAt), never by file name. The backup that was just
+ * created is always the newest row, so it can never be deleted. Deleted
+ * backups are removed from the Backup History too, so the history always
+ * matches the files actually on disk.
  */
-async function cleanupLocalFiles(cfg: Awaited<ReturnType<typeof getConfig>>) {
+async function enforceLocalRetention(
+  cfg: Awaited<ReturnType<typeof getConfig>>,
+  panel: PanelId
+): Promise<void> {
   const keep = cfg.localRetention;
-  if (!keep || keep < 1) return;
-  const dir = backupDir();
-
-  // newest-N selection over recorded runs
+  if (!keep || keep < 1) return; // 0 = unlimited
   const runs = await db.backupRun.findMany({
-    where: { filePath: { not: null } },
+    where: { panel, filePath: { not: null } },
     orderBy: { startedAt: "desc" },
     select: { id: true, filePath: true },
   });
-  const doomed = runs.slice(keep);
-  const survivors = new Set(runs.slice(0, keep).map((r) => r.filePath));
-
-  for (const run of doomed) {
+  for (const run of runs.slice(keep)) {
     try {
       if (run.filePath && fs.existsSync(run.filePath)) fs.unlinkSync(run.filePath);
     } catch { /* best-effort */ }
-    await db.backupRun.update({ where: { id: run.id }, data: { filePath: null } });
+    await db.backupRun.delete({ where: { id: run.id } });
   }
+}
 
-  // orphan sweep — archives on disk that no surviving run references
+/**
+ * Orphan sweep — archives left on disk by a cycle that crashed after writing
+ * the file (they belong to no history row). One hour of grace in case a cycle
+ * is still running. Runs once per cycle; retention itself is per-panel above.
+ */
+async function sweepOrphanFiles(cfg: Awaited<ReturnType<typeof getConfig>>) {
+  const dir = backupDir();
   const KNOWN = /(-backup-|_full_|\.db$|\.json$|\.tar\.gz$|\.tgz$|\.zip$|\.rbbackup$)/;
+  const referenced = new Set(
+    (await db.backupRun.findMany({ where: { filePath: { not: null } }, select: { filePath: true } }))
+      .map((r) => r.filePath)
+  );
   for (const f of fs.readdirSync(dir)) {
     const full = path.join(dir, f);
-    if (!KNOWN.test(f) || survivors.has(full) || doomed.some((d) => d.filePath === full)) continue;
+    if (!KNOWN.test(f) || referenced.has(full)) continue;
     try {
-      const age = Date.now() - fs.statSync(full).mtimeMs;
-      if (age > 60 * 60 * 1000) { // give a possibly-running cycle one hour of grace
-        fs.unlinkSync(full);
-      }
+      if (Date.now() - fs.statSync(full).mtimeMs > 60 * 60 * 1000) fs.unlinkSync(full);
     } catch { /* best-effort */ }
   }
 }
