@@ -102,6 +102,11 @@ export function scheduleNext() {
     })
     .catch((e) => {
       console.error("[SCHEDULER] failed to load config:", e);
+      // keep the chain alive — retry the tick shortly instead of dying silently
+      s.nextRunAt = Date.now() + 30_000;
+      s.timer = setTimeout(() => {
+        tick().catch((e2) => console.error("[SCHEDULER] tick error:", e2));
+      }, 30_000);
     });
 }
 

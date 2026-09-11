@@ -50,45 +50,25 @@ function tgUrl(cfg: AppConfig, method: string): string {
   return `${tgBase(cfg)}/bot${cfg.telegramBotToken.trim()}/${method}`;
 }
 
-function captionFor(fileName: string, size: number, method: string, panel: string, premium = false): string {
-  const now = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Asia/Tehran",
-    dateStyle: "medium",
-    timeStyle: "medium",
-  }).format(new Date());
+function captionFor(fileName: string, size: number, method: string, panel: string): string {
   const sizeStr = size >= 1024 * 1024
     ? `${(size / 1024 / 1024).toFixed(2)} MB`
     : `${(size / 1024).toFixed(1)} KB`;
-  const isHm = panel === "hmpanel" || method === "hm-full";
-  const isPg = panel === "pasarguard" || method === "pg-full";
-  const isRb = panel === "rebecca" || method === "rb-full";
-  const methodEn = isPg
-    ? "Full backup (users + hosts + nodes + cores + groups + settings)"
-    : isHm
-      ? (premium ? "Full backup (database + config + uploads + premium modules)" : "Full backup (database + config + uploads)")
-      : isRb
-        ? "Full backup (database + configuration)"
-        : method === "db"
-          ? "Database file"
-          : method === "local"
-            ? "Database file (local copy)"
-            : "JSON export";
-  const title = isPg
-    ? "🗄 PasarGuard automatic backup"
-    : isHm
-      ? "🗄 HM Panel automatic backup"
-      : isRb
-        ? "🗄 Rebecca automatic backup"
-        : "🗄 3X-UI automatic backup";
-  const lines = [
-    title,
-    `🕒 ${now}`,
-    `💾 ${fileName}`,
-    `📦 ${sizeStr}`,
-    `🔧 Type: ${methodEn}`,
-  ];
-  if (isHm && premium) lines.push(`⭐ Edition: Premium (full premium data included)`);
-  return lines.join("\n");
+  const title = panel === "hmpanel"
+    ? "HM Panel"
+    : panel === "pasarguard"
+      ? "PasarGuard"
+      : panel === "rebecca"
+        ? "Rebecca"
+        : "3x-ui";
+  const methodEn = method === "hm-full" || method === "pg-full" || method === "rb-full"
+    ? "Full backup"
+    : method === "db"
+      ? "Database file"
+      : method === "local"
+        ? "Database file (local copy)"
+        : "JSON export";
+  return `${fileName}\n${sizeStr} · ${title} · ${methodEn}`;
 }
 
 /** One sendDocument call — no size check here, callers go through sendBackupDocument. */
@@ -135,6 +115,15 @@ async function sendOneDocument(
       if (res.status >= 400 && res.status < 500 && res.status !== 429) break;
     } catch (e: unknown) {
       const t = e instanceof Error ? e.message : String(e);
+      if (/timeout|abort|ETIMEDOUT|ECONNABORTED/i.test(t)) {
+        // a timed-out upload may still have been delivered — retrying would
+        // send the same file twice, so fail the cycle instead
+        lastError = bi(
+          "ارسال با تایم‌اوت قطع شد — فایل ممکن است رسیده باشد؛ برای جلوگیری از ارسال تکراری، دوباره تلاش نشد",
+          "The upload timed out - the file may have been delivered; not retrying to avoid a duplicate"
+        );
+        break;
+      }
       lastError = bi(t, t);
     }
   }
@@ -151,49 +140,6 @@ function fetchCause(e: unknown): string | null {
   if (cause === "ECONNREFUSED" || raw.includes("ECONNREFUSED")) return "the connection to the Telegram endpoint was refused - check the firewall/outbound access";
   if (cause === "ETIMEDOUT" || cause === "ECONNABORTED" || raw.includes("timeout")) return "the connection to api.telegram.org timed out";
   return null;
-}
-
-/** Live progress message — one message per backup, edited through the cycle. */
-export async function sendProgressMessage(cfg: AppConfig, text: string): Promise<TgResult<{ messageId: number }>> {
-  if (!cfg.telegramBotToken.trim() || !cfg.telegramChatId.trim()) {
-    return fail("توکن بات یا آیدی چت تلگرام تنظیم نشده است", "The Telegram bot token or chat ID is not configured");
-  }
-  try {
-    const res = await fetch(tgUrl(cfg, "sendMessage"), {
-      signal: AbortSignal.timeout(TG_FETCH_TIMEOUT),
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: cfg.telegramChatId.trim(),
-        ...(cfg.telegramThreadId.trim() ? { message_thread_id: cfg.telegramThreadId.trim() } : {}),
-        text,
-      }),
-    });
-    const body = (await res.json().catch(() => null)) as
-      | { ok?: boolean; result?: { message_id?: number }; description?: string }
-      | null;
-    if (res.ok && body?.ok && body.result?.message_id) return { ok: true, data: { messageId: body.result.message_id } };
-    return { ok: false, error: body?.description ?? `HTTP ${res.status}` };
-  } catch (e: unknown) {
-    return { ok: false, error: fetchCause(e) ?? (e instanceof Error ? e.message : String(e)) };
-  }
-}
-
-/** Edit a progress message in place — failures are non-fatal by design. */
-export async function editProgressMessage(cfg: AppConfig, messageId: number, text: string): Promise<void> {
-  try {
-    await fetch(tgUrl(cfg, "editMessageText"), {
-      signal: AbortSignal.timeout(TG_FETCH_TIMEOUT),
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: cfg.telegramChatId.trim(),
-        ...(cfg.telegramThreadId.trim() ? { message_thread_id: cfg.telegramThreadId.trim() } : {}),
-        message_id: messageId,
-        text,
-      }),
-    });
-  } catch { /* progress edits must never break the backup flow */ }
 }
 
 export type TgPanel = "3x-ui" | "hmpanel" | "pasarguard" | "rebecca";
@@ -213,12 +159,10 @@ export async function sendBackupDocument(
   if (!cfg.telegramBotToken.trim()) return fail("توکن بات تلگرام تنظیم نشده است", "The Telegram bot token is not configured");
   if (!cfg.telegramChatId.trim()) return fail("آیدی چت تلگرام تنظیم نشده است", "The Telegram chat ID is not configured");
 
-  const premium = panel === "hmpanel" && Boolean((cfg as { hmPremium?: boolean }).hmPremium);
-
   // ALWAYS attempt one complete file first — no splitting by default. Only if
   // the endpoint itself rejects the size (the public Bot API caps at 50 MB)
   // does the automatic multi-part fallback below kick in.
-  const single = await sendOneDocument(cfg, buf, fileName, captionFor(fileName, buf.length, method, panel, premium));
+  const single = await sendOneDocument(cfg, buf, fileName, captionFor(fileName, buf.length, method, panel));
   if (single.ok) {
     return { ok: true, data: { messageIds: [single.data!.messageId], parts: 1, deliveredSingleFile: true } };
   }
@@ -236,8 +180,8 @@ export async function sendBackupDocument(
     const part = buf.subarray(i * PART_LIMIT, Math.min((i + 1) * PART_LIMIT, buf.length));
     const partName = `${stem}.part${String(i + 1).padStart(2, "0")}of${width}${ext}`;
     const caption =
-      captionFor(partName, part.length, method, panel, premium) +
-      `\n🧩 Part ${i + 1} of ${total} — rejoin with: cat ${stem}.part*of*${ext} > ${fileName}`;
+      captionFor(partName, part.length, method, panel) +
+      `\nPart ${i + 1} of ${total} - rejoin with: cat ${stem}.part*of*${ext} > ${fileName}`;
     const r = await sendOneDocument(cfg, part, partName, caption);
     if (!r.ok) {
       return {

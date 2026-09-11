@@ -7,7 +7,7 @@ import { login, getDb, getJsonExport, invalidateSession } from "@/lib/panel-clie
 import { hmFullBackup } from "@/lib/hmpanel-client";
 import { pgFullBackup } from "@/lib/pasarguard-client";
 import { rbFullBackup } from "@/lib/rebecca-client";
-import { sendBackupDocument, sendProgressMessage, editProgressMessage, deleteMessage } from "@/lib/telegram";
+import { sendBackupDocument, deleteMessage } from "@/lib/telegram";
 import { bi, fail, storeBi, throwBi, errorBiOf, type Bi } from "@/lib/messages";
 
 export type PanelId = "3x-ui" | "hmpanel" | "pasarguard" | "rebecca";
@@ -78,6 +78,21 @@ export async function runBackup(trigger: "auto" | "manual"): Promise<CycleResult
 
   const cfg = await getConfig();
 
+  // duplicate-cycle guard: an auto cycle starting again inside the same
+  // scheduling window (stray timer, service restart mid-cycle) is suppressed —
+  // exactly ONE full backup per scheduled cycle, never two.
+  if (trigger === "auto") {
+    const newest = await db.backupRun.findFirst({ orderBy: { startedAt: "desc" }, select: { startedAt: true } });
+    if (newest && Date.now() - new Date(newest.startedAt).getTime() < Math.max(10, cfg.intervalSeconds) * 800) {
+      g.__xuiRunning = false;
+      await log("warn", bi(
+        "چرخهٔ بکاپ تکراری در همان بازهٔ زمان‌بندی سرکوب شد",
+        "A duplicate backup cycle within the same scheduling window was suppressed"
+      ));
+      return { outcomes: [], ok: true, durationMs: 0 };
+    }
+  }
+
   const targets: PanelId[] = [];
   if (cfg.xuiEnabled) targets.push("3x-ui");
   if (cfg.hmEnabled) targets.push("hmpanel");
@@ -130,14 +145,8 @@ async function runPanelBackup(
 
   let outcome: BackupOutcome;
 
-  // live Telegram progress message — one message, edited through the cycle
-  const tgConfigured = Boolean(cfg.telegramBotToken.trim() && cfg.telegramChatId.trim());
-  let progressId: number | null = null;
-  if (tgConfigured) {
-    const p = await sendProgressMessage(cfg, `🚀 Backup started — ${panelTitle(panel)}\n⏳ Creating full backup…`);
-    if (p.ok && p.data) progressId = p.data.messageId;
-  }
-
+  // Only the backup FILE is delivered to Telegram — no progress, success or
+  // completion messages of any kind.
   try {
     // 1) Obtain the backup payload
     let buf: Buffer;
@@ -239,14 +248,6 @@ async function runPanelBackup(
       `[${panelTitle(panel)}] the full backup was sent to Telegram successfully (chat ${cfg.telegramChatId})`
     ));
 
-    if (progressId) {
-      await editProgressMessage(
-        cfg,
-        progressId,
-        `✅ Backup uploaded successfully — ${panelTitle(panel)}\n💾 ${fileName}\n📦 ${formatSize(buf.length)} · ⏱ ${((Date.now() - started) / 1000).toFixed(1)}s`
-      );
-    }
-
     if (warnNoteBi) await log("warn", warnNoteBi);
 
     const durationMs = Date.now() - started;
@@ -284,9 +285,6 @@ async function runPanelBackup(
       data: { status: "failed", finishedAt: new Date(), error: storeBi(errBi, error), durationMs },
     });
     await log("error", bi(`[${panelTitle(panel)}] بکاپ ناموفق بود: ${error}`, `[${panelTitle(panel)}] the backup failed: ${errBi?.en ?? error}`));
-    if (progressId) {
-      await editProgressMessage(cfg, progressId, `❌ Backup failed — ${panelTitle(panel)}\n${errBi?.en ?? error}`);
-    }
     outcome = { runId: run.id, panel, status: "failed", error, errorBi: errBi, durationMs };
   }
 
