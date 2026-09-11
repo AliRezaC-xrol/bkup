@@ -57,7 +57,7 @@ in place, keeping every setting and backup.
 |---|---|---|
 | **1** | Installer | pick a port (or a random one) and a panel password |
 | **2** | Browser | open `http://<server-ip>:<port>` and log in |
-| **3** | **Settings** | connect 3x-ui, HM Panel, PasarGuard or Rebecca — press the test button |
+| **3** | **Settings** | connect 3x-ui, HM Panel, PasarGuard, Rebecca — press the test button |
 | **4** | **Settings** | add your Telegram bot token and chat ID — press the test button |
 | **5** | **Settings** | set the backup interval and turn **Auto backup** on |
 
