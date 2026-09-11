@@ -6,16 +6,17 @@ import { Badge } from "@/components/ui/badge";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import {
   LayoutDashboard, DatabaseBackup, Settings, ScrollText, ServerCog,
-  LogOut, Menu, Zap, Loader2,
+  LogOut, Menu, Zap, Loader2, Layers,
 } from "lucide-react";
 import { useLang } from "@/components/dashboard/lang";
 import type { DictKey } from "@/lib/i18n";
 
-export type TabKey = "dashboard" | "backups" | "settings" | "logs" | "system";
+export type TabKey = "dashboard" | "backups" | "reassembly" | "settings" | "logs" | "system";
 
 const NAV: { key: TabKey; icon: React.ReactNode; label: DictKey }[] = [
   { key: "dashboard", icon: <LayoutDashboard className="h-4.5 w-4.5" />, label: "nav_dashboard" },
   { key: "backups", icon: <DatabaseBackup className="h-4.5 w-4.5" />, label: "nav_backups" },
+  { key: "reassembly", icon: <Layers className="h-4.5 w-4.5" />, label: "nav_reassembly" },
   { key: "settings", icon: <Settings className="h-4.5 w-4.5" />, label: "nav_settings" },
   { key: "logs", icon: <ScrollText className="h-4.5 w-4.5" />, label: "nav_logs" },
   { key: "system", icon: <ServerCog className="h-4.5 w-4.5" />, label: "nav_system" },

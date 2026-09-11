@@ -87,6 +87,20 @@ model BackupRun {
   @@index([startedAt])
 }
 
+// Reassembled backups — parts uploaded in the web panel and merged back
+// into the one complete original archive
+model ReassembledBackup {
+  id        Int      @id @default(autoincrement())
+  name      String // output (original) file name
+  panel     String   @default("") // best-effort panel hint parsed from the names
+  parts     Int      @default(1)
+  size      Int
+  filePath  String
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
 // System log entries shown in the live log console
 model AppLog {
   id      Int      @id @default(autoincrement())
