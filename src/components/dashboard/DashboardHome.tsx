@@ -270,7 +270,7 @@ export function DashboardHome({
                     }`}
                   />
                   <Badge variant="outline" className="shrink-0 text-[10px] uppercase">
-                    {r.panel === "hmpanel" ? "HM" : r.panel === "pasarguard" ? "PG" : "3X"}
+                    {r.panel === "hmpanel" ? "HM" : r.panel === "pasarguard" ? "PG" : r.panel === "rebecca" ? "RB" : "3X"}
                   </Badge>
                   <span className="min-w-0 flex-1 truncate font-medium" dir="ltr">
                     {r.fileName ?? `#${r.id}`}

@@ -44,7 +44,7 @@ export function BackupsTab({ runs, onRefresh }: { runs: BackupRunDTO[]; onRefres
   );
 
   const methodLabel = (m: string | null) =>
-    m === "db" ? t("method_db") : m === "json" ? t("method_json") : m === "local" ? t("method_local") : m === "hm-full" ? t("method_hm_full") : m === "pg-full" ? t("method_pg_full") : "—";
+    m === "db" ? t("method_db") : m === "json" ? t("method_json") : m === "local" ? t("method_local") : m === "hm-full" ? t("method_hm_full") : m === "pg-full" ? t("method_pg_full") : m === "rb-full" ? t("method_rb_full") : "—";
 
   const fmtTime = (iso: string) =>
     new Intl.DateTimeFormat("en-GB", {
@@ -181,7 +181,7 @@ export function BackupsTab({ runs, onRefresh }: { runs: BackupRunDTO[]; onRefres
                     </TableCell>
                     <TableCell>
                       <Badge variant="outline" className="text-[10px]">{methodLabel(r.method)}</Badge>
-                      <Badge variant="outline" className="ms-1 text-[10px] uppercase">{r.panel === "hmpanel" ? "HM" : r.panel === "pasarguard" ? "PG" : "3X"}</Badge>
+                      <Badge variant="outline" className="ms-1 text-[10px] uppercase">{r.panel === "hmpanel" ? "HM" : r.panel === "pasarguard" ? "PG" : r.panel === "rebecca" ? "RB" : "3X"}</Badge>
                     </TableCell>
                     <TableCell className="text-xs tabular-nums">{formatBytes(r.fileSize)}</TableCell>
                     <TableCell className="text-xs tabular-nums">{formatDuration(r.durationMs)}</TableCell>
