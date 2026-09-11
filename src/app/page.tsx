@@ -8,6 +8,7 @@ import { LoginScreen } from "@/components/dashboard/LoginScreen";
 import { Shell, type TabKey } from "@/components/dashboard/Shell";
 import { DashboardHome } from "@/components/dashboard/DashboardHome";
 import { BackupsTab } from "@/components/dashboard/BackupsTab";
+import { ReassemblyTab } from "@/components/dashboard/ReassemblyTab";
 import { SettingsTab } from "@/components/dashboard/SettingsTab";
 import { LogsTab } from "@/components/dashboard/LogsTab";
 import { SystemTab } from "@/components/dashboard/SystemTab";
@@ -323,6 +324,7 @@ function App() {
         />
       )}
       {tab === "backups" && <BackupsTab runs={runs} onRefresh={loadRuns} />}
+      {tab === "reassembly" && <ReassemblyTab />}
       {tab === "settings" && (
         <SettingsTab
           config={config}
