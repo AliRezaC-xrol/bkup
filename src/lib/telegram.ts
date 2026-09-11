@@ -14,11 +14,11 @@ const TG_FETCH_TIMEOUT = 15000;
  * Uses native fetch + FormData — works on Node 18+ and Bun.
  * apiBase is configurable so users behind filtered networks can point to a mirror.
  *
- * SIZE POLICY — a backup is ALWAYS delivered as ONE complete file.
- * The archive is never split into parts and never rebuilt, no matter its
- * size. The official endpoint caps one sendDocument at 50 MB (and a local
- * Bot API server at 2 GB); a larger file is reported as an error instead
- * of being split — preserving the panel's original full backup exactly.
+ * SIZE POLICY — one complete file whenever the endpoint allows it:
+ * the exact bytes the panel produced, never re-packed. On the official
+ * endpoint (50 MB sendDocument cap) a larger archive goes out as numbered
+ * parts of the SAME file with a cat-rejoin hint (the approach the reference
+ * panels use); via a local Bot API server up to 2 GB travel as one file.
  */
 
 export interface TgResult<T = unknown> {
@@ -155,10 +155,21 @@ function fetchCause(e: unknown): string | null {
 
 export type TgPanel = "3x-ui" | "hmpanel" | "pasarguard" | "rebecca";
 
+/** One sendDocument may carry at most 50 MB on the official endpoint — stay below it. */
+const PART_LIMIT = 45 * 1024 * 1024;
+/** Pre-flight guard: the official endpoint rejects documents above ~50 MB.
+ *  (The Rebecca panel enforces the same 49 MB limit in its sender.go.) */
+const DOC_LIMIT = 49 * 1024 * 1024;
+/** A local Bot API server accepts one file up to 2 GB. */
+const LOCAL_DOC_LIMIT = 2 * 1024 * 1024 * 1024 - 1024 * 1024;
+
 /**
- * Send a backup to Telegram — ONE complete file, ALWAYS.
- * The archive is never split into .part files and never re-packed: the exact
- * buffer produced by the panel's full backup is delivered as one sendDocument.
+ * Send a backup to Telegram — ONE complete file whenever the endpoint allows
+ * it. On the official endpoint (50 MB cap) a larger archive is delivered as
+ * numbered parts of the SAME original file — never re-packed, exactly the
+ * bytes the panel produced — with a plain "cat" rejoin hint per part.
+ * Through a local Bot API server ("Telegram API base") files up to 2 GB go
+ * out as a single document.
  */
 export async function sendBackupDocument(
   cfg: AppConfig,
@@ -170,9 +181,45 @@ export async function sendBackupDocument(
   if (!cfg.telegramBotToken.trim()) return fail("توکن بات تلگرام تنظیم نشده است", "The Telegram bot token is not configured");
   if (!cfg.telegramChatId.trim()) return fail("آیدی چت تلگرام تنظیم نشده است", "The Telegram chat ID is not configured");
 
-  const r = await sendOneDocument(cfg, buf, fileName, captionFor(fileName, buf.length, method, panel));
-  if (!r.ok) return { ok: false, error: r.error, errorBi: r.errorBi };
-  return { ok: true, data: { messageIds: [r.data!.messageId] } };
+  const limit = isLocalBase(cfg) ? LOCAL_DOC_LIMIT : DOC_LIMIT;
+  if (buf.length <= limit) {
+    const r = await sendOneDocument(cfg, buf, fileName, captionFor(fileName, buf.length, method, panel));
+    if (!r.ok) return { ok: false, error: r.error, errorBi: r.errorBi };
+    return { ok: true, data: { messageIds: [r.data!.messageId] } };
+  }
+  if (buf.length > LOCAL_DOC_LIMIT) {
+    return fail(
+      `حجم بکاپ از سقف ۲ گیگابایت تلگرام بیشتر است و قابل ارسال نیست`,
+      "The backup exceeds Telegram's 2 GB limit and cannot be delivered"
+    );
+  }
+
+  // larger than the official endpoint allows — send the ORIGINAL file as
+  // numbered parts (client-side split, no doomed upload attempt first)
+  const total = Math.ceil(buf.length / PART_LIMIT);
+  const width = String(total).padStart(2, "0");
+  const dot = fileName.lastIndexOf(".");
+  const stem = dot > 0 ? fileName.slice(0, dot) : fileName;
+  const ext = dot > 0 ? fileName.slice(dot) : "";
+  const messageIds: number[] = [];
+  for (let i = 0; i < total; i++) {
+    const part = buf.subarray(i * PART_LIMIT, Math.min((i + 1) * PART_LIMIT, buf.length));
+    const partName = `${stem}.part${String(i + 1).padStart(2, "0")}of${width}${ext}`;
+    const caption =
+      captionFor(partName, part.length, method, panel) +
+      `\nPart ${i + 1} of ${total} - rejoin with: cat ${stem}.part*of*${ext} &gt; ${fileName}`;
+    const r = await sendOneDocument(cfg, part, partName, caption);
+    if (!r.ok) {
+      return {
+        ok: false,
+        error: r.error,
+        errorBi: r.errorBi,
+        ...(messageIds.length ? { data: { messageIds } } : {}),
+      };
+    }
+    messageIds.push(r.data!.messageId);
+  }
+  return { ok: true, data: { messageIds } };
 }
 
 /** Send a single document (compat helper — used for small ad-hoc files). */
