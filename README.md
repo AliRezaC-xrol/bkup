@@ -10,7 +10,7 @@
 
 <img src="docs/panel-2.png" alt="bkup web panel" width="820">
 
-[Install](#install) · [First run](#first-run) · [Features](#features) · [Update](#update) · [Terminal menu](#terminal-menu) · [مستندات فارسی](README.fa.md)
+[Install](#install) · [First run](#first-run) · [Features](#features) · [Reassemble](#reassemble-backup-parts) · [Update](#update) · [Terminal menu](#terminal-menu) · [مستندات فارسی](README.fa.md)
 
 </div>
 
@@ -37,6 +37,7 @@ same install covers anything from a few backups a day to one every few minutes.
 - **Telegram delivery** — every backup arrives as a file in your chat or channel; nothing to download by hand
 - **Your schedule** — interval in seconds, kept across reboots by the systemd service
 - **Web panel** — dashboard, live logs, backup history with per-backup download and delete
+- **Reassemble split backups** — parts delivered to Telegram are merged back into the one complete file right in the web panel, with a downloadable history
 - **Terminal menu** — `bkup` handles status, panel URL, password, port, logs, update and uninstall without opening the web panel
 
 ## Install
@@ -71,6 +72,17 @@ in place, keeping every setting and backup.
 The version shown in the panel comes from the code at build time, so after an
 update it always matches what is actually running.
 
+
+## Reassemble backup parts
+
+Backups above 50 MB arrive in Telegram as numbered parts. Open the
+**Reassemble** tab in the web panel, upload the parts and press
+**Reassemble and store** — they are sorted by part number automatically and
+merged byte-for-byte into the original backup file. Every merge is kept in a
+history with a download and a delete button for each entry.
+
+Every panel is covered — 3x-ui, HM Panel, PasarGuard and Rebecca — because
+the parts are exact slices of the panel's own backup file.
 
 ## Terminal menu
 
