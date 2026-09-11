@@ -1,9 +1,10 @@
 import type { AppConfig } from "@/lib/config-service";
 import { bi, fail, type Bi } from "@/lib/messages";
 
-// Telegram delivery always uses the official public endpoint. Force IPv4-first
-// DNS (broken IPv6 routes on some hosts cause silent "fetch failed") and apply
-// a hard timeout so a stuck connection can never spin the UI forever.
+// Force IPv4-first DNS (broken IPv6 routes on some hosts cause silent
+// "fetch failed") and apply a hard timeout so a stuck connection can never
+// spin the UI forever. Control calls get a short guard; uploads get a
+// generous one (they can carry a 2GB single file via a local Bot API server).
 import dns from "node:dns";
 dns.setDefaultResultOrder("ipv4first");
 const TG_FETCH_TIMEOUT = 15000;
@@ -29,10 +30,24 @@ export interface TgResult<T = unknown> {
 /** One sendDocument may carry at most 50 MB — stay safely below it. */
 const PART_LIMIT = 45 * 1024 * 1024;
 
+/** Configured endpoint — official by default; CLI option 11 points this at
+ *  a local Bot API server (http://127.0.0.1:8081) for 2GB single-file sends. */
+function tgBase(cfg: AppConfig): string {
+  return (cfg.telegramApiBase || "").trim().replace(/\/+$/, "") || "https://api.telegram.org";
+}
+
+function isLocalBase(cfg: AppConfig): boolean {
+  return !/api\.telegram\.org$/.test(tgBase(cfg));
+}
+
+/** Uploads can be huge - 45MB parts on the official endpoint, up to a 2GB
+ *  single file on a local Bot API server. Control calls keep the short 15s. */
+function uploadTimeoutMs(cfg: AppConfig): number {
+  return isLocalBase(cfg) ? 3_600_000 : 600_000;
+}
+
 function tgUrl(cfg: AppConfig, method: string): string {
-  // Telegram delivery always goes through the official public endpoint.
-  const base = "https://api.telegram.org";
-  return `${base}/bot${cfg.telegramBotToken.trim()}/${method}`;
+  return `${tgBase(cfg)}/bot${cfg.telegramBotToken.trim()}/${method}`;
 }
 
 function captionFor(fileName: string, size: number, method: string, panel: string, premium = false): string {
@@ -98,7 +113,7 @@ async function sendOneDocument(
       );
 
       const res = await fetch(tgUrl(cfg, "sendDocument"), {
-      signal: AbortSignal.timeout(TG_FETCH_TIMEOUT), method: "POST", body: fd });
+      signal: AbortSignal.timeout(uploadTimeoutMs(cfg)), method: "POST", body: fd });
       const body = (await res.json().catch(() => null)) as
         | { ok?: boolean; result?: { message_id?: number }; description?: string }
         | null;
@@ -132,8 +147,8 @@ async function sendOneDocument(
 function fetchCause(e: unknown): string | null {
   const raw = e instanceof Error ? e.message : String(e ?? "");
   const cause = (e as { cause?: { code?: string } })?.cause?.code ?? "";
-  if (raw.includes("fetch failed") || cause === "ENOTFOUND") return "api.telegram.org is unreachable from this server - check the server's internet/DNS";
-  if (cause === "ECONNREFUSED" || raw.includes("ECONNREFUSED")) return "the connection to api.telegram.org was refused - check the firewall/outbound access";
+  if (raw.includes("fetch failed") || cause === "ENOTFOUND") return "the Telegram endpoint is unreachable from this server - check the server's internet/DNS";
+  if (cause === "ECONNREFUSED" || raw.includes("ECONNREFUSED")) return "the connection to the Telegram endpoint was refused - check the firewall/outbound access";
   if (cause === "ETIMEDOUT" || cause === "ECONNABORTED" || raw.includes("timeout")) return "the connection to api.telegram.org timed out";
   return null;
 }

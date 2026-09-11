@@ -174,6 +174,8 @@ export const dict = {
   tg_chat: "Chat / channel ID",
   tg_chat_ph: "e.g. 123456789 or @mychannel",
   tg_thread: "Topic ID",
+  tg_api_base: "Telegram API base",
+  tg_api_base_hint: "Leave as is. CLI option 11 (local Bot API server) sets this to http://127.0.0.1:8081 for single-file backups up to 2 GB.",
   tg_api: "Telegram API base",
   tg_api_ph: "default: https://api.telegram.org",
   settings_schedule: "Schedule",
