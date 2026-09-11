@@ -556,6 +556,13 @@ export function SettingsTab({ config, onSaved, onPasswordChanged }: Props) {
               <Input id="threadId" dir="ltr" className="text-start"
                 value={form.telegramThreadId} onChange={(e) => set("telegramThreadId", e.target.value)} />
             </div>
+            <div className="space-y-2 sm:col-span-2">
+              <Label htmlFor="tgApiBase">{t("tg_api_base")}</Label>
+              <Input id="tgApiBase" dir="ltr" className="text-start"
+                placeholder="https://api.telegram.org"
+                value={form.telegramApiBase} onChange={(e) => set("telegramApiBase", e.target.value)} />
+              <p className="text-xs text-muted-foreground">{t("tg_api_base_hint")}</p>
+            </div>
           </div>
 
           <Button variant="outline" onClick={testTelegram} disabled={testingTg} className="w-full sm:w-auto">
