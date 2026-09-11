@@ -157,11 +157,10 @@ export function DashboardHome({
                       ? `${t("every")} ${n(config.intervalSeconds)} ${t("seconds")}`
                       : t("auto_on_desc")}
               </p>
-              <p className="mt-1 text-xs font-semibold sm:hidden">{schedEnabled ? t("auto_on") : t("auto_off")}</p>
             </div>
           </div>
           <div className="flex items-center gap-4">
-            <div className="hidden text-end sm:block sm:max-w-52">
+            <div className="text-end">
               <p className="text-sm font-semibold">{schedEnabled ? t("auto_on") : t("auto_off")}</p>
               <p className="text-xs opacity-70">{schedEnabled ? t("auto_on_desc") : t("auto_off_desc")}</p>
             </div>
