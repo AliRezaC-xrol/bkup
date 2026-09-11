@@ -14,10 +14,11 @@ const TG_FETCH_TIMEOUT = 15000;
  * Uses native fetch + FormData — works on Node 18+ and Bun.
  * apiBase is configurable so users behind filtered networks can point to a mirror.
  *
- * SIZE POLICY — backups are sent NO MATTER HOW BIG they are:
- * the Bot API hard-caps one sendDocument at 50 MB, so larger backups are
- * SPLIT into 45 MB parts and every part is delivered (filename.partNNofNN).
- * There is no "file too large" rejection anywhere in the pipeline anymore.
+ * SIZE POLICY — a backup is ALWAYS delivered as ONE complete file.
+ * The archive is never split into parts and never rebuilt, no matter its
+ * size. The official endpoint caps one sendDocument at 50 MB (and a local
+ * Bot API server at 2 GB); a larger file is reported as an error instead
+ * of being split — preserving the panel's original full backup exactly.
  */
 
 export interface TgResult<T = unknown> {
@@ -27,11 +28,8 @@ export interface TgResult<T = unknown> {
   errorBi?: Bi;   // bilingual pair for the web panel
 }
 
-/** One sendDocument may carry at most 50 MB — stay safely below it. */
-const PART_LIMIT = 45 * 1024 * 1024;
-
-/** Configured endpoint — official by default; CLI option 11 points this at
- *  a local Bot API server (http://127.0.0.1:8081) for 2GB single-file sends. */
+/** Configured endpoint — the official API by default; the "Telegram API base"
+ *  field in Settings may point at a local Bot API server (2GB single-file). */
 function tgBase(cfg: AppConfig): string {
   return (cfg.telegramApiBase || "").trim().replace(/\/+$/, "") || "https://api.telegram.org";
 }
@@ -55,20 +53,25 @@ function captionFor(fileName: string, size: number, method: string, panel: strin
     ? `${(size / 1024 / 1024).toFixed(2)} MB`
     : `${(size / 1024).toFixed(1)} KB`;
   const title = panel === "hmpanel"
-    ? "HM Panel"
+    ? "HM PANEL BACKUP"
     : panel === "pasarguard"
-      ? "PasarGuard"
+      ? "PASARGUARD BACKUP"
       : panel === "rebecca"
-        ? "Rebecca"
-        : "3x-ui";
-  const methodEn = method === "hm-full" || method === "pg-full" || method === "rb-full"
-    ? "Full backup"
-    : method === "db"
-      ? "Database file"
-      : method === "local"
-        ? "Database file (local copy)"
-        : "JSON export";
-  return `${fileName}\n${sizeStr} · ${title} · ${methodEn}`;
+        ? "REBECCA BACKUP"
+        : "3X-UI PANEL BACKUP";
+  const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Tehran", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).formatToParts(new Date());
+  const g = (k: string) => parts.find((x) => x.type === k)?.value ?? "";
+  const date = `${g("year")}-${g("month")}-${g("day")} ${g("hour")}:${g("minute")}`;
+  return [
+    `<b>${title}</b>`,
+    `File: <code>${esc(fileName)}</code>`,
+    `Size: ${sizeStr}`,
+    `Date: ${date}`,
+  ].join("\n");
 }
 
 /** One sendDocument call — no size check here, callers go through sendBackupDocument. */
@@ -86,6 +89,7 @@ async function sendOneDocument(
       fd.append("chat_id", cfg.telegramChatId.trim());
       if (cfg.telegramThreadId.trim()) fd.append("message_thread_id", cfg.telegramThreadId.trim());
       fd.append("caption", caption);
+      fd.append("parse_mode", "HTML");
       fd.append(
         "document",
         new Blob([new Uint8Array(buf)], { type: "application/octet-stream" }),
@@ -115,16 +119,23 @@ async function sendOneDocument(
       if (res.status >= 400 && res.status < 500 && res.status !== 429) break;
     } catch (e: unknown) {
       const t = e instanceof Error ? e.message : String(e);
-      if (/timeout|abort|ETIMEDOUT|ECONNABORTED/i.test(t)) {
-        // a timed-out upload may still have been delivered — retrying would
-        // send the same file twice, so fail the cycle instead
-        lastError = bi(
-          "ارسال با تایم‌اوت قطع شد — فایل ممکن است رسیده باشد؛ برای جلوگیری از ارسال تکراری، دوباره تلاش نشد",
-          "The upload timed out - the file may have been delivered; not retrying to avoid a duplicate"
-        );
-        break;
+      const code = (e as { cause?: { code?: string } })?.cause?.code ?? "";
+      // retry ONLY when the upload certainly never reached Telegram (DNS,
+      // refused connection). Anything ambiguous — a timeout or a reset
+      // mid-upload — may already be delivered; retrying would send the SAME
+      // file twice, so fail the cycle instead.
+      if (code === "ENOTFOUND" || code === "ECONNREFUSED" || code === "EAI_AGAIN") {
+        lastError = bi(t, t);
+        continue;
       }
-      lastError = bi(t, t);
+      const ambiguous = /timeout|abort|reset|ETIMEDOUT|ECONNABORTED|ECONNRESET|socket/i.test(t) || /timeout|abort/i.test(code);
+      lastError = ambiguous
+        ? bi(
+            "ارسال قطع شد — فایل ممکن است رسیده باشد؛ برای جلوگیری از ارسال تکراری، دوباره تلاش نشد",
+            "The upload was interrupted - the file may have been delivered; not retrying to avoid a duplicate"
+          )
+        : bi(t, t);
+      break;
     }
   }
   return lastError
@@ -145,9 +156,9 @@ function fetchCause(e: unknown): string | null {
 export type TgPanel = "3x-ui" | "hmpanel" | "pasarguard" | "rebecca";
 
 /**
- * Send a backup to Telegram — ANY size. Files above the Bot API single-file
- * limit are split into ≤45 MB parts and every part is sent with its own
- * "part i of N" caption. Returns ALL message ids (for auto-cleanup).
+ * Send a backup to Telegram — ONE complete file, ALWAYS.
+ * The archive is never split into .part files and never re-packed: the exact
+ * buffer produced by the panel's full backup is delivered as one sendDocument.
  */
 export async function sendBackupDocument(
   cfg: AppConfig,
@@ -155,45 +166,13 @@ export async function sendBackupDocument(
   fileName: string,
   method: string,
   panel: TgPanel = "3x-ui"
-): Promise<TgResult<{ messageIds: number[]; parts: number; deliveredSingleFile?: boolean }>> {
+): Promise<TgResult<{ messageIds: number[] }>> {
   if (!cfg.telegramBotToken.trim()) return fail("توکن بات تلگرام تنظیم نشده است", "The Telegram bot token is not configured");
   if (!cfg.telegramChatId.trim()) return fail("آیدی چت تلگرام تنظیم نشده است", "The Telegram chat ID is not configured");
 
-  // ALWAYS attempt one complete file first — no splitting by default. Only if
-  // the endpoint itself rejects the size (the public Bot API caps at 50 MB)
-  // does the automatic multi-part fallback below kick in.
-  const single = await sendOneDocument(cfg, buf, fileName, captionFor(fileName, buf.length, method, panel));
-  if (single.ok) {
-    return { ok: true, data: { messageIds: [single.data!.messageId], parts: 1, deliveredSingleFile: true } };
-  }
-  const sizeRejected = /too (big|large)|entity too large|file is too big|413/i.test(single.errorBi?.en ?? single.error ?? "");
-  if (!sizeRejected) return { ok: false, error: single.error, errorBi: single.errorBi };
-
-  // split into parts — every part WILL be delivered
-  const total = Math.ceil(buf.length / PART_LIMIT);
-  const width = String(total).padStart(2, "0");
-  const dot = fileName.lastIndexOf(".");
-  const stem = dot > 0 ? fileName.slice(0, dot) : fileName;
-  const ext = dot > 0 ? fileName.slice(dot) : "";
-  const messageIds: number[] = [];
-  for (let i = 0; i < total; i++) {
-    const part = buf.subarray(i * PART_LIMIT, Math.min((i + 1) * PART_LIMIT, buf.length));
-    const partName = `${stem}.part${String(i + 1).padStart(2, "0")}of${width}${ext}`;
-    const caption =
-      captionFor(partName, part.length, method, panel) +
-      `\nPart ${i + 1} of ${total} - rejoin with: cat ${stem}.part*of*${ext} > ${fileName}`;
-    const r = await sendOneDocument(cfg, part, partName, caption);
-    if (!r.ok) {
-      return {
-        ok: false,
-        error: r.error,
-        errorBi: r.errorBi,
-        ...(messageIds.length ? { data: { messageIds, parts: messageIds.length } } : {}),
-      };
-    }
-    messageIds.push(r.data!.messageId);
-  }
-  return { ok: true, data: { messageIds, parts: messageIds.length, deliveredSingleFile: false } };
+  const r = await sendOneDocument(cfg, buf, fileName, captionFor(fileName, buf.length, method, panel));
+  if (!r.ok) return { ok: false, error: r.error, errorBi: r.errorBi };
+  return { ok: true, data: { messageIds: [r.data!.messageId] } };
 }
 
 /** Send a single document (compat helper — used for small ad-hoc files). */
