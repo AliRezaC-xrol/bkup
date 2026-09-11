@@ -82,7 +82,7 @@ export async function runBackup(trigger: "auto" | "manual"): Promise<CycleResult
   // scheduling window (stray timer, service restart mid-cycle) is suppressed —
   // exactly ONE full backup per scheduled cycle, never two.
   if (trigger === "auto") {
-    const newest = await db.backupRun.findFirst({ orderBy: { startedAt: "desc" }, select: { startedAt: true } });
+    const newest = await db.backupRun.findFirst({ where: { trigger: "auto" }, orderBy: { startedAt: "desc" }, select: { startedAt: true } });
     if (newest && Date.now() - new Date(newest.startedAt).getTime() < Math.max(10, cfg.intervalSeconds) * 800) {
       g.__xuiRunning = false;
       await log("warn", bi(
@@ -379,26 +379,45 @@ async function cleanupTelegramOld(cfg: Awaited<ReturnType<typeof getConfig>>) {
   }
 }
 
-/** Keep only the newest N local backup files per panel prefix (0 = unlimited). */
+/**
+ * Local file retention — keep only the newest N backup FILES (0 = unlimited).
+ * Enforced after every successful backup cycle. Files are ordered by their
+ * REAL time (DB startedAt; orphans by mtime) — never by file name, because
+ * every panel names its archive differently. Orphan files (a cycle that
+ * crashed after writing the archive) are swept with the same rule.
+ */
 async function cleanupLocalFiles(cfg: Awaited<ReturnType<typeof getConfig>>) {
   const keep = cfg.localRetention;
   if (!keep || keep < 1) return;
   const dir = backupDir();
-  const files = fs
-    .readdirSync(dir)
-    .filter((f) =>
-      f.startsWith("x-ui-backup-") ||
-      f.startsWith("hmpanel-backup-") ||
-      f.startsWith("pasarguard_full_") ||
-      f.startsWith("rebecca-backup-") ||
-      f.startsWith("backup_")
-    )
-    .sort()
-    .reverse();
-  for (const f of files.slice(keep)) {
+
+  // newest-N selection over recorded runs
+  const runs = await db.backupRun.findMany({
+    where: { filePath: { not: null } },
+    orderBy: { startedAt: "desc" },
+    select: { id: true, filePath: true },
+  });
+  const doomed = runs.slice(keep);
+  const survivors = new Set(runs.slice(0, keep).map((r) => r.filePath));
+
+  for (const run of doomed) {
     try {
-      fs.unlinkSync(path.join(dir, f));
-    } catch { /* ignore */ }
+      if (run.filePath && fs.existsSync(run.filePath)) fs.unlinkSync(run.filePath);
+    } catch { /* best-effort */ }
+    await db.backupRun.update({ where: { id: run.id }, data: { filePath: null } });
+  }
+
+  // orphan sweep — archives on disk that no surviving run references
+  const KNOWN = /(-backup-|_full_|\.db$|\.json$|\.tar\.gz$|\.tgz$|\.zip$|\.rbbackup$)/;
+  for (const f of fs.readdirSync(dir)) {
+    const full = path.join(dir, f);
+    if (!KNOWN.test(f) || survivors.has(full) || doomed.some((d) => d.filePath === full)) continue;
+    try {
+      const age = Date.now() - fs.statSync(full).mtimeMs;
+      if (age > 60 * 60 * 1000) { // give a possibly-running cycle one hour of grace
+        fs.unlinkSync(full);
+      }
+    } catch { /* best-effort */ }
   }
 }
 

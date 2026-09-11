@@ -116,6 +116,14 @@ export function bootstrapScheduler() {
   if (s.started) return;
   s.started = true;
   console.log("[SCHEDULER] bootstrapped");
+  // a run recorded as "running" can only be a cycle the restart interrupted —
+  // close it so it can neither look alive nor suppress the next cycle
+  import("@/lib/db").then(({ db }) =>
+    db.backupRun.updateMany({
+      where: { status: "running" },
+      data: { status: "failed", error: "اجرای بکاپ با ری‌استارت سرویس قطع شد", durationMs: 0 },
+    }).catch(() => undefined)
+  );
   scheduleNext();
 }
 
