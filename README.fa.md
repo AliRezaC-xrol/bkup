@@ -8,7 +8,7 @@
 [![Downloads](https://img.shields.io/github/downloads/AliRezaC-xrol/bkup/total?style=flat-square&label=downloads)](https://github.com/AliRezaC-xrol/bkup/releases)
 [![Stars](https://img.shields.io/github/stars/AliRezaC-xrol/bkup?style=flat-square)](https://github.com/AliRezaC-xrol/bkup/stargazers)
 
-<img src="docs/panel-2.png" alt="پنل وب bkup" width="820">
+<img src="docs/panel-3.png" alt="پنل وب bkup" width="820">
 
 [معرفی](#معرفی) · [امکانات](#امکانات) · [چسباندن پارت‌ها](#چسباندن-پارت‌های-بکاپ) · [نصب](#نصب) · [شروع سریع](#شروع-سریع) · [آپدیت](#آپدیت) · [منوی ترمینال](#منوی-ترمینال) · [English](README.md)
 
