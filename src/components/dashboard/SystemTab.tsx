@@ -17,7 +17,16 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { useLang } from "@/components/dashboard/lang";
 import type { SystemInfoDTO } from "@/components/dashboard/types";
+import { formatBytes } from "@/components/dashboard/types";
 import { resolveText } from "@/lib/messages";
+
+interface StorageDTO {
+  backups: { count: number; bytes: number };
+  reassembled: { count: number; bytes: number };
+  database: { bytes: number };
+  totalBytes: number;
+  dir: string;
+}
 
 export function SystemTab({
   info,
@@ -40,6 +49,17 @@ export function SystemTab({
   const [svc, setSvc] = useState<{ supported: boolean; state: string } | null>(null);
   const [svcBusy, setSvcBusy] = useState<string | null>(null);
   const logRef = useRef<HTMLPreElement>(null);
+  // local disk usage of backups + reassembled + database (System → Storage)
+  const [storage, setStorage] = useState<StorageDTO | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/system/storage", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (alive && d) setStorage(d); })
+      .catch(() => { /* keep the card empty */ });
+    return () => { alive = false; };
+  }, [info?.appVersion]);
 
   useEffect(() => {
     if (info?.port) setPort(String(info.port));
@@ -199,6 +219,14 @@ export function SystemTab({
   const n = (v: number) => v.toLocaleString("en-US");
   const latest = info?.latest;
 
+  const storageRows = storage
+    ? [
+        { label: t("storage_backups"), bytes: storage.backups.bytes, sub: `${storage.backups.count} ${t("storage_files")}`, color: "bg-primary" },
+        { label: t("storage_reassembled"), bytes: storage.reassembled.bytes, sub: `${storage.reassembled.count} ${t("storage_files")}`, color: "bg-primary/55" },
+        { label: t("storage_database"), bytes: storage.database.bytes, sub: "custom.db", color: "bg-muted-foreground/40" },
+      ]
+    : [];
+
   return (
     <div className="space-y-5">
       {/* ===== update card ===== */}
@@ -326,6 +354,55 @@ export function SystemTab({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* ===== storage ===== */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <HardDrive className="h-4 w-4 text-primary" />
+            {t("storage_title")}
+          </CardTitle>
+          <CardDescription>{t("storage_desc")}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {!storage ? (
+            <div className="h-14 animate-pulse rounded-lg bg-muted" />
+          ) : (
+            <>
+              <div className="flex items-baseline justify-between">
+                <span className="text-2xl font-black tabular-nums">{formatBytes(storage.totalBytes)}</span>
+                <span className="max-w-full truncate text-[11px] text-muted-foreground" dir="ltr" title={storage.dir}>
+                  {storage.dir}
+                </span>
+              </div>
+              {storage.totalBytes > 0 && (
+                <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-muted">
+                  {storageRows.map((r) => (
+                    <div
+                      key={r.label}
+                      className={`${r.color} h-full transition-all`}
+                      style={{ width: `${(r.bytes / storage.totalBytes) * 100}%` }}
+                      title={`${r.label} — ${formatBytes(r.bytes)}`}
+                    />
+                  ))}
+                </div>
+              )}
+              <div className="grid gap-2 sm:grid-cols-3">
+                {storageRows.map((r) => (
+                  <div key={r.label} className="rounded-lg border p-2.5">
+                    <div className="flex items-center gap-1.5">
+                      <span className={`h-2 w-2 shrink-0 rounded-sm ${r.color}`} />
+                      <span className="truncate text-xs text-muted-foreground">{r.label}</span>
+                    </div>
+                    <p className="mt-1 text-sm font-bold tabular-nums">{formatBytes(r.bytes)}</p>
+                    <p className="text-[10px] tabular-nums text-muted-foreground">{r.sub}</p>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
 
       {/* ===== port ===== */}
       <Card>

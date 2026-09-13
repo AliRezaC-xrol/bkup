@@ -11,7 +11,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Download, Trash2, RefreshCw, Inbox, ShieldCheck, ShieldAlert, ShieldX } from "lucide-react";
+import { Download, Trash2, RefreshCw, Inbox, ShieldCheck, ShieldAlert, ShieldX, FileDown } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { useLang } from "@/components/dashboard/lang";
@@ -24,10 +24,20 @@ interface VerifyResult {
   sha8: string;
 }
 
+const PANELS = [
+  { key: "3x-ui", tag: "3X" },
+  { key: "hmpanel", tag: "HM" },
+  { key: "pasarguard", tag: "PG" },
+  { key: "rebecca", tag: "RB" },
+] as const;
+
+type PanelFilter = "all" | (typeof PANELS)[number]["key"];
+
 export function BackupsTab({ runs, onRefresh }: { runs: BackupRunDTO[]; onRefresh: () => void }) {
   const { t } = useLang();
   const { toast } = useToast();
   const [filter, setFilter] = useState<"all" | "success" | "failed">("all");
+  const [panelFilter, setPanelFilter] = useState<PanelFilter>("all");
   const [deleting, setDeleting] = useState<BackupRunDTO | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -46,9 +56,30 @@ export function BackupsTab({ runs, onRefresh }: { runs: BackupRunDTO[]; onRefres
   }, [runs]);
 
   const rows = useMemo(
-    () => (filter === "all" ? runs : runs.filter((r) => r.status === filter)),
-    [runs, filter]
+    () =>
+      runs.filter(
+        (r) =>
+          (filter === "all" || r.status === filter) &&
+          (panelFilter === "all" || r.panel === panelFilter)
+      ),
+    [runs, filter, panelFilter]
   );
+
+  // chip counts — reflect the loaded history window, so the numbers always
+  // agree with what the table can actually show
+  const statusCounts = useMemo(
+    () => ({
+      all: runs.length,
+      success: runs.filter((r) => r.status === "success").length,
+      failed: runs.filter((r) => r.status === "failed").length,
+    }),
+    [runs]
+  );
+  const panelCounts = useMemo(() => {
+    const base: Record<PanelFilter, number> = { all: runs.length, "3x-ui": 0, hmpanel: 0, pasarguard: 0, rebecca: 0 };
+    for (const r of runs) if (r.panel in base) base[r.panel as PanelFilter] += 1;
+    return base;
+  }, [runs]);
 
   const methodLabel = (m: string | null) =>
     m === "db" ? t("method_db") : m === "json" ? t("method_json") : m === "local" ? t("method_local") : m === "hm-full" ? t("method_hm_full") : m === "pg-full" ? t("method_pg_full") : m === "rb-full" ? t("method_rb_full") : "—";
@@ -141,24 +172,55 @@ export function BackupsTab({ runs, onRefresh }: { runs: BackupRunDTO[]; onRefres
     }
   }
 
+  // export the rows currently shown (both filters applied) as CSV — BOM first
+  // so Excel opens UTF-8 names correctly
+  function exportCsv() {
+    const esc = (v: string | number | null) => {
+      const s = v == null ? "" : String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const head = "id,time,panel,trigger,method,status,file,size_bytes,duration_sec,error";
+    const lines = rows.map((r) =>
+      [
+        r.id,
+        r.startedAt,
+        r.panel,
+        r.trigger,
+        r.method ?? "",
+        r.status,
+        r.fileName ?? `#${r.id}`,
+        r.fileSize ?? 0,
+        r.durationMs != null ? (r.durationMs / 1000).toFixed(1) : "",
+        r.error ? resolveText(r.error, "en").replace(/\r?\n/g, " ") : "",
+      ].map(esc).join(",")
+    );
+    const blob = new Blob(["\uFEFF" + [head, ...lines].join("\n")], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "");
+    a.href = url;
+    a.download = `bkup-history-${stamp}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast({ title: t("csv_exported"), description: `${rows.length} ${t("activity_total")}` });
+  }
+
   return (
     <Card>
       <CardHeader className="flex-row flex-wrap items-center justify-between gap-3 space-y-0 pb-3">
         <CardTitle className="text-base">{t("backups_title")}</CardTitle>
         <div className="flex items-center gap-2">
-          <div className="flex rounded-lg border p-0.5">
-            {(["all", "success", "failed"] as const).map((f) => (
-              <button
-                key={f}
-                onClick={() => setFilter(f)}
-                className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
-                  filter === f ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {f === "all" ? t("filter_all") : f === "success" ? t("success") : t("failed")}
-              </button>
-            ))}
-          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 gap-1.5"
+            onClick={exportCsv}
+            disabled={rows.length === 0}
+            title={t("export_csv")}
+          >
+            <FileDown className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">{t("export_csv")}</span>
+          </Button>
           {selected.size > 0 && (
             <Button variant="destructive" size="sm" className="h-8" onClick={() => setBulkOpen(true)} disabled={bulkBusy}>
               <Trash2 className="h-3.5 w-3.5" />
@@ -171,11 +233,68 @@ export function BackupsTab({ runs, onRefresh }: { runs: BackupRunDTO[]; onRefres
         </div>
       </CardHeader>
       <CardContent>
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <div className="flex rounded-lg border p-0.5">
+            {(["all", "success", "failed"] as const).map((f) => (
+              <button
+                key={f}
+                onClick={() => setFilter(f)}
+                className={`flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                  filter === f ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {f === "all" ? t("filter_all") : f === "success" ? t("success") : t("failed")}
+                <span
+                  className={`rounded px-1 text-[10px] tabular-nums ${
+                    filter === f ? "bg-primary-foreground/20 text-primary-foreground" : "bg-muted text-muted-foreground"
+                  }`}
+                >
+                  {statusCounts[f]}
+                </span>
+              </button>
+            ))}
+          </div>
+          <div className="flex rounded-lg border p-0.5">
+            <button
+              onClick={() => setPanelFilter("all")}
+              className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                panelFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {t("filter_all")}
+              <span
+                className={`rounded px-1 text-[10px] tabular-nums ${
+                  panelFilter === "all" ? "bg-primary-foreground/20 text-primary-foreground" : "bg-muted text-muted-foreground"
+                }`}
+              >
+                {panelCounts.all}
+              </span>
+            </button>
+            {PANELS.map((p) => (
+              <button
+                key={p.key}
+                onClick={() => setPanelFilter(p.key)}
+                className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                  panelFilter === p.key ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {p.tag}
+                <span
+                  className={`rounded px-1 text-[10px] tabular-nums ${
+                    panelFilter === p.key ? "bg-primary-foreground/20 text-primary-foreground" : "bg-muted text-muted-foreground"
+                  }`}
+                >
+                  {panelCounts[p.key]}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
         {rows.length === 0 ? (
           <div className="flex flex-col items-center justify-center rounded-lg border border-dashed py-14 text-center text-muted-foreground">
             <Inbox className="mb-2 h-10 w-10 opacity-40" />
-            <p className="text-sm font-medium">{t("no_backups_yet")}</p>
-            <p className="mt-0.5 text-xs opacity-80">{t("no_backups_hint")}</p>
+            <p className="text-sm font-medium">{runs.length === 0 ? t("no_backups_yet") : t("reassembly_no_match")}</p>
+            <p className="mt-0.5 text-xs opacity-80">{runs.length === 0 ? t("no_backups_hint") : t("backups_filter_hint")}</p>
           </div>
         ) : (
           <div className="custom-scroll max-h-[62vh] overflow-auto rounded-lg border">
