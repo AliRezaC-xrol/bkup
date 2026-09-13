@@ -18,7 +18,7 @@ import {
   Server, DatabaseBackup, Boxes, ShieldCheck, CheckCircle2, XCircle,
   Loader2, ChevronRight, ChevronLeft, Wifi, History, AlertTriangle,
   RefreshCw, Key, Lock, RotateCcw, Rocket, Inbox, Network, Globe, Eye, EyeOff,
-  Cloud, Plus, Trash2, Copy, ExternalLink, Shield, Link2,
+  Cloud, Plus, Trash2, Copy, ExternalLink, Shield, Link2, Combine,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useLang } from "@/components/dashboard/lang";
@@ -1381,6 +1381,12 @@ function SelectBackupStep({
                       </div>
                       <div className="mt-1 flex w-full flex-wrap items-center gap-1 text-[10px] text-muted-foreground sm:text-xs">
                         <Badge variant="outline" className="shrink-0 text-[9px] uppercase sm:text-[10px]">{panelBadge(item.panel)}</Badge>
+                        {item.source === "reassembled" && (
+                          <Badge variant="outline" className="shrink-0 border-primary/40 text-[9px] uppercase text-primary sm:text-[10px]">
+                            <Combine className="me-1 h-2.5 w-2.5" />
+                            {t("restore_badge_reassembled")}
+                          </Badge>
+                        )}
                         <span className="shrink-0 tabular-nums">{fmtTime(time)}</span>
                         {size != null && <><span className="shrink-0">·</span><span className="shrink-0 tabular-nums">{formatBytes(size)}</span></>}
                       </div>

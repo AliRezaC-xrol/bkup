@@ -12,7 +12,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Combine, Download, Trash2, UploadCloud, Inbox } from "lucide-react";
+import { Combine, Download, Trash2, UploadCloud, Inbox, Archive } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useLang } from "@/components/dashboard/lang";
 import { formatBytes } from "@/components/dashboard/types";
@@ -32,6 +32,14 @@ const fmtTime = (iso: string) =>
     timeZone: "Asia/Tehran", dateStyle: "short", timeStyle: "medium",
   }).format(new Date(iso));
 
+interface BackupChoice {
+  id: number;
+  fileName: string | null;
+  fileSize: number | null;
+  startedAt: string;
+  panel: string;
+}
+
 export function ReassemblyTab() {
   const { t } = useLang();
   const { toast } = useToast();
@@ -42,6 +50,12 @@ export function ReassemblyTab() {
   const [deleting, setDeleting] = useState<ReassembledDTO | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
 
+  // source selection: upload part files, or use one of the stored backups
+  const [source, setSource] = useState<"upload" | "backups">("upload");
+  const [choices, setChoices] = useState<BackupChoice[]>([]);
+  const [choicesLoading, setChoicesLoading] = useState(false);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+
   const loadHistory = useCallback(async () => {
     try {
       const res = await fetch("/api/reassembly");
@@ -50,6 +64,22 @@ export function ReassemblyTab() {
   }, []);
 
   useEffect(() => { loadHistory(); }, [loadHistory]);
+
+  const loadChoices = useCallback(async () => {
+    setChoicesLoading(true);
+    try {
+      const res = await fetch("/api/backups?limit=200");
+      if (res.ok) {
+        const rows = (await res.json()) as (BackupChoice & { status: string; filePath: string | null })[];
+        setChoices(rows.filter((r) => r.status === "success" && r.filePath));
+      }
+    } catch { /* keep the old list */ }
+    setChoicesLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (source === "backups") loadChoices();
+  }, [source, loadChoices]);
 
   const sorted = useMemo(
     () => [...files].sort((a, b) => {
@@ -87,6 +117,32 @@ export function ReassemblyTab() {
     }
   }
 
+  // store a backup picked from the Backups section as one complete reassembled file
+  async function reassembleFromBackup() {
+    if (!selectedId) return;
+    setBusy(true);
+    try {
+      const res = await fetch("/api/reassembly", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ backupId: selectedId }),
+      });
+      if (res.ok) {
+        toast({ title: t("reassembled") });
+        setSelectedId(null);
+        await loadHistory();
+      } else {
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        const msg = body?.error === "BACKUP_FILE_GONE" || body?.error === "BACKUP_NOT_COMPLETE"
+          ? t("reassembly_backup_gone")
+          : body?.error ?? t("error");
+        toast({ title: msg, variant: "destructive" });
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function doDelete(row: ReassembledDTO) {
     setBusyId(row.id);
     try {
@@ -111,16 +167,87 @@ export function ReassemblyTab() {
             <Combine className="h-4 w-4" />
             {t("reassembly_title")}
           </CardTitle>
-          <CardDescription>{t("reassembly_desc")}</CardDescription>
+          <CardDescription>{source === "upload" ? t("reassembly_desc") : t("reassembly_backup_desc")}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <Input
-            ref={inputRef}
-            type="file"
-            multiple
-            onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
-          />
-          {sorted.length > 0 && (
+          <div className="flex w-fit rounded-lg border p-0.5">
+            {(["upload", "backups"] as const).map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => setSource(s)}
+                aria-pressed={source === s}
+                className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                  source === s ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {s === "upload" ? <UploadCloud className="h-3.5 w-3.5" /> : <Archive className="h-3.5 w-3.5" />}
+                {s === "upload" ? t("reassembly_source_upload") : t("reassembly_source_backups")}
+              </button>
+            ))}
+          </div>
+
+          {source === "upload" ? (
+            <Input
+              ref={inputRef}
+              type="file"
+              multiple
+              onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
+            />
+          ) : choices.length === 0 && !choicesLoading ? (
+            <div className="rounded-lg border border-dashed py-8 text-center text-sm text-muted-foreground">
+              <Inbox className="mx-auto mb-2 h-8 w-8 opacity-40" />
+              {t("reassembly_no_backup_choices")}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-foreground">{t("reassembly_choose_backup")}</span>
+                {choicesLoading ? (
+                  <span className="text-xs text-muted-foreground">{t("loading")}</span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={loadChoices}
+                    className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                  >
+                    {t("refresh")}
+                  </button>
+                )}
+              </div>
+              <div className="custom-scroll max-h-72 space-y-1.5 overflow-y-auto rounded-lg border p-2">
+                {choices.map((b) => {
+                  const active = selectedId === b.id;
+                  return (
+                    <button
+                      key={b.id}
+                      type="button"
+                      onClick={() => setSelectedId(active ? null : b.id)}
+                      aria-pressed={active}
+                      className={`flex w-full items-center gap-3 rounded-md border p-2.5 text-start transition-colors ${
+                        active ? "border-primary bg-primary/5" : "hover:bg-muted/50"
+                      }`}
+                    >
+                      <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${active ? "border-primary" : "border-muted-foreground/40"}`}>
+                        {active && <span className="h-2 w-2 rounded-full bg-primary" />}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-xs font-medium" dir="ltr" title={b.fileName ?? `#${b.id}`}>
+                          {b.fileName ?? `#${b.id}`}
+                        </span>
+                        <span className="block text-[11px] tabular-nums text-muted-foreground">{fmtTime(b.startedAt)}</span>
+                      </span>
+                      <Badge variant="outline" className="shrink-0 text-[10px] uppercase">
+                        {b.panel === "hmpanel" ? "HM" : b.panel === "pasarguard" ? "PG" : b.panel === "rebecca" ? "RB" : "3X"}
+                      </Badge>
+                      <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{formatBytes(b.fileSize ?? 0)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          {source === "upload" && sorted.length > 0 && (
             <div className="rounded-lg border p-3">
               <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                 <span className="font-medium text-foreground">{t("reassembly_selected")}:</span>
@@ -147,8 +274,18 @@ export function ReassemblyTab() {
               </ol>
             </div>
           )}
-          <Button onClick={reassemble} disabled={busy || sorted.length === 0} className="w-full gap-1.5">
-            {busy ? <Combine className="h-4 w-4 animate-pulse" /> : <UploadCloud className="h-4 w-4" />}
+          <Button
+            onClick={source === "upload" ? reassemble : reassembleFromBackup}
+            disabled={busy || (source === "upload" ? sorted.length === 0 : !selectedId)}
+            className="w-full gap-1.5"
+          >
+            {busy ? (
+              <Combine className="h-4 w-4 animate-pulse" />
+            ) : source === "upload" ? (
+              <UploadCloud className="h-4 w-4" />
+            ) : (
+              <Archive className="h-4 w-4" />
+            )}
             {t("reassembly_run")}
           </Button>
         </CardContent>

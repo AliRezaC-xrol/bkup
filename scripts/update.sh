@@ -4,6 +4,9 @@
 # existing install via this script (web panel button or CLI menu item 7).
 #   bash scripts/update.sh          → interactive-ish, human output
 #   bash scripts/update.sh --web    → quiet-ish, for web-panel triggered updates
+#   bash scripts/update.sh --force  → redeploy the latest release even if the
+#                                     running panel already reports its version
+#                                     (also: BKUP_FORCE_UPDATE=1)
 #
 # ONE SOURCE OF TRUTH: the LATEST GitHub RELEASE.
 # Resolves the newest published release, downloads exactly that tag,
@@ -37,7 +40,14 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 WEB_MODE=0
-[ "${1:-}" = "--web" ] && WEB_MODE=1
+FORCE_UPDATE=0
+for arg in "$@"; do
+  case "$arg" in
+    --web) WEB_MODE=1 ;;
+    --force) FORCE_UPDATE=1 ;;
+  esac
+done
+[ "${BKUP_FORCE_UPDATE:-}" = "1" ] && FORCE_UPDATE=1
 
 STATE_DIR="$APP_DIR/data"
 STANDALONE_DATA="$APP_DIR/.next/standalone/data"
@@ -177,11 +187,14 @@ fi
 #    on-disk package.json alone.
 UP_TO_DATE_V="$RUNNING_V"
 [ -z "$UP_TO_DATE_V" ] && UP_TO_DATE_V="$STANDALONE_V"
-if [ "$UP_TO_DATE_V" = "${TAG#v}" ]; then
+if [ "$UP_TO_DATE_V" = "${TAG#v}" ] && [ "$FORCE_UPDATE" != "1" ]; then
   write_state done "$FROM_V" "$FROM_V"
   say "[OK] Already on the latest release ($TAG)"
   rm -f /tmp/.bkup-update-notice
   exit 0
+fi
+if [ "$UP_TO_DATE_V" = "${TAG#v}" ] && [ "$FORCE_UPDATE" = "1" ]; then
+  say "    force redeploy requested — reinstalling $TAG over the current install"
 fi
 if [ "v$PKG_V" = "$TAG" ] && [ "$UP_TO_DATE_V" != "${TAG#v}" ]; then
   say "    ⚠ disk says v$PKG_V but the running panel is ${RUNNING_V:+v}${RUNNING_V:-unknown} — a previous update never finished; converging now"

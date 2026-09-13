@@ -9,12 +9,13 @@ export const dynamic = "force-dynamic";
 /**
  * POST /api/system/update  {action: "check"}        → force-refresh latest release info
  * POST /api/system/update  {action: "run"}          → launch update.sh in background
+ * POST /api/system/update  {action: "run", force}   → redeploy even if already latest
  * GET  /api/system/update?log=1                     → last 8KB of update log
  */
 export async function POST(req: NextRequest) {
   const denied = await requireAuthOrCli(req);
   if (denied) return denied;
-  const body = (await req.json().catch(() => ({}))) as { action?: string };
+  const body = (await req.json().catch(() => ({}))) as { action?: string; force?: boolean };
 
   if (body.action === "check") {
     const latest = await fetchLatestFromGithub();
@@ -23,7 +24,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (body.action === "run") {
-    const res = startUpdate();
+    const res = startUpdate({ force: Boolean(body.force) });
     if (!res.ok) {
       return NextResponse.json({ error: res.error }, { status: 409 });
     }

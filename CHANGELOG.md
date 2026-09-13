@@ -11,6 +11,9 @@ Versions follow [Semantic Versioning](https://semver.org/).
 - **Cloudflare DNS integration** — manage Cloudflare DNS records from panel, with proper permission IDs (Zone Read `c8fed203ed3043cba015a93ad1616f1f`, DNS Edit `4755a26eedb94da69e1066d98aa820be`), inline IP/proxy edit, delete by ID, paste on HTTP, history button.
 - **SSH restore dependencies** — `ssh2` marked as `serverExternalPackages` to avoid Turbopack bundling issues, `@types/ssh2` added.
 - **New Prisma models** — `RestoreConfig` (singleton id=1, install script URLs, GitHub token) and `RestoreJob` (panel, backup source, SSH details, steps JSON).
+- **Reassemble from stored backups** — the Reassemble tab now offers two sources: upload part files (unchanged) or pick one of the backups already stored in the Backups section and store it as a complete, ready-to-use file. The original backup stays untouched and the part-merge path is byte-for-byte unchanged.
+- **Reassembled backups are labeled in Restore** — backups assembled in the Reassemble tab are badged "Reassembled" in the restore backup picker, so they are easy to tell apart and can be selected for restore like any other backup.
+- **System → Reinstall** — new button that redeploys the latest release even when the panel already runs that version (force update). Same safe flow as a normal update: atomic file swap, .env merge, rebuild, migrations, restart, health check. CLI equivalent: `bash scripts/update.sh --force` (or `BKUP_FORCE_UPDATE=1`).
 
 ### Fixed
 - **Update bug root-cause (critical)** — fixed issue where CLI menu option 7 or web-panel update said "updated" but panel stayed on old version:
