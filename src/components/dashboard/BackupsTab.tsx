@@ -11,7 +11,8 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Download, Trash2, RefreshCw, Inbox, ShieldCheck, ShieldAlert, ShieldX, FileDown } from "lucide-react";
+import { Download, Trash2, RefreshCw, Inbox, ShieldCheck, ShieldAlert, ShieldX, FileDown, Search, X } from "lucide-react";
+import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { useLang } from "@/components/dashboard/lang";
@@ -46,6 +47,8 @@ export function BackupsTab({ runs, onRefresh }: { runs: BackupRunDTO[]; onRefres
   const [bulkBusy, setBulkBusy] = useState(false);
   const [verifyingId, setVerifyingId] = useState<number | null>(null);
   const [verified, setVerified] = useState<Map<number, VerifyResult>>(new Map());
+  // filename search — combines (AND) with the status/panel chips
+  const [query, setQuery] = useState("");
 
   // drop ids that no longer exist so the selection never goes stale
   useEffect(() => {
@@ -56,15 +59,15 @@ export function BackupsTab({ runs, onRefresh }: { runs: BackupRunDTO[]; onRefres
     });
   }, [runs]);
 
-  const rows = useMemo(
-    () =>
-      runs.filter(
-        (r) =>
-          (filter === "all" || r.status === filter) &&
-          (panelFilter === "all" || r.panel === panelFilter)
-      ),
-    [runs, filter, panelFilter]
-  );
+  const rows = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return runs.filter(
+      (r) =>
+        (filter === "all" || r.status === filter) &&
+        (panelFilter === "all" || r.panel === panelFilter) &&
+        (!q || (r.fileName ?? `#${r.id}`).toLowerCase().includes(q))
+    );
+  }, [runs, filter, panelFilter, query]);
 
   // chip counts — reflect the loaded history window, so the numbers always
   // agree with what the table can actually show
@@ -284,6 +287,27 @@ export function BackupsTab({ runs, onRefresh }: { runs: BackupRunDTO[]; onRefres
                 </span>
               </button>
             ))}
+          </div>
+          <div className="relative ms-auto w-full sm:w-56">
+            <Search className="pointer-events-none absolute start-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={t("backups_search_ph")}
+              aria-label={t("backups_search_ph")}
+              className="h-8 pe-8 ps-8 text-xs"
+            />
+            {query && (
+              <button
+                type="button"
+                onClick={() => setQuery("")}
+                aria-label={t("backups_search_clear")}
+                title={t("backups_search_clear")}
+                className="absolute end-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
           </div>
         </div>
         {rows.length === 0 ? (

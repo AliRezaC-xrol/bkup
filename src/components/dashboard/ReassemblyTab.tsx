@@ -36,6 +36,18 @@ interface BackupChoice {
   panel: string;
 }
 
+// A named cluster of part files (same base name) shown with a one-tap
+// "select the whole set" header in the picker. Choices without a part
+// marker stay standalone (no header noise).
+interface PartGroup {
+  key: string;
+  base: string;
+  items: BackupChoice[]; // sorted by part index
+  have: number; // how many of the set are visible in the picker
+  declared: number; // max declared total (0 = unknown)
+  selected: number; // how many of the set are currently picked
+}
+
 // integrity result pinned to a history row (same tri-state as Backups verify)
 interface VerifyResult {
   state: "ok" | "mismatch" | "missing";
@@ -213,6 +225,53 @@ export function ReassemblyTab() {
       (c) => (c.fileName ?? `#${c.id}`).toLowerCase().includes(q) || c.panel.toLowerCase().includes(q)
     );
   }, [choices, query]);
+  // cluster the filtered choices into part groups (by stripped base name);
+  // plain files without a part marker each form a group of one
+  const groups = useMemo<PartGroup[]>(() => {
+    const byKey = new Map<string, PartGroup>();
+    const order: string[] = [];
+    for (const c of filtered) {
+      const name = c.fileName ?? `#${c.id}`;
+      const part = parsePartIndex(name);
+      const key = part ? stripPartFromName(name) : `solo-${c.id}`;
+      let g = byKey.get(key);
+      if (!g) {
+        g = { key, base: key, items: [], have: 0, declared: 0, selected: 0 };
+        byKey.set(key, g);
+        order.push(key);
+      }
+      if (part) {
+        g.items.push(c);
+        g.have += 1;
+        g.declared = Math.max(g.declared, part.total);
+        if (selectedSet.has(c.id)) g.selected += 1;
+      } else {
+        // standalone file: still selectable as a one-item group
+        g.items.push(c);
+        g.have += 1;
+        if (selectedSet.has(c.id)) g.selected += 1;
+      }
+    }
+    for (const g of byKey.values()) {
+      g.items.sort((a, b) => compareParts(a.fileName ?? "", b.fileName ?? ""));
+    }
+    return order.map((k) => byKey.get(k)!);
+  }, [filtered, selectedSet]);
+  // add every visible member of a group to the selection
+  const addGroup = useCallback((g: PartGroup) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      for (const it of g.items) next.add(it.id);
+      return [...next];
+    });
+  }, []);
+  // remove every member of a group from the selection
+  const removeGroup = useCallback((g: PartGroup) => {
+    setSelectedIds((prev) => {
+      const drop = new Set(g.items.map((it) => it.id));
+      return prev.filter((id) => !drop.has(id));
+    });
+  }, []);
   // the exact order the parts will be merged in — decided by the part number
   const orderedSelected = useMemo(
     () =>
@@ -550,9 +609,48 @@ export function ReassemblyTab() {
                 {filtered.length === 0 && choices.length > 0 ? (
                   <div className="py-6 text-center text-xs text-muted-foreground">{t("reassembly_no_match")}</div>
                 ) : (
-                  filtered.map((b) => (
-                    <BackupChoiceRow key={b.id} choice={b} active={selectedSet.has(b.id)} onToggle={toggleChoice} />
-                  ))
+                  groups.map((g) => {
+                    // part sets (multi-item) get a compact header with a
+                    // one-tap "pick the whole set" action — solo files don't
+                    const isSet = g.declared > 0 || g.items.length > 1;
+                    const complete = g.declared > 0 && g.have === g.declared;
+                    const allSelected = g.selected === g.items.length;
+                    return (
+                      <div key={g.key} className="space-y-1">
+                        {isSet && (
+                          <div className="flex items-center gap-2 rounded-md bg-muted/50 px-2 py-1">
+                            <Archive className="h-3 w-3 shrink-0 text-muted-foreground" />
+                            <span className="min-w-0 flex-1 truncate text-[11px] font-semibold" dir="ltr" title={g.base}>
+                              {g.base}
+                            </span>
+                            {g.declared > 0 && (
+                              <Badge
+                                variant="outline"
+                                className={`shrink-0 text-[10px] tabular-nums ${complete ? "border-emerald-500/40 text-emerald-700 dark:text-emerald-400" : "border-amber-500/40 text-amber-700 dark:text-amber-400"}`}
+                              >
+                                {g.have}/{g.declared}
+                              </Badge>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => (allSelected ? removeGroup(g) : addGroup(g))}
+                              className={`flex shrink-0 items-center gap-1 rounded border border-dashed px-1.5 py-0.5 text-[10px] font-medium tabular-nums transition-colors ${
+                                allSelected
+                                  ? "border-muted-foreground/40 text-muted-foreground hover:bg-muted"
+                                  : "border-primary/50 text-primary hover:bg-primary/10"
+                              }`}
+                            >
+                              {allSelected ? <X className="h-3 w-3" /> : <Plus className="h-3 w-3" />}
+                              {allSelected ? t("reassembly_group_remove") : t("reassembly_group_add")} ({g.items.length})
+                            </button>
+                          </div>
+                        )}
+                        {g.items.map((b) => (
+                          <BackupChoiceRow key={b.id} choice={b} active={selectedSet.has(b.id)} onToggle={toggleChoice} />
+                        ))}
+                      </div>
+                    );
+                  })
                 )}
               </div>
               {selectedIds.length > 0 && (
