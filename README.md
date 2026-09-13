@@ -87,7 +87,9 @@ run that delivered each part as its own backup — switch the source to
 **Pick from Backups** instead, tick the parts and merge those. The picker
 marks each part with its number, shows what you have selected, and merges in
 part order no matter what order you ticked. Same byte-for-byte result,
-same history.
+same history. A filter box narrows the list — type part of a name, press
+**Select all shown** and every matching part is ticked; if two selected parts
+claim the same part number, you get a warning before merging.
 
 Every panel is covered — 3x-ui, HM Panel, PasarGuard and Rebecca — because
 the parts are exact slices of the panel's own backup file.
