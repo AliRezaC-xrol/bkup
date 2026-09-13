@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2, DatabaseBackup, AlertCircle, Eye, EyeOff } from "lucide-react";
 import { useLang } from "@/components/dashboard/lang";
+import { ThemeToggle } from "@/components/dashboard/ThemeToggle";
 
 export function LoginScreen({
   mode,
@@ -62,6 +63,10 @@ export function LoginScreen({
 
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background px-4">
+      {/* light/dark switch — top corner, outside the card flow */}
+      <div className="absolute end-4 top-4 z-10">
+        <ThemeToggle />
+      </div>
       {/* monochrome backdrop: soft neutral washes + faint grid */}
       <div
         className="pointer-events-none absolute inset-0"

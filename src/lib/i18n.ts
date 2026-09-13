@@ -205,6 +205,8 @@ export const dict = {
   reassembly_backup_gone: "The backup file is no longer on disk",
   reassembly_selected_backups: "Selected parts (merged in part order)",
   reassembly_clear: "Clear selection",
+  reassembly_group_add: "Add all",
+  reassembly_group_remove: "Remove",
   reassembly_search_ph: "Filter by name or panel…",
   reassembly_select_all_shown: "Select all shown",
   reassembly_no_match: "No backups match this filter.",
@@ -516,6 +518,10 @@ export const dict = {
   cert_validation: "Certificate validation",
   cert_dns_check: "Ensure DNS points to target server before issuing",
   cert_port_check: "Port 80 must be free (we stop nginx/x-ui temporarily)",
+  backups_search_ph: "Search file name…",
+  backups_search_clear: "Clear search",
+  theme_to_dark: "Switch to dark mode",
+  theme_to_light: "Switch to light mode",
 } as const;
 
 export type DictKey = keyof typeof dict;

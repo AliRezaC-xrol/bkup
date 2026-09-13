@@ -36,11 +36,12 @@ same install covers anything from a few backups a day to one every few minutes.
 - **3x-ui, HM Panel, PasarGuard and Rebecca in one place** — each panel enabled independently, each with its own connection test
 - **Telegram delivery** — every backup arrives as a file in your chat or channel; nothing to download by hand
 - **Your schedule** — interval in seconds, kept across reboots by the systemd service
-- **Web panel** — dashboard, live logs, backup history with per-backup download and delete
-- **Reassemble split backups** — parts delivered to Telegram are merged back into the one complete file right in the web panel, with a downloadable history; you can also pick the parts straight from your stored backups instead of uploading them
+- **Web panel** — dashboard, live logs, backup history with per-backup download and delete, plus a file-name search that combines with the status and panel filters
+- **Reassemble split backups** — parts delivered to Telegram are merged back into the one complete file right in the web panel, with a downloadable history; you can also pick the parts straight from your stored backups instead of uploading them — part sets of the same file are grouped under one header, so the whole set is one tap away
 - **Restore to any server** — push a backup (a normal run or a reassembled file) back onto a server over SSH; the panel is installed automatically if it is missing, every step streams live, and the run can be cancelled
 - **Disk cleanup on demand** — System → Storage previews orphan files left by crashed runs and backups beyond the retention limit, then removes them with one click
 - **Settings file** — export every panel, Telegram and schedule setting as JSON and import it on another server; hidden credentials keep their current values, a full export moves them too
+- **Dark mode and installable app** — the panel follows the system theme (or the switch in the header) and can be added to the phone's home screen like a native app
 - **Terminal menu** — `bkup` handles status, panel URL, password, port, logs, update and uninstall without opening the web panel
 
 ## Install
@@ -83,6 +84,8 @@ Backups larger than **50 MB** are split into multiple numbered parts before bein
 In the **Reassemble** section, you can upload these parts and convert them back into the original backup file. The parts are automatically sorted by their numbers and merged byte-by-byte, while the original files remain untouched.
 
 You can also reassemble parts that are already stored in the **Backups** section. Simply select the parts you need; they are automatically arranged in the correct order, and duplicate part numbers are detected before the merge begins.
+
+Part sets of the same file are recognized on sight: every group gets its own header with the original file name and a **have/total** badge — green when the whole set is visible, amber when parts are missing. The **Add all** button on the header picks every visible part of that file in one tap (and turns into **Remove** to undo), so assembling a split backup no longer means ticking each part by hand. Picking a single part still flags the missing siblings with an **Add missing parts** shortcut right where the warning appears.
 
 ## Restore Backup to a Server
 
@@ -127,6 +130,12 @@ credentials** writes the real values for a full migration. **Import settings**
 on another install applies the file through the exact same validation the
 settings form uses — masked credentials simply keep the values already on that
 server.
+
+## Dark Mode & Home-Screen App
+
+The header carries a light/dark switch next to the live indicator. Out of the box bkup follows the operating system's appearance — dark at night, light in the morning — and the switch overrides that per device, with the choice remembered across visits. Every screen is themed, including the log console, the activity chart and the restore wizard, so nothing turns into a white flash after sunset.
+
+The panel is also a **PWA**: open the browser menu and choose **Add to Home Screen** (or **Install** on desktop Chrome). bkup then launches in its own window with its own icon — no address bar, no tab hunting — which makes checking backups from a phone feel like opening a regular app.
 
 ## Terminal menu
 

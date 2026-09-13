@@ -9,6 +9,7 @@ import {
   LogOut, Menu, Zap, Loader2, Layers, RotateCcw,
 } from "lucide-react";
 import { useLang } from "@/components/dashboard/lang";
+import { ThemeToggle } from "@/components/dashboard/ThemeToggle";
 import type { DictKey } from "@/lib/i18n";
 
 export type TabKey = "dashboard" | "backups" | "reassembly" | "restore" | "settings" | "logs" | "system";
@@ -166,6 +167,7 @@ export function Shell({
             </div>
 
             <div className="ms-auto flex items-center gap-2.5">
+              <ThemeToggle />
               <div className="hidden items-center gap-2 rounded-full border px-3 py-1.5 sm:flex">
                 <span className={`pulse-dot inline-block h-2 w-2 rounded-full ${isLive ? "bg-primary" : "bg-stone-500"}`} />
                 <span className="text-xs font-medium">{isLive ? t("active") : t("stopped")}</span>
