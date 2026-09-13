@@ -2,7 +2,7 @@
 
 <img src="docs/banner.svg" alt="bkup — automatic panel backups to Telegram" width="640">
 
-**Automatic backups of 3x-ui, HM Panel, PasarGuard, Rebecca — delivered to your Telegram.**
+**Auto backup & restore 3x-ui, HM Panel, PasarGuard, Rebecca.**
 
 [![Release](https://img.shields.io/github/v/release/AliRezaC-xrol/bkup?style=flat-square&label=release)](https://github.com/AliRezaC-xrol/bkup/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/AliRezaC-xrol/bkup/total?style=flat-square&label=downloads)](https://github.com/AliRezaC-xrol/bkup/releases)
