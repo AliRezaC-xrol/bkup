@@ -74,65 +74,27 @@ The version shown in the panel comes from the code at build time, so after an
 update it always matches what is actually running.
 
 
-## Reassemble backup parts
+## Reassemble Backup Parts
 
-Backups above 50 MB arrive in Telegram as numbered parts. Open the
-**Reassemble** tab in the web panel, upload the parts and press
-**Reassemble and store** — they are sorted by part number automatically and
-merged byte-for-byte into the original backup file. Every merge is kept in a
-history with a download and a delete button for each entry.
+Backups larger than **50 MB** are split into multiple numbered parts before being sent to Telegram.
 
-If the parts are already sitting in the **Backups** section — for example a
-run that delivered each part as its own backup — switch the source to
-**Pick from Backups** instead, tick the parts and merge those. The picker
-marks each part with its number, shows what you have selected, and merges in
-part order no matter what order you ticked. Same byte-for-byte result,
-same history. A filter box narrows the list — type part of a name, press
-**Select all shown** and every matching part is ticked; if two selected parts
-claim the same part number, you get a warning before merging.
+In the **Reassemble** section, you can upload these parts and convert them back into the original backup file. The parts are automatically sorted by their numbers and merged byte-by-byte, while the original files remain untouched.
 
-The picker also watches out for holes. A set like `part1of3` + `part3of3`
-without its middle part is flagged before anything is merged — the missing
-numbers are listed, a dashed placeholder marks exactly where each one falls
-in the merge order, and if the missing parts are sitting in the list a
-single **Add missing parts** click ticks them. An incomplete set is never
-merged: the server refuses it, so a corrupt "complete" backup can never
-quietly appear in your history (and from there, in a restore). Part files
-can be dragged straight onto the upload box instead of picked through the
-file dialog.
+You can also reassemble parts that are already stored in the **Backups** section. Simply select the parts you need; they are automatically arranged in the correct order, and duplicate part numbers are detected before the merge begins.
 
-Every panel is covered — 3x-ui, HM Panel, PasarGuard and Rebecca — because
-the parts are exact slices of the panel's own backup file.
+## Restore Backup to a Server
 
-## Restore to a remote server
+The **Restore** section lets you restore a backup directly to a server over **SSH**.
 
-Backups are only half the job — **Restore** is the other half. The Restore tab
-takes a file from your backup pool — a normal backup run or a file you merged
-in the Reassemble tab — and puts a panel back on its feet on any server you
-can reach over SSH.
+Select the target server, panel, optional **Cloudflare DNS** settings, and the backup you want to restore. Before starting, **bkup** displays a summary of the target server, selected backup, and panel.
 
-The wizard asks for the decisions in order: the target server (IP, SSH port,
-user, password or private key — tested before anything else happens), the
-panel type, optional Cloudflare DNS automation for certificate issuance, and
-the backup itself. Both sources sit in one list — files produced by backup
-runs next to files merged in Reassemble, the latter carrying a **Reassembled**
-badge so there is no guessing which is which.
+During the restore, every step is displayed in real time. You can cancel the restore while it is running, and the result of every restore is recorded in **History**.
 
-Before anything is written, the review screen shows the exact target, the
-exact file and the panel that will be installed. Once started, every step
-streams into the panel in real time — connecting, checking for an existing
-installation, installing the panel if it is missing, restoring the data and
-restarting the service — and you can cancel while it runs. Each attempt lands
-in a history, so you can always see what ran, when, and how it ended.
-
-All four panels are supported, and each is restored the way it actually
-stores data: 3x-ui by replacing its SQLite database, HM Panel by unpacking
-its full archive over the panel directory, and PasarGuard and Rebecca by
-replaying a complete snapshot through the panel's own API.
+If the selected panel is not installed on the target server, **bkup** installs the panel first and then restores the selected backup.
 
 ## Donate
 
-If bkup is useful to you, a small donation helps keep it going:
+If **bkup** has been useful to you, even a single **STAR** on **GitHub** can be the greatest support for continuing the development of the project.
 
 | Network | Address |
 |---|---|
