@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, DatabaseBackup, AlertCircle } from "lucide-react";
+import { Loader2, DatabaseBackup, AlertCircle, Eye, EyeOff } from "lucide-react";
 import { useLang } from "@/components/dashboard/lang";
 
 export function LoginScreen({
@@ -20,6 +20,8 @@ export function LoginScreen({
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showPw, setShowPw] = useState(false);
+  const [showPw2, setShowPw2] = useState(false);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -95,31 +97,55 @@ export function LoginScreen({
               <Label htmlFor="pw">
                 {mode === "setup" ? t("setup_password") : t("login_password")}
               </Label>
-              <Input
-                id="pw"
-                type="password"
-                dir="ltr"
-                autoFocus
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="h-11 text-start"
-                minLength={4}
-                required
-              />
+              <div className="relative">
+                <Input
+                  id="pw"
+                  type={showPw ? "text" : "password"}
+                  dir="ltr"
+                  autoFocus
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="h-11 text-start pe-10"
+                  minLength={4}
+                  required
+                />
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  onClick={() => setShowPw((v) => !v)}
+                  aria-label={showPw ? "Hide password" : "Show password"}
+                  aria-pressed={showPw}
+                  className="absolute inset-y-0 end-0 flex w-10 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  {showPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
             </div>
             {mode === "setup" && (
               <div className="space-y-2">
                 <Label htmlFor="pw2">{t("setup_confirm")}</Label>
-                <Input
-                  id="pw2"
-                  type="password"
-                  dir="ltr"
-                  value={confirm}
-                  onChange={(e) => setConfirm(e.target.value)}
-                  className="h-11 text-start"
-                  minLength={4}
-                  required
-                />
+                <div className="relative">
+                  <Input
+                    id="pw2"
+                    type={showPw2 ? "text" : "password"}
+                    dir="ltr"
+                    value={confirm}
+                    onChange={(e) => setConfirm(e.target.value)}
+                    className="h-11 text-start pe-10"
+                    minLength={4}
+                    required
+                  />
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    onClick={() => setShowPw2((v) => !v)}
+                    aria-label={showPw2 ? "Hide password" : "Show password"}
+                    aria-pressed={showPw2}
+                    className="absolute inset-y-0 end-0 flex w-10 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
+                  >
+                    {showPw2 ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
               </div>
             )}
 
