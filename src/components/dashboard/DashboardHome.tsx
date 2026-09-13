@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   Files, CheckCircle2, XCircle, Timer, Link2, Send, Activity, Boxes,
   Clock, Server, MemoryStick, GitBranch, AlertTriangle, ChevronRight, Loader2, DatabaseBackup,
+  ChartColumn, CalendarDays,
 } from "lucide-react";
 import { useLang } from "@/components/dashboard/lang";
 import type { AppConfigDTO, BackupRunDTO, StatusDTO, SystemInfoDTO } from "@/components/dashboard/types";
@@ -32,6 +33,119 @@ function fmtUptime(sec: number): string {
   if (h) parts.push(`${h}h`);
   parts.push(`${m}m`);
   return parts.join(" ");
+}
+
+interface DailyPoint { day: string; success: number; failed: number; bytes: number }
+
+/** 14-day backup activity — refetched whenever a new run shows up in the poll. */
+function ActivityChart({ runsHeadId }: { runsHeadId: number }) {
+  const { t } = useLang();
+  const [days, setDays] = useState<DailyPoint[] | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/stats/daily", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (alive && d?.days) setDays(d.days as DailyPoint[]); })
+      .catch(() => { /* keep the old chart */ });
+    return () => { alive = false; };
+  }, [runsHeadId]);
+
+  const max = useMemo(() => Math.max(1, ...(days ?? []).map((d) => d.success + d.failed)), [days]);
+  const totals = useMemo(() => {
+    const list = days ?? [];
+    return {
+      runs: list.reduce((n, d) => n + d.success + d.failed, 0),
+      bytes: list.reduce((n, d) => n + d.bytes, 0),
+    };
+  }, [days]);
+
+  const dayLabel = (day: string) => day.slice(8); // "2026-09-07" -> "07"
+  const niceDate = (day: string) =>
+    new Date(`${day}T00:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+
+  return (
+    <Card>
+      <CardHeader className="@container/card-header flex flex-row items-center justify-between space-y-0 pb-4">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <ChartColumn className="h-4 w-4" />
+          {t("activity_title")}
+          <span className="text-xs font-normal text-muted-foreground">· {t("activity_window")}</span>
+        </CardTitle>
+        {days && totals.runs > 0 && (
+          <div data-slot="card-action" className="flex items-center gap-2 text-xs text-muted-foreground tabular-nums">
+            <span className="flex items-center gap-1"><CalendarDays className="h-3.5 w-3.5" />{totals.runs} {t("activity_total")}</span>
+            <span className="hidden sm:inline">·</span>
+            <span className="hidden sm:inline">{formatBytes(totals.bytes)}</span>
+          </div>
+        )}
+      </CardHeader>
+      <CardContent>
+        {!days ? (
+          <Skeleton className="h-28 w-full rounded-lg" />
+        ) : totals.runs === 0 ? (
+          <div className="rounded-lg border border-dashed py-8 text-center">
+            <ChartColumn className="mx-auto mb-2 h-8 w-8 text-muted-foreground/40" />
+            <p className="text-sm text-muted-foreground">{t("activity_empty")}</p>
+          </div>
+        ) : (
+          <>
+            <div className="flex h-28 items-stretch gap-[3px] sm:gap-1.5">
+              {days.map((d, i) => {
+                const isToday = i === days.length - 1;
+                const okH = (d.success / max) * 100;
+                const failH = (d.failed / max) * 100;
+                const tip = `${niceDate(d.day)} — ${d.success} ok, ${d.failed} failed, ${formatBytes(d.bytes)}`;
+                return (
+                  <div
+                    key={d.day}
+                    title={tip}
+                    className={`group flex min-w-0 flex-1 cursor-default flex-col justify-end gap-px rounded pb-0 transition-colors ${
+                      isToday ? "bg-primary/[0.04] ring-1 ring-inset ring-primary/15" : "hover:bg-muted/40"
+                    }`}
+                  >
+                    {d.failed > 0 && (
+                      <div
+                        className="w-full rounded-t-[3px] bg-red-500/70 transition-colors group-hover:bg-red-500"
+                        style={{ height: `${Math.max(failH, 3)}%` }}
+                      />
+                    )}
+                    {d.success > 0 && (
+                      <div
+                        className={`w-full bg-primary/85 transition-colors group-hover:bg-primary ${
+                          d.failed === 0 ? "rounded-t-[3px]" : ""
+                        }`}
+                        style={{ height: `${Math.max(okH, 3)}%` }}
+                      />
+                    )}
+                    {d.success + d.failed === 0 && (
+                      <div className="mx-auto mb-px h-0.5 w-full rounded-full bg-muted-foreground/15" />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <div className="mt-1.5 flex gap-[3px] sm:gap-1.5">
+              {days.map((d, i) => (
+                <span
+                  key={d.day}
+                  className={`min-w-0 flex-1 text-center text-[9px] tabular-nums ${
+                    i === days.length - 1 ? "font-bold text-primary" : "text-muted-foreground/60"
+                  }`}
+                >
+                  {i === days.length - 1 ? t("activity_today") : dayLabel(d.day)}
+                </span>
+              ))}
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+              <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-sm bg-primary/85" /> success</span>
+              <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-sm bg-red-500/70" /> failed</span>
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
 }
 
 export function DashboardHome({
@@ -183,10 +297,36 @@ export function DashboardHome({
       {/* ===== stat cards ===== */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Stat icon={<Files className="h-4 w-4" />} label={t("total_backups")} value={stats ? n(stats.total) : "—"} />
-        <Stat icon={<CheckCircle2 className="h-4 w-4" />} label={t("success_count")} value={stats ? n(stats.success) : "—"} accent="text-foreground" />
+        <Stat
+          icon={<CheckCircle2 className="h-4 w-4" />}
+          label={t("success_count")}
+          value={stats ? n(stats.success) : "—"}
+          accent="text-foreground"
+          sub={
+            stats && stats.success + stats.failed > 0 ? (() => {
+              const rate = Math.round((stats.success / (stats.success + stats.failed)) * 100);
+              return (
+                <div className="mt-1.5 w-full">
+                  <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
+                    <div
+                      className={`h-full rounded-full transition-all duration-500 ${rate >= 90 ? "bg-primary" : rate >= 60 ? "bg-amber-500" : "bg-red-500"}`}
+                      style={{ width: `${rate}%` }}
+                    />
+                  </div>
+                  <p className="mt-1 text-[10px] tabular-nums text-muted-foreground">
+                    {rate}% {t("stat_success_rate")}
+                  </p>
+                </div>
+              );
+            })() : undefined
+          }
+        />
         <Stat icon={<XCircle className="h-4 w-4" />} label={t("failed_count")} value={stats ? n(stats.failed) : "—"} accent="text-red-600" />
         <Stat icon={<Clock className="h-4 w-4" />} label={t("last_24h")} value={stats ? n(stats.last24h) : "—"} accent="text-muted-foreground" />
       </div>
+
+      {/* ===== 14-day activity chart ===== */}
+      <ActivityChart runsHeadId={runs[0]?.id ?? 0} />
 
       {/* ===== setup warning ===== */}
       {status && (!status.configReady.panel || !status.configReady.telegram) && (
@@ -293,16 +433,17 @@ export function DashboardHome({
   );
 }
 
-function Stat({ icon, label, value, accent }: { icon: React.ReactNode; label: string; value: string; accent?: string }) {
+function Stat({ icon, label, value, accent, sub }: { icon: React.ReactNode; label: string; value: string; accent?: string; sub?: React.ReactNode }) {
   return (
-    <Card>
-      <CardContent className="flex items-center gap-3 p-4">
+    <Card className="transition-shadow hover:shadow-sm">
+      <CardContent className="flex items-start gap-3 p-4">
         <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted ${accent ?? "text-foreground"}`}>
           {icon}
         </div>
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <p className="truncate text-xs text-muted-foreground">{label}</p>
           <p className="text-lg font-bold tabular-nums">{value}</p>
+          {sub}
         </div>
       </CardContent>
     </Card>
@@ -311,7 +452,7 @@ function Stat({ icon, label, value, accent }: { icon: React.ReactNode; label: st
 
 function Mini({ icon, label, value, badge }: { icon: React.ReactNode; label: string; value: string; badge?: { text: string; onClick: () => void } }) {
   return (
-    <Card>
+    <Card className="transition-shadow hover:shadow-sm">
       <CardContent className="flex items-center gap-3 p-4">
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
           {icon}

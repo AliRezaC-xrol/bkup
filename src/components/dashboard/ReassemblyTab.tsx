@@ -12,7 +12,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Combine, Download, Trash2, UploadCloud, Inbox, Archive, Check, X, Search, ChevronRight, AlertTriangle, Plus } from "lucide-react";
+import { Combine, Download, Trash2, UploadCloud, Inbox, Archive, Check, X, Search, ChevronRight, AlertTriangle, Plus, ShieldCheck } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useLang } from "@/components/dashboard/lang";
 import { formatBytes } from "@/components/dashboard/types";
@@ -40,6 +40,12 @@ interface BackupChoice {
   fileSize: number | null;
   startedAt: string;
   panel: string;
+}
+
+// integrity result pinned to a history row (same tri-state as Backups verify)
+interface VerifyResult {
+  state: "ok" | "mismatch" | "missing";
+  sha8: string;
 }
 
 const panelShort = (panel: string) =>
@@ -98,10 +104,13 @@ const BackupChoiceRow = memo(function BackupChoiceRow({
 
 // Memoized history row: idles while unrelated parts of the tab re-render.
 const HistoryRow = memo(function HistoryRow({
-  row, busy, onDelete,
+  row, busy, verifyState, verifying, onVerify, onDelete,
 }: {
   row: ReassembledDTO;
   busy: boolean;
+  verifyState: VerifyResult | undefined;
+  verifying: boolean;
+  onVerify: (row: ReassembledDTO) => void;
   onDelete: (row: ReassembledDTO) => void;
 }) {
   const { t } = useLang();
@@ -113,11 +122,49 @@ const HistoryRow = memo(function HistoryRow({
           <span className="block truncate text-xs font-medium" dir="ltr" title={row.name}>{row.name}</span>
           <Badge variant="outline" className="shrink-0 text-[10px] uppercase">{panelShort(row.panel)}</Badge>
         </div>
+        {verifyState && (
+          verifyState.state === "ok" ? (
+            <span
+              className="mt-0.5 inline-flex cursor-default items-center gap-1 rounded bg-emerald-500/10 px-1 py-0.5 text-[10px] font-medium text-emerald-700"
+              title={`${t("verify_ok")} — ${t("verify_ok_hint")} (SHA-256 ${verifyState.sha8}…)`}
+            >
+              <ShieldCheck className="h-3 w-3" />
+              {t("verify_chip")} · {verifyState.sha8}
+            </span>
+          ) : verifyState.state === "mismatch" ? (
+            <span
+              className="mt-0.5 inline-flex cursor-default items-center gap-1 rounded bg-amber-500/10 px-1 py-0.5 text-[10px] font-medium text-amber-700"
+              title={t("verify_size_mismatch_hint")}
+            >
+              <AlertTriangle className="h-3 w-3" />
+              {t("verify_size_mismatch")} · {verifyState.sha8}
+            </span>
+          ) : (
+            <span
+              className="mt-0.5 inline-flex cursor-default items-center gap-1 rounded bg-red-500/10 px-1 py-0.5 text-[10px] font-medium text-red-700"
+              title={t("verify_missing_hint")}
+            >
+              <AlertTriangle className="h-3 w-3" />
+              {t("verify_missing")}
+            </span>
+          )
+        )}
       </TableCell>
       <TableCell><Badge variant="outline" className="text-[10px]">{row.parts}</Badge></TableCell>
       <TableCell className="text-xs tabular-nums">{formatBytes(row.size)}</TableCell>
       <TableCell className="text-end">
         <div className="flex items-center justify-end gap-1 opacity-60 transition-opacity group-hover:opacity-100">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={() => onVerify(row)}
+            disabled={verifying}
+            title={verifying ? t("verifying") : t("verify")}
+            aria-label={t("verify")}
+          >
+            <ShieldCheck className={`h-3.5 w-3.5 ${verifying ? "animate-pulse" : ""}`} />
+          </Button>
           <Button variant="ghost" size="icon" className="h-7 w-7" asChild>
             <a href={`/api/reassembly/${row.id}/download`} download title={t("download")}>
               <Download className="h-3.5 w-3.5" />
@@ -149,6 +196,9 @@ export function ReassemblyTab() {
   const [history, setHistory] = useState<ReassembledDTO[]>([]);
   const [deleting, setDeleting] = useState<ReassembledDTO | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
+  // per-row integrity results — recomputing SHA-256 on demand, same as Backups
+  const [verifyingId, setVerifyingId] = useState<number | null>(null);
+  const [verified, setVerified] = useState<Map<number, VerifyResult>>(new Map());
 
   // source selection: upload part files, or merge parts stored in Backups
   const [source, setSource] = useState<"upload" | "backups">("upload");
@@ -236,7 +286,21 @@ export function ReassemblyTab() {
   const loadHistory = useCallback(async () => {
     try {
       const res = await fetch("/api/reassembly");
-      if (res.ok) setHistory(await res.json());
+      if (res.ok) {
+        const rows = (await res.json()) as ReassembledDTO[];
+        setHistory(rows);
+        // drop verify results of rows that no longer exist
+        setVerified((cur) => {
+          const alive = new Set(rows.map((r) => r.id));
+          let changed = false;
+          const next = new Map<number, VerifyResult>();
+          for (const [id, v] of cur) {
+            if (alive.has(id)) next.set(id, v);
+            else changed = true;
+          }
+          return changed ? next : cur;
+        });
+      }
     } catch { /* keep the old list */ }
   }, []);
 
@@ -360,6 +424,34 @@ export function ReassemblyTab() {
     } finally {
       setBusyId(null);
       setDeleting(null);
+    }
+  }
+
+  // recompute the SHA-256 of the merged file on disk and compare it with the
+  // recorded size — a corrupted reassembled file must never reach a restore
+  async function doVerify(row: ReassembledDTO) {
+    setVerifyingId(row.id);
+    try {
+      const res = await fetch(`/api/reassembly/${row.id}/verify`);
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data) {
+        toast({ title: t("error"), variant: "destructive" });
+        return;
+      }
+      let result: VerifyResult;
+      if (!data.exists) {
+        result = { state: "missing", sha8: "" };
+        toast({ title: t("verify_missing"), description: t("verify_missing_hint"), variant: "destructive" });
+      } else if (!data.sizeMatch) {
+        result = { state: "mismatch", sha8: String(data.sha256 ?? "").slice(0, 8) };
+        toast({ title: t("verify_size_mismatch"), description: t("verify_size_mismatch_hint"), variant: "destructive" });
+      } else {
+        result = { state: "ok", sha8: String(data.sha256 ?? "").slice(0, 8) };
+        toast({ title: t("verify_ok"), description: `SHA-256 ${result.sha8}… · ${t("verify_ok_hint")}` });
+      }
+      setVerified((cur) => new Map(cur).set(row.id, result));
+    } finally {
+      setVerifyingId(null);
     }
   }
 
@@ -608,7 +700,15 @@ export function ReassemblyTab() {
                 </TableHeader>
                 <TableBody>
                   {history.map((r) => (
-                    <HistoryRow key={r.id} row={r} busy={busyId === r.id} onDelete={askDelete} />
+                    <HistoryRow
+                      key={r.id}
+                      row={r}
+                      busy={busyId === r.id}
+                      verifyState={verified.get(r.id)}
+                      verifying={verifyingId === r.id}
+                      onVerify={doVerify}
+                      onDelete={askDelete}
+                    />
                   ))}
                 </TableBody>
               </Table>
