@@ -106,7 +106,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/AliRezaC-xrol/bkup/main/inst
 
 ## دونیت
 
-اگر bkup برایتان کار راه‌انداز است، یک دونیت کوچک به ادامهٔ آن کمک می‌کند:
+اگر bkup براتون مفید بوده حتی یک STAR روی GitHub می‌تونه بزرگ‌ترین حمایت برای ادامه توسعه پروژه باشه.
 
 | شبکه | آدرس |
 |---|---|
