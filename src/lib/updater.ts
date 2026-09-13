@@ -63,7 +63,7 @@ function findUpdateScript(): string | null {
   return null;
 }
 
-export function startUpdate(): { ok: boolean; error?: string } {
+export function startUpdate(opts?: { force?: boolean }): { ok: boolean; error?: string } {
   if (isUpdateRunning()) return { ok: false, error: "UPDATE_ALREADY_RUNNING" };
 
   const script = findUpdateScript();
@@ -77,7 +77,12 @@ export function startUpdate(): { ok: boolean; error?: string } {
   const child = spawn("bash", [script, "--web"], {
     detached: true,
     stdio: ["ignore", out, out],
-    env: { ...process.env, ABX_FROM_VERSION: APP_VERSION },
+    env: {
+      ...process.env,
+      ABX_FROM_VERSION: APP_VERSION,
+      // force: redeploy the latest release even when the running version matches
+      ...(opts?.force ? { BKUP_FORCE_UPDATE: "1" } : {}),
+    },
     cwd: path.dirname(script),
   });
   child.unref();

@@ -32,6 +32,8 @@ export function SystemTab({
   const [updating, setUpdating] = useState(false);
   const [updateLog, setUpdateLog] = useState("");
   const [showLog, setShowLog] = useState(false);
+  const [reinstallOpen, setReinstallOpen] = useState(false);
+  const [reinstalling, setReinstalling] = useState(false);
   const [port, setPort] = useState<string>("");
   const [confirmPort, setConfirmPort] = useState<number | null>(null);
   const [changingPort, setChangingPort] = useState(false);
@@ -94,6 +96,7 @@ export function SystemTab({
             toast({ title: t("error"), description: data.state.error, variant: "destructive" });
           }
           setUpdating(false);
+          setReinstalling(false);
           onRefreshInfo();
         }
       } catch {
@@ -144,6 +147,27 @@ export function SystemTab({
       if (!res.ok) {
         toast({ title: t("error"), description: data.error, variant: "destructive" });
         setUpdating(false);
+      }
+    } catch {
+      // the app may restart mid-request — that's expected
+    }
+  }, [t, toast]);
+
+  const runReinstall = useCallback(async () => {
+    setReinstalling(true);
+    setUpdating(true);
+    setShowLog(true);
+    try {
+      const res = await fetch("/api/system/update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "run", force: true }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast({ title: t("error"), description: data.error, variant: "destructive" });
+        setUpdating(false);
+        setReinstalling(false);
       }
     } catch {
       // the app may restart mid-request — that's expected
@@ -244,6 +268,15 @@ export function SystemTab({
                 {updating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
                 {updating ? t("updating") : t("update_now")}
               </Button>
+              <Button
+                variant="outline"
+                onClick={() => setReinstallOpen(true)}
+                disabled={updating || reinstalling}
+                className="flex-1 justify-center gap-2 sm:flex-none"
+              >
+                {reinstalling ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+                {reinstalling ? t("updating") : t("reinstall_now")}
+              </Button>
             </div>
           </div>
 
@@ -272,6 +305,27 @@ export function SystemTab({
           )}
         </CardContent>
       </Card>
+
+      <AlertDialog open={reinstallOpen} onOpenChange={(o) => !o && setReinstallOpen(false)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("reinstall_confirm_title")}</AlertDialogTitle>
+            <AlertDialogDescription>{t("reinstall_confirm_desc")}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault();
+                setReinstallOpen(false);
+                runReinstall();
+              }}
+            >
+              {t("reinstall_now")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* ===== port ===== */}
       <Card>
