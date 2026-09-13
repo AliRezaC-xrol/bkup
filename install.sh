@@ -163,8 +163,30 @@ CODE_ITEMS=(src prisma public scripts docs docker .github
 
 if [ -f "$APP_DIR/package.json" ]; then
   cd "$APP_DIR" || die "cannot enter ${APP_DIR}"
+  # v1.2.1: never rewrite a script in place while it may be executing —
+  # bash reads scripts incrementally, and rewriting the bytes under a
+  # running interpreter aborts it mid-flight with a random syntax error
+  # (the root cause of updates dying after the copy, before the build).
+  # Executed files are staged and swapped in with atomic rename(2) instead.
   for item in "${CODE_ITEMS[@]}"; do
-    [ -e "$RELEASE_SRC/$item" ] && cp -a "$RELEASE_SRC/$item" "$APP_DIR/" 2>/dev/null
+    [ -e "$RELEASE_SRC/$item" ] || continue
+    case "$item" in
+      scripts)
+        rm -rf "${APP_DIR}/.scripts-new"
+        if cp -a "$RELEASE_SRC/scripts" "${APP_DIR}/.scripts-new" 2>/dev/null; then
+          rm -rf "${APP_DIR}/scripts"
+          mv "${APP_DIR}/.scripts-new" "${APP_DIR}/scripts" 2>/dev/null \
+            || { rm -rf "${APP_DIR}/scripts"; cp -a "$RELEASE_SRC/scripts" "${APP_DIR}/scripts" 2>/dev/null || true; }
+        fi
+        ;;
+      cli.sh|install.sh)
+        cp -a "$RELEASE_SRC/$item" "${APP_DIR}/.${item}.new" 2>/dev/null || true
+        mv -f "${APP_DIR}/.${item}.new" "${APP_DIR}/$item" 2>/dev/null || true
+        ;;
+      *)
+        cp -a "$RELEASE_SRC/$item" "${APP_DIR}/" 2>/dev/null || true
+        ;;
+    esac
   done
   ok "existing installation refreshed to ${TAG}  ${D}(data, settings and backups preserved)${N}"
 else

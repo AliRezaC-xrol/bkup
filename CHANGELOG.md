@@ -3,6 +3,20 @@
 All notable changes to **bkup** are documented here.
 Versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.2.1] — 2026-09-13
+
+### Fixed
+
+- **The real root cause of "update says done / Already latest, but the panel never changes" (critical):**
+  - The updater (and installer) copied new code over the installation **while bash was still reading the very script that was running** — `cp` rewrote `scripts/update.sh` (and `cli.sh`) in place, the interpreter's read offset landed in the middle of different code, and the update aborted with a random `syntax error near unexpected token` **after the copy but before the build**. The result: `package.json` already claimed the new version while the running panel was still the old build — and every later update then reported "Already on the latest release" forever, from both the terminal (option 7) and the web panel (System → Update).
+  - `scripts/update.sh` and `install.sh` now stage executed files and swap them in with **atomic rename(2)** — a running shell keeps reading its own file until it exits; the next run uses the new code. No more mid-flight self-deletion.
+  - The "Already latest" decision no longer trusts the on-disk `package.json` (a file the updater itself overwrites mid-update). The installed version is now resolved from the **truth chain**: the running build (`GET /api/system/info` → `appVersion`) → the last successful build output (`.next/standalone/package.json`) → on-disk `package.json` as a last resort. If the disk claims the newest version while the panel runs an older one, the update **runs and converges** the installation instead of skipping — self-healing for any install left in the stuck state.
+  - CI now parses every tracked shell script with `bash -n` on every run, so a syntactically broken script can never land on `main` or in a release.
+
+### Result
+
+Updating from the terminal (`bkup` → 7) and from the web panel (System → Update) now: resolves the latest release, verifies it, swaps code atomically, merges `.env` (preserving your values), builds, runs database migrations, restarts the service, and confirms the running panel actually reports the new version — retrying safely if any step fails.
+
 ## [1.2.0] — 2026-09-13
 
 ### Added
