@@ -21,8 +21,8 @@ export function stripPartFromName(name: string): string {
 export function detectPanel(name: string): string {
   const n = name.toLowerCase();
   if (n.includes("hmpanel") || n.startsWith("hm-") || n.includes("hm_")) return "hmpanel";
-  if (n.includes("pasarguard")) return "pasarguard";
-  if (n.includes("rebecca") || n.endsWith(".rbbackup")) return "rebecca";
+  if (n.includes("pasarguard") || n.startsWith("pg-") || n.includes("pg_")) return "pasarguard";
+  if (n.includes("rebecca") || n.endsWith(".rbbackup") || n.startsWith("rb-")) return "rebecca";
   return "3x-ui";
 }
 

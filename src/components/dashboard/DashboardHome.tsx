@@ -15,6 +15,8 @@ import { useLang } from "@/components/dashboard/lang";
 import { TimeAgo } from "@/components/dashboard/TimeAgo";
 import type { AppConfigDTO, BackupRunDTO, StatusDTO, SystemInfoDTO } from "@/components/dashboard/types";
 import { formatBytes } from "@/components/dashboard/types";
+import type { PanelFilter } from "@/components/dashboard/BackupsTab";
+import { firstTgMessageId, tgMessageUrl } from "@/lib/tg-link";
 
 function countdown(nextRunAt: number | null): string {
   if (!nextRunAt) return "—";
@@ -37,6 +39,99 @@ function fmtUptime(sec: number): string {
 }
 
 interface DailyPoint { day: string; success: number; failed: number; bytes: number }
+
+const HEALTH_PANELS = [
+  { key: "3x-ui", tag: "3X", label: "panel_3xui" },
+  { key: "hmpanel", tag: "HM", label: "panel_hm" },
+  { key: "pasarguard", tag: "PG", label: "panel_pg" },
+  { key: "rebecca", tag: "RB", label: "panel_rb" },
+] as const;
+
+/**
+ * Per-panel health tiles — last backup age, window success rate and run
+ * count for each of the four panels. Clicking a tile opens Backups
+ * pre-filtered to that panel (drill-down via lifted filter state).
+ * Self-fetches a wider window than the 5-row recent list.
+ */
+function PanelHealth({ runsHeadId, onDrill }: { runsHeadId: number; onDrill: (p: PanelFilter) => void }) {
+  const { t } = useLang();
+  const [hist, setHist] = useState<BackupRunDTO[] | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/backups?limit=60", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (alive && Array.isArray(d)) setHist(d as BackupRunDTO[]); })
+      .catch(() => { /* keep the old data */ });
+    return () => { alive = false; };
+  }, [runsHeadId]);
+
+  const tiles = useMemo(
+    () =>
+      HEALTH_PANELS.map((p) => {
+        const rs = (hist ?? []).filter((r) => r.panel === p.key);
+        const ok = rs.filter((r) => r.status === "success").length;
+        const done = rs.filter((r) => r.status !== "running").length;
+        return {
+          ...p,
+          count: rs.length,
+          rate: done > 0 ? Math.round((ok / done) * 100) : null,
+          last: rs[0] as BackupRunDTO | undefined, // newest-first from the API
+        };
+      }),
+    [hist]
+  );
+
+  return (
+    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      {tiles.map((p) => {
+        const dot =
+          !p.last ? "bg-muted-foreground/30" :
+          p.last.status === "success" ? "bg-primary" :
+          p.last.status === "failed" ? "bg-red-500" : "bg-stone-500 animate-pulse";
+        return (
+          <Card
+            key={p.key}
+            role="button"
+            tabIndex={0}
+            title={t("health_open_hint")}
+            onClick={() => onDrill(p.key)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onDrill(p.key);
+              }
+            }}
+            className="cursor-pointer transition-shadow hover:ring-1 hover:ring-primary/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/60"
+          >
+            <CardContent className="flex items-center gap-3 p-4">
+              <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-muted text-[11px] font-black tracking-wide text-muted-foreground">
+                {p.tag}
+                <span className={`absolute -end-0.5 -top-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-background ${dot}`} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-xs text-muted-foreground">{t(p.label)}</p>
+                <div className="truncate text-sm font-bold">
+                  {hist === null ? (
+                    <Skeleton className="h-4 w-16" />
+                  ) : p.last ? (
+                    <TimeAgo date={p.last.startedAt} className="text-sm" />
+                  ) : (
+                    <span className="text-muted-foreground">{t("health_no_runs")}</span>
+                  )}
+                </div>
+                <p className="mt-0.5 truncate whitespace-nowrap text-[10px] tabular-nums text-muted-foreground">
+                  {p.rate !== null ? `${p.rate}% ${t("stat_success_rate")} · ${p.count}` : "—"}
+                </p>
+              </div>
+              <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/40" />
+            </CardContent>
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
 
 /** 14-day backup activity — refetched whenever a new run shows up in the poll. */
 function ActivityChart({ runsHeadId }: { runsHeadId: number }) {
@@ -151,7 +246,7 @@ function ActivityChart({ runsHeadId }: { runsHeadId: number }) {
 
 export function DashboardHome({
   config, status, info, runs, busy,
-  onToggle, onBackupNow, onTestPanel, onTestTg, goto,
+  onToggle, onBackupNow, onTestPanel, onTestTg, goto, onDrillPanel,
 }: {
   config: AppConfigDTO | null;
   status: StatusDTO | null;
@@ -163,6 +258,7 @@ export function DashboardHome({
   onTestPanel: () => void;
   onTestTg: () => void;
   goto: (tab: "backups" | "settings" | "system") => void;
+  onDrillPanel: (p: PanelFilter) => void;
 }) {
   const { t } = useLang();
   const [, tick] = useState(0);
@@ -326,6 +422,9 @@ export function DashboardHome({
         <Stat icon={<Clock className="h-4 w-4" />} label={t("last_24h")} value={stats ? n(stats.last24h) : "—"} accent="text-muted-foreground" />
       </div>
 
+      {/* ===== panel health (drill-down tiles) ===== */}
+      <PanelHealth runsHeadId={runs[0]?.id ?? 0} onDrill={onDrillPanel} />
+
       {/* ===== 14-day activity chart ===== */}
       <ActivityChart runsHeadId={runs[0]?.id ?? 0} />
 
@@ -403,25 +502,44 @@ export function DashboardHome({
             </div>
           ) : (
             <div className="divide-y">
-              {runs.slice(0, 5).map((r) => (
-                <div key={r.id} className="flex items-center gap-3 py-2.5 text-sm">
-                  <span
-                    className={`h-2 w-2 shrink-0 rounded-full ${
-                      r.status === "success" ? "bg-primary" : r.status === "failed" ? "bg-red-500" : "bg-stone-500 animate-pulse"
-                    }`}
-                  />
-                  <Badge variant="outline" className="shrink-0 text-[10px] uppercase">
-                    {r.panel === "hmpanel" ? "HM" : r.panel === "pasarguard" ? "PG" : r.panel === "rebecca" ? "RB" : "3X"}
-                  </Badge>
-                  <span className="min-w-0 flex-1 truncate font-medium" dir="ltr">
-                    {r.fileName ?? `#${r.id}`}
-                  </span>
-                  <TimeAgo date={r.startedAt} className="shrink-0 text-xs text-muted-foreground" />
-                  <Badge variant="outline" className="shrink-0 text-[10px] tabular-nums">
-                    {formatBytes(r.fileSize)}
-                  </Badge>
-                </div>
-              ))}
+              {runs.slice(0, 5).map((r) => {
+                const tg = tgMessageUrl(
+                  config?.telegramChatId ?? "",
+                  config?.telegramThreadId ?? "",
+                  firstTgMessageId(r.tgMessageId, r.tgMessageIds)
+                );
+                return (
+                  <div key={r.id} className="flex items-center gap-3 py-2.5 text-sm">
+                    <span
+                      className={`h-2 w-2 shrink-0 rounded-full ${
+                        r.status === "success" ? "bg-primary" : r.status === "failed" ? "bg-red-500" : "bg-stone-500 animate-pulse"
+                      }`}
+                    />
+                    <Badge variant="outline" className="shrink-0 text-[10px] uppercase">
+                      {r.panel === "hmpanel" ? "HM" : r.panel === "pasarguard" ? "PG" : r.panel === "rebecca" ? "RB" : "3X"}
+                    </Badge>
+                    <span className="min-w-0 flex-1 truncate font-medium" dir="ltr">
+                      {r.fileName ?? `#${r.id}`}
+                    </span>
+                    <TimeAgo date={r.startedAt} className="shrink-0 text-xs text-muted-foreground" />
+                    <Badge variant="outline" className="shrink-0 text-[10px] tabular-nums">
+                      {formatBytes(r.fileSize)}
+                    </Badge>
+                    {!r.tgDeleted && tg && (
+                      <a
+                        href={tg}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                        title={t("open_in_tg")}
+                        aria-label={t("open_in_tg")}
+                        className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                      >
+                        <Send className="h-3.5 w-3.5" />
+                      </a>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </CardContent>

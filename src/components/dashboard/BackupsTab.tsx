@@ -11,7 +11,8 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Download, Trash2, RefreshCw, Inbox, ShieldCheck, ShieldAlert, ShieldX, FileDown, Search, X } from "lucide-react";
+import { Download, Trash2, RefreshCw, Inbox, ShieldCheck, ShieldAlert, ShieldX, FileDown, Search, X, Send } from "lucide-react";
+import { firstTgMessageId, tgMessageUrl } from "@/lib/tg-link";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
@@ -33,13 +34,32 @@ const PANELS = [
   { key: "rebecca", tag: "RB" },
 ] as const;
 
-type PanelFilter = "all" | (typeof PANELS)[number]["key"];
+export type PanelFilter = "all" | (typeof PANELS)[number]["key"];
 
-export function BackupsTab({ runs, onRefresh }: { runs: BackupRunDTO[]; onRefresh: () => void }) {
+export function BackupsTab({
+  runs, onRefresh,
+  // lifted state — lets the Dashboard panel-health tiles drill into a panel
+  panelFilter: panelFilterProp, onPanelFilterChange,
+  // telegram routing info — powers the "Open in Telegram" row action
+  tgChatId = "", tgThreadId = "",
+}: {
+  runs: BackupRunDTO[];
+  onRefresh: () => void;
+  panelFilter?: PanelFilter;
+  onPanelFilterChange?: (p: PanelFilter) => void;
+  tgChatId?: string;
+  tgThreadId?: string;
+}) {
   const { t } = useLang();
   const { toast } = useToast();
   const [filter, setFilter] = useState<"all" | "success" | "failed">("all");
-  const [panelFilter, setPanelFilter] = useState<PanelFilter>("all");
+  // works with EITHER the lifted state (dashboard drill-down) or local state
+  const [panelFilterLocal, setPanelFilterLocal] = useState<PanelFilter>("all");
+  const panelFilter = panelFilterProp ?? panelFilterLocal;
+  const setPanelFilter = (p: PanelFilter) => {
+    setPanelFilterLocal(p);
+    onPanelFilterChange?.(p);
+  };
   const [deleting, setDeleting] = useState<BackupRunDTO | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -84,6 +104,16 @@ export function BackupsTab({ runs, onRefresh }: { runs: BackupRunDTO[]; onRefres
     for (const r of runs) if (r.panel in base) base[r.panel as PanelFilter] += 1;
     return base;
   }, [runs]);
+
+  // per-row Telegram deep link — built once per (chatId, run) pair
+  const tgUrl = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const r of runs) {
+      const u = tgMessageUrl(tgChatId, tgThreadId, firstTgMessageId(r.tgMessageId, r.tgMessageIds));
+      if (u) m.set(r.id, u);
+    }
+    return m;
+  }, [runs, tgChatId, tgThreadId]);
 
   const methodLabel = (m: string | null) =>
     m === "db" ? t("method_db") : m === "json" ? t("method_json") : m === "local" ? t("method_local") : m === "hm-full" ? t("method_hm_full") : m === "pg-full" ? t("method_pg_full") : m === "rb-full" ? t("method_rb_full") : "—";
@@ -339,7 +369,7 @@ export function BackupsTab({ runs, onRefresh }: { runs: BackupRunDTO[]; onRefres
               </TableHeader>
               <TableBody>
                 {rows.map((r) => (
-                  <TableRow key={r.id} className="group" data-state={selected.has(r.id) ? "selected" : undefined}>
+                  <TableRow key={r.id} className="group data-[state=selected]:bg-primary/5" data-state={selected.has(r.id) ? "selected" : undefined}>
                     <TableCell>
                       <Checkbox
                         checked={selected.has(r.id)}
@@ -397,7 +427,10 @@ export function BackupsTab({ runs, onRefresh }: { runs: BackupRunDTO[]; onRefres
                       ) : r.status === "failed" ? (
                         <Badge variant="destructive" className="text-[10px]">{t("failed")}</Badge>
                       ) : (
-                        <Badge variant="outline" className="text-[10px]">{t("running_now")}</Badge>
+                        <Badge variant="outline" className="gap-1 border-emerald-500/40 text-[10px] text-emerald-700">
+                          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
+                          {t("running_now")}
+                        </Badge>
                       )}
                     </TableCell>
                     <TableCell className="text-end">
@@ -419,6 +452,19 @@ export function BackupsTab({ runs, onRefresh }: { runs: BackupRunDTO[]; onRefres
                           <Button variant="ghost" size="icon" className="h-7 w-7" asChild>
                             <a href={`/api/backups/${r.id}/download`} download title={t("download")}>
                               <Download className="h-3.5 w-3.5" />
+                            </a>
+                          </Button>
+                        )}
+                        {!r.tgDeleted && tgUrl.has(r.id) && (
+                          <Button variant="ghost" size="icon" className="h-7 w-7" asChild>
+                            <a
+                              href={tgUrl.get(r.id)}
+                              target="_blank"
+                              rel="noreferrer noopener"
+                              title={t("open_in_tg")}
+                              aria-label={t("open_in_tg")}
+                            >
+                              <Send className="h-3.5 w-3.5" />
                             </a>
                           </Button>
                         )}

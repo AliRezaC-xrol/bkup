@@ -522,6 +522,21 @@ export const dict = {
   backups_search_clear: "Clear search",
   theme_to_dark: "Switch to dark mode",
   theme_to_light: "Switch to light mode",
+
+  // telegram deep links
+  open_in_tg: "Open in Telegram",
+  tg_link_unavailable: "Telegram chat is not configured",
+
+  // browser failure notifications
+  notify_enable: "Notify on failures",
+  notify_disable: "Failure notifications are on",
+  notify_denied: "Notification permission was blocked — allow it in the browser settings",
+  notify_on: "Desktop notifications for failed backups are on",
+  notify_fail_title: "Backup failed",
+
+  // dashboard panel health strip
+  health_no_runs: "No backups yet",
+  health_open_hint: "Show in Backups",
 } as const;
 
 export type DictKey = keyof typeof dict;
