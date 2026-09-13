@@ -12,11 +12,11 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Combine, Download, Trash2, UploadCloud, Inbox, Archive, Check, X, Search, ChevronRight } from "lucide-react";
+import { Combine, Download, Trash2, UploadCloud, Inbox, Archive, Check, X, Search, ChevronRight, AlertTriangle, Plus } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useLang } from "@/components/dashboard/lang";
 import { formatBytes } from "@/components/dashboard/types";
-import { compareParts, parsePartIndex } from "@/lib/reassembly";
+import { compareParts, findPartGaps, parsePartIndex, stripPartFromName } from "@/lib/reassembly";
 
 export interface ReassembledDTO {
   id: number;
@@ -44,6 +44,16 @@ interface BackupChoice {
 
 const panelShort = (panel: string) =>
   panel === "hmpanel" ? "HM" : panel === "pasarguard" ? "PG" : panel === "rebecca" ? "RB" : "3X";
+
+// "[2, 2, 5]" -> "P2 ×2, P5" — several sets can miss the same part number
+const formatMissing = (parts: number[]) =>
+  [...new Set(parts)]
+    .sort((a, b) => a - b)
+    .map((n) => {
+      const count = parts.filter((x) => x === n).length;
+      return count > 1 ? `P${n} ×${count}` : `P${n}`;
+    })
+    .join(", ");
 
 // Memoized row: picking one backup only re-renders the two rows whose
 // selection changed — not the whole list.
@@ -98,8 +108,11 @@ const HistoryRow = memo(function HistoryRow({
   return (
     <TableRow className="group">
       <TableCell className="whitespace-nowrap text-xs tabular-nums">{fmtTime(row.createdAt)}</TableCell>
-      <TableCell className="max-w-56">
-        <span className="block truncate text-xs font-medium" dir="ltr" title={row.name}>{row.name}</span>
+      <TableCell className="max-w-64">
+        <div className="flex items-center gap-1.5">
+          <span className="block truncate text-xs font-medium" dir="ltr" title={row.name}>{row.name}</span>
+          <Badge variant="outline" className="shrink-0 text-[10px] uppercase">{panelShort(row.panel)}</Badge>
+        </div>
       </TableCell>
       <TableCell><Badge variant="outline" className="text-[10px]">{row.parts}</Badge></TableCell>
       <TableCell className="text-xs tabular-nums">{formatBytes(row.size)}</TableCell>
@@ -131,6 +144,7 @@ export function ReassemblyTab() {
   const { toast } = useToast();
   const inputRef = useRef<HTMLInputElement>(null);
   const [files, setFiles] = useState<File[]>([]);
+  const [dragOver, setDragOver] = useState(false);
   const [busy, setBusy] = useState(false);
   const [history, setHistory] = useState<ReassembledDTO[]>([]);
   const [deleting, setDeleting] = useState<ReassembledDTO | null>(null);
@@ -170,6 +184,54 @@ export function ReassemblyTab() {
       .filter((n): n is number => typeof n === "number");
     return new Set(idx).size !== idx.length;
   }, [orderedSelected]);
+  // incomplete part sets: a declared "partNofM" whose siblings were not picked
+  // (or a hole between picked part numbers) — merging would corrupt the file
+  const gaps = useMemo(
+    () => findPartGaps(orderedSelected.map((c) => c.fileName ?? "")),
+    [orderedSelected]
+  );
+  const missingParts = useMemo(
+    () => gaps.flatMap((g) => g.missing).sort((a, b) => a - b),
+    [gaps]
+  );
+  // the missing siblings that ARE available in the picker — one click fixes it
+  const missingChoiceIds = useMemo(() => {
+    if (gaps.length === 0) return [] as number[];
+    const ids: number[] = [];
+    for (const c of choices) {
+      const fileName = c.fileName;
+      if (selectedSet.has(c.id) || !fileName) continue;
+      const p = parsePartIndex(fileName);
+      if (!p) continue;
+      const gap = gaps.find((g) => g.base === stripPartFromName(fileName));
+      if (gap?.missing.includes(p.index)) ids.push(c.id);
+    }
+    return ids;
+  }, [gaps, choices, selectedSet]);
+  // merge-order chips with ghost placeholders so the hole is visible exactly
+  // where it falls (P1 → P2? → P3) — only when every pick carries a part number
+  const chipRow = useMemo(() => {
+    if (missingParts.length === 0) {
+      return orderedSelected.map((c) => ({
+        key: `s${c.id}`,
+        label: c.fileName ? (parsePartIndex(c.fileName) ? `P${parsePartIndex(c.fileName)!.index}` : (c.fileName ?? `#${c.id}`).slice(0, 12)) : `#${c.id}`,
+        ghost: false,
+      }));
+    }
+    if (!orderedSelected.every((c) => c.fileName && parsePartIndex(c.fileName))) return [];
+    type Chip = { key: string; index: number; label: string; ghost: boolean };
+    const chips: Chip[] = orderedSelected.map((c) => ({
+      key: `s${c.id}`,
+      index: parsePartIndex(c.fileName!)!.index,
+      label: `P${parsePartIndex(c.fileName!)!.index}`,
+      ghost: false,
+    }));
+    for (const n of missingParts) {
+      if (chips.some((c) => c.index === n)) continue;
+      chips.push({ key: `g${n}`, index: n, label: `P${n}`, ghost: true });
+    }
+    return chips.sort((a, b) => a.index - b.index);
+  }, [orderedSelected, missingParts]);
 
   const loadHistory = useCallback(async () => {
     try {
@@ -205,6 +267,11 @@ export function ReassemblyTab() {
   }, []);
 
   const clearSelection = useCallback(() => setSelectedIds([]), []);
+
+  // ticks the picker rows that hold the missing parts of the selected sets
+  const addMissingParts = useCallback(() => {
+    setSelectedIds((cur) => Array.from(new Set([...cur, ...missingChoiceIds])));
+  }, [missingChoiceIds]);
 
   // ticks every row that passes the current filter — existing picks are kept
   const selectShown = useCallback(() => {
@@ -270,7 +337,9 @@ export function ReassemblyTab() {
         const body = (await res.json().catch(() => null)) as { error?: string } | null;
         const msg = body?.error === "BACKUP_FILE_GONE" || body?.error === "BACKUP_NOT_COMPLETE"
           ? t("reassembly_backup_gone")
-          : body?.error ?? t("error");
+          : body?.error === "MISSING_PARTS"
+            ? t("reassembly_blocked")
+            : body?.error ?? t("error");
         toast({ title: msg, variant: "destructive" });
       }
     } finally {
@@ -323,12 +392,33 @@ export function ReassemblyTab() {
           </div>
 
           {source === "upload" ? (
-            <Input
-              ref={inputRef}
-              type="file"
-              multiple
-              onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
-            />
+            <label
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDragOver(true);
+              }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragOver(false);
+                const dropped = Array.from(e.dataTransfer.files);
+                if (dropped.length > 0) setFiles(dropped);
+              }}
+              className={`flex cursor-pointer flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed p-6 text-center transition-colors ${
+                dragOver ? "border-primary bg-primary/5" : "hover:bg-muted/50"
+              }`}
+            >
+              <input
+                ref={inputRef}
+                type="file"
+                multiple
+                className="sr-only"
+                onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
+              />
+              <UploadCloud className={`h-6 w-6 transition-colors ${dragOver ? "text-primary" : "text-muted-foreground"}`} />
+              <span className="text-sm font-medium">{t("reassembly_drop_hint")}</span>
+              <span className="text-xs text-muted-foreground">{t("reassembly_pick")}</span>
+            </label>
           ) : choices.length === 0 && !choicesLoading ? (
             <div className="rounded-lg border border-dashed py-8 text-center text-sm text-muted-foreground">
               <Inbox className="mx-auto mb-2 h-8 w-8 opacity-40" />
@@ -388,6 +478,22 @@ export function ReassemblyTab() {
                     {dupParts && (
                       <Badge variant="destructive" className="text-[10px]">{t("reassembly_dup_parts")}</Badge>
                     )}
+                    {missingParts.length > 0 && (
+                      <Badge variant="destructive" className="gap-1 text-[10px] tabular-nums">
+                        <AlertTriangle className="h-3 w-3" />
+                        {t("reassembly_missing_lbl")}: {formatMissing(missingParts)}
+                      </Badge>
+                    )}
+                    {missingChoiceIds.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={addMissingParts}
+                        className="flex items-center gap-1 rounded-md border border-dashed border-primary/50 px-2 py-1 text-[11px] font-medium text-primary transition-colors hover:bg-primary/10"
+                      >
+                        <Plus className="h-3 w-3" />
+                        {t("reassembly_add_missing")} ({missingChoiceIds.length})
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={clearSelection}
@@ -397,22 +503,39 @@ export function ReassemblyTab() {
                       {t("reassembly_clear")}
                     </button>
                   </div>
-                  <div className="flex flex-wrap items-center gap-1" title={orderedSelected.map((c) => c.fileName ?? `#${c.id}`).join(" → ")}>
-                    {orderedSelected.slice(0, 10).map((c, i) => {
-                      const p = c.fileName ? parsePartIndex(c.fileName) : null;
-                      return (
-                        <span key={c.id} className="inline-flex items-center gap-1">
-                          {i > 0 && <ChevronRight className="h-3 w-3 text-muted-foreground/50" />}
-                          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-foreground/80">
-                            {p ? `P${p.index}` : (c.fileName ?? `#${c.id}`).slice(0, 12)}
+                  {chipRow.length > 0 && (
+                    <div
+                      className="flex flex-wrap items-center gap-1"
+                      title={orderedSelected.map((c) => c.fileName ?? `#${c.id}`).join(" → ")}
+                    >
+                      {chipRow.slice(0, 14).map((chip, i) =>
+                        chip.ghost ? (
+                          <span
+                            key={chip.key}
+                            className="inline-flex items-center gap-1"
+                          >
+                            {i > 0 && <ChevronRight className="h-3 w-3 text-muted-foreground/50" />}
+                            <span
+                              className="rounded border border-dashed border-destructive/60 px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-destructive"
+                              title={t("reassembly_missing_lbl")}
+                            >
+                              {chip.label}
+                            </span>
                           </span>
-                        </span>
-                      );
-                    })}
-                    {orderedSelected.length > 10 && (
-                      <span className="text-[10px] tabular-nums text-muted-foreground">+{orderedSelected.length - 10}</span>
-                    )}
-                  </div>
+                        ) : (
+                          <span key={chip.key} className="inline-flex items-center gap-1">
+                            {i > 0 && <ChevronRight className="h-3 w-3 text-muted-foreground/50" />}
+                            <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-foreground/80">
+                              {chip.label}
+                            </span>
+                          </span>
+                        )
+                      )}
+                      {chipRow.length > 14 && (
+                        <span className="text-[10px] tabular-nums text-muted-foreground">+{chipRow.length - 14}</span>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

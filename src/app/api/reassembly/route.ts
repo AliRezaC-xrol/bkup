@@ -6,7 +6,7 @@ import { requireAuthOrCli } from "@/lib/auth";
 import { log } from "@/lib/logger";
 import { bi } from "@/lib/messages";
 import { backupDir } from "@/lib/backup-service";
-import { compareParts, detectPanel, parsePartIndex, stripPartFromName } from "@/lib/reassembly";
+import { compareParts, detectPanel, findPartGaps, parsePartIndex, stripPartFromName } from "@/lib/reassembly";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -62,6 +62,14 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "BACKUP_FILE_GONE" }, { status: 409 });
       }
       usable.push({ id: run.id, fileName: run.fileName ?? "", filePath: run.filePath });
+    }
+
+    // refuse incomplete part sets: merging them would silently produce a
+    // corrupt "complete" backup. The picker warns and offers a fix first;
+    // this is the last line of defense so a bad file can never be stored.
+    const gaps = findPartGaps(usable.map((r) => r.fileName));
+    if (gaps.length > 0) {
+      return NextResponse.json({ error: "MISSING_PARTS", gaps }, { status: 409 });
     }
 
     const dir = path.join(backupDir(), "reassembled");
