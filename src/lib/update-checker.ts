@@ -64,7 +64,7 @@ async function checkOnce() {
     if (!latest.tag || !latest.version) return; // unreachable / no releases — silent
     if (!isNewer(latest.tag, APP_VERSION)) return; // up to date
 
-    await log("warn", bi(`نسخه جدید bkup منتشر شده: ${latest.tag} (نصب‌شده: v${APP_VERSION}) — از وب‌پنل (سیستم → به‌روزرسانی) یا منوی ترمینال (گزینه 7) نصب کنید`, `A new bkup version was released: ${latest.tag} (installed: v${APP_VERSION}) — install it from the web panel (System → Update) or the terminal menu (option 7)`));
+    await log("warn", bi(`A new bkup version was released: ${latest.tag} (installed: v${APP_VERSION}) — install it from the web panel (System → Update) or the terminal menu (option 7)`, `A new bkup version was released: ${latest.tag} (installed: v${APP_VERSION}) — install it from the web panel (System → Update) or the terminal menu (option 7)`));
 
     const tag = latest.tag;
     if (readNotified() === tag) return; // already announced this release

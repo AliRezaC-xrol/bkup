@@ -217,27 +217,29 @@ export function SystemTab({
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
-            {info?.updateAvailable ? (
-              <Badge className="border-border bg-primary text-primary-foreground">
-                <AlertTriangle className="me-1 h-3 w-3" />
-                {t("update_badge")}
-              </Badge>
-            ) : (
-              <Badge variant="outline" className="border-border text-foreground">
-                <CheckCircle2 className="me-1 h-3 w-3" />
-                {t("up_to_date")}
-              </Badge>
-            )}
-            <div className="ms-auto flex flex-wrap gap-2">
-              <Button variant="outline" onClick={checkUpdate} disabled={checking} className="gap-2">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              {info?.updateAvailable ? (
+                <Badge className="border-border bg-primary text-primary-foreground">
+                  <AlertTriangle className="me-1 h-3 w-3" />
+                  {t("update_badge")}
+                </Badge>
+              ) : (
+                <Badge variant="outline" className="border-border text-foreground">
+                  <CheckCircle2 className="me-1 h-3 w-3" />
+                  {t("up_to_date")}
+                </Badge>
+              )}
+            </div>
+            <div className="flex w-full justify-center gap-3 sm:w-auto sm:justify-center">
+              <Button variant="outline" onClick={checkUpdate} disabled={checking} className="flex-1 justify-center gap-2 sm:flex-none">
                 {checking ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                 {checking ? t("checking") : t("check_update")}
               </Button>
               <Button
                 onClick={runUpdate}
                 disabled={updating || !info?.updateAvailable}
-                className="gap-2"
+                className="flex-1 justify-center gap-2 sm:flex-none"
               >
                 {updating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
                 {updating ? t("updating") : t("update_now")}

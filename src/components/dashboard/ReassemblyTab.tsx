@@ -147,7 +147,7 @@ export function ReassemblyTab() {
               </ol>
             </div>
           )}
-          <Button onClick={reassemble} disabled={busy || sorted.length === 0} className="gap-1.5">
+          <Button onClick={reassemble} disabled={busy || sorted.length === 0} className="w-full gap-1.5">
             {busy ? <Combine className="h-4 w-4 animate-pulse" /> : <UploadCloud className="h-4 w-4" />}
             {t("reassembly_run")}
           </Button>

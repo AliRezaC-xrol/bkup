@@ -42,8 +42,6 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 local-*
-.claude
-.z-ai-config
 *.log
 dev.log
 dev.out.log
@@ -51,9 +49,6 @@ test
 prompt
 
 server.log
-# Skills directory
-/skills/
-
 # ---- runtime data (never publish) ----
 db/*.db
 /backups/
@@ -62,10 +57,7 @@ db/*.db
 scripts/mock-tg-received/
 *.zip
 
-# ---- sandbox / internal ----
-.zscripts/
-agent-ctx/
-worklog.md
+# ---- internal ----
 /research/
 /examples/
 /tests/

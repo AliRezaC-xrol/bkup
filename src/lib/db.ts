@@ -11,14 +11,59 @@ const globalForPrisma = globalThis as unknown as {
 }
 
 function createClient(): PrismaClient {
-  return new PrismaClient({
-    log:
-      process.env.NODE_ENV === 'production'
-        ? ['error', 'warn']
-        : ['query', 'error', 'warn'],
-  })
+  // During Next.js production build, Prisma engine may not be available
+  // (network failure to download binaries). Return a dummy that won't be
+  // used at build time — API routes are force-dynamic and skip static generation.
+  if (process.env.NEXT_PHASE === 'phase-production-build') {
+    return new Proxy({} as PrismaClient, {
+      get(_target, prop) {
+        if (prop === 'then') return undefined;
+        // Return a dummy function that throws only if actually called during build
+        return () => {
+          throw new Error('PrismaClient used during build — should be dynamic');
+        };
+      },
+    });
+  }
+  try {
+    return new PrismaClient({
+      log:
+        process.env.NODE_ENV === 'production'
+          ? ['error', 'warn']
+          : ['query', 'error', 'warn'],
+    });
+  } catch (e) {
+    // Fallback for build environments where Prisma engine is missing
+    if (process.env.NEXT_PHASE === 'phase-production-build') {
+      return new Proxy({} as PrismaClient, {
+        get(_target, prop) {
+          if (prop === 'then') return undefined;
+          return () => {
+            throw new Error('PrismaClient used during build');
+          };
+        },
+      });
+    }
+    throw e;
+  }
 }
 
-export const db = globalForPrisma.prisma ?? createClient()
+let _db: PrismaClient | undefined = globalForPrisma.prisma;
+if (!_db) {
+  try {
+    _db = createClient();
+  } catch {
+    // During build, create dummy
+    _db = new Proxy({} as PrismaClient, {
+      get(_target, prop) {
+        if (prop === 'then') return undefined;
+        return () => {
+          throw new Error('PrismaClient used during build');
+        };
+      },
+    });
+  }
+  globalForPrisma.prisma = _db;
+}
 
-globalForPrisma.prisma = db
+export const db = _db as PrismaClient

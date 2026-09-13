@@ -6,17 +6,18 @@ import { Badge } from "@/components/ui/badge";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import {
   LayoutDashboard, DatabaseBackup, Settings, ScrollText, ServerCog,
-  LogOut, Menu, Zap, Loader2, Layers,
+  LogOut, Menu, Zap, Loader2, Layers, RotateCcw,
 } from "lucide-react";
 import { useLang } from "@/components/dashboard/lang";
 import type { DictKey } from "@/lib/i18n";
 
-export type TabKey = "dashboard" | "backups" | "reassembly" | "settings" | "logs" | "system";
+export type TabKey = "dashboard" | "backups" | "reassembly" | "restore" | "settings" | "logs" | "system";
 
 const NAV: { key: TabKey; icon: React.ReactNode; label: DictKey }[] = [
   { key: "dashboard", icon: <LayoutDashboard className="h-4.5 w-4.5" />, label: "nav_dashboard" },
   { key: "backups", icon: <DatabaseBackup className="h-4.5 w-4.5" />, label: "nav_backups" },
   { key: "reassembly", icon: <Layers className="h-4.5 w-4.5" />, label: "nav_reassembly" },
+  { key: "restore", icon: <RotateCcw className="h-4.5 w-4.5" />, label: "nav_restore" },
   { key: "settings", icon: <Settings className="h-4.5 w-4.5" />, label: "nav_settings" },
   { key: "logs", icon: <ScrollText className="h-4.5 w-4.5" />, label: "nav_logs" },
   { key: "system", icon: <ServerCog className="h-4.5 w-4.5" />, label: "nav_system" },
@@ -59,15 +60,12 @@ import type { SystemInfoDTO } from "@/components/dashboard/types";
 
 export function Brand({ compact }: { compact?: boolean }) {
   return (
-    <div className="flex items-center gap-3">
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground">
+    <div className={`flex items-center gap-2.5 ${compact ? "" : "justify-start"}`}>
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground">
         <DatabaseBackup className="h-5 w-5" />
       </div>
       {!compact && (
-        <div className="leading-tight">
-          <p className="text-sm font-extrabold tracking-wide" dir="ltr">bkup</p>
-          <p className="text-[11px] text-muted-foreground" dir="ltr">3x-ui / HMPanel / PasarGuard / Rebecca → Telegram</p>
-        </div>
+        <p className="text-[15px] font-extrabold tracking-wide" dir="ltr">bkup</p>
       )}
     </div>
   );

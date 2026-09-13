@@ -400,11 +400,13 @@ export function SettingsTab({ config, onSaved, onPasswordChanged }: Props) {
             <p className="flex items-center gap-1 text-xs text-muted-foreground">
               <Info className="h-3 w-3" /> {t("panel_type_hm_desc")}
             </p>
-            <div className="flex items-center justify-between rounded-lg border p-3">
-              <div className="space-y-0.5">
+            <div className="flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="space-y-0.5 shrink-0">
                 <Label>{t("settings_backup")}</Label>
               </div>
-              <Input disabled className="w-44 text-center" value={t("method_hm_full")} />
+              <span className="rounded-md border bg-muted px-3 py-2 text-sm break-words sm:max-w-[60%] sm:text-end">
+                {t("method_hm_full")}
+              </span>
             </div>
             <Button variant="outline" onClick={() => testPanel("hmpanel")} disabled={testingHm} className="w-full sm:w-auto">
               {testingHm ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
@@ -457,11 +459,13 @@ export function SettingsTab({ config, onSaved, onPasswordChanged }: Props) {
             <p className="flex items-center gap-1 text-xs text-muted-foreground">
               <Info className="h-3 w-3" /> {t("panel_type_pg_desc")}
             </p>
-            <div className="flex items-center justify-between rounded-lg border p-3">
-              <div className="space-y-0.5">
+            <div className="flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="space-y-0.5 shrink-0">
                 <Label>{t("settings_backup")}</Label>
               </div>
-              <Input disabled className="w-44 text-center" value={t("method_pg_full")} />
+              <span className="rounded-md border bg-muted px-3 py-2 text-sm break-words sm:max-w-[60%] sm:text-end">
+                {t("method_pg_full")}
+              </span>
             </div>
             <Button variant="outline" onClick={() => testPanel("pasarguard")} disabled={testingPg} className="w-full sm:w-auto">
               {testingPg ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
@@ -514,11 +518,13 @@ export function SettingsTab({ config, onSaved, onPasswordChanged }: Props) {
             <p className="flex items-center gap-1 text-xs text-muted-foreground">
               <Info className="h-3 w-3" /> {t("panel_type_rb_desc")}
             </p>
-            <div className="flex items-center justify-between rounded-lg border p-3">
-              <div className="space-y-0.5">
+            <div className="flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="space-y-0.5 shrink-0">
                 <Label>{t("settings_backup")}</Label>
               </div>
-              <Input disabled className="w-44 text-center" value={t("method_rb_full")} />
+              <span className="rounded-md border bg-muted px-3 py-2 text-sm break-words sm:max-w-[70%] sm:text-end">
+                {t("method_rb_full")}
+              </span>
             </div>
             <Button variant="outline" onClick={() => testPanel("rebecca")} disabled={testingRebecca} className="w-full sm:w-auto">
               {testingRebecca ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}

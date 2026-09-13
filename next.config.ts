@@ -33,6 +33,12 @@ const nextConfig: NextConfig = {
   // Resource/privacy optimization: no framework fingerprint header,
   // gzip compression stays enabled (default) for smaller HTTP payloads.
   poweredByHeader: false,
+  // ssh2 is a native Node.js CommonJS module with dynamic requires (crypto
+  // bindings) that Turbopack cannot bundle into ESM chunks. Marking it as a
+  // server external package tells Next.js to require it at runtime from
+  // node_modules instead of trying to bundle it — same approach Next.js
+  // recommends for database drivers, sharp, etc.
+  serverExternalPackages: ["ssh2"],
 };
 
 export default nextConfig;

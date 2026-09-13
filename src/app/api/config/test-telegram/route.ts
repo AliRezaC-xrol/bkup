@@ -40,8 +40,8 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       ok: true,
-      message: "پیام تست با موفقیت به تلگرام ارسال شد",
-      messageBi: bi("پیام تست با موفقیت به تلگرام ارسال شد", "The test message was sent to Telegram successfully"),
+      message: "The test message was sent to Telegram successfully",
+      messageBi: bi("The test message was sent to Telegram successfully", "The test message was sent to Telegram successfully"),
     });
   } catch (e: unknown) {
     const raw = e instanceof Error ? e.message : String(e ?? "unknown");

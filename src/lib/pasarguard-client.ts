@@ -54,11 +54,11 @@ function axiosFor(cfg: AppConfig, timeout = REQ_TIMEOUT_MS): AxiosInstance {
 /** Bilingual axios error text. */
 function pgErrMsg(e: unknown): Bi {
   if (axios.isAxiosError(e)) {
-    if (e.code === "ECONNREFUSED") return bi("اتصال رد شد (سرویس PasarGuard در دسترس نیست)", "Connection refused (the PasarGuard service is unreachable)");
-    if (e.code === "ETIMEDOUT" || e.code === "ECONNABORTED") return bi("مهلت اتصال به پایان رسید", "The connection timed out");
-    if (e.code === "ENOTFOUND") return bi("هاست پیدا نشد", "Host not found");
+    if (e.code === "ECONNREFUSED") return bi("Connection refused (the PasarGuard service is unreachable)", "Connection refused (the PasarGuard service is unreachable)");
+    if (e.code === "ETIMEDOUT" || e.code === "ECONNABORTED") return bi("The connection timed out", "The connection timed out");
+    if (e.code === "ENOTFOUND") return bi("Host not found", "Host not found");
     if (e.code === "CERT_HAS_EXPIRED" || e.code === "DEPTH_ZERO_SELF_SIGNED_CERT") {
-      return bi("گواهی SSL نامعتبر است (گزینه نادیده‌گرفتن SSL را فعال کنید)", "Invalid SSL certificate (enable the ignore-SSL option)");
+      return bi("Invalid SSL certificate (enable the ignore-SSL option)", "Invalid SSL certificate (enable the ignore-SSL option)");
     }
     return bi(e.message, e.message);
   }
@@ -75,9 +75,9 @@ export function pgNormalizeUrl(raw: string): string {
 
 /** Login → Bearer token. Accepts any 2xx with access_token. */
 async function pgLogin(cfg: AppConfig): Promise<PgResult<{ token: string }>> {
-  if (!cfg.pgUrl.trim()) return fail("آدرس PasarGuard تنظیم نشده است", "PasarGuard URL is not configured");
+  if (!cfg.pgUrl.trim()) return fail("PasarGuard URL is not configured", "PasarGuard URL is not configured");
   if (!cfg.pgUsername.trim() || !cfg.pgPassword) {
-    return fail("نام کاربری و رمز عبور PasarGuard را وارد کنید (حساب ادمین)", "Enter the PasarGuard username and password (an admin account)");
+    return fail("Enter the PasarGuard username and password (an admin account)", "Enter the PasarGuard username and password (an admin account)");
   }
 
   const base = pgNormalizeUrl(cfg.pgUrl);
@@ -97,7 +97,7 @@ async function pgLogin(cfg: AppConfig): Promise<PgResult<{ token: string }>> {
     });
   } catch (e: unknown) {
     const m = pgErrMsg(e);
-    return fail(`ورود به PasarGuard ناموفق بود: ${m.fa}`, `PasarGuard login failed: ${m.en}`);
+    return fail(`PasarGuard login failed: ${m.en}`, `PasarGuard login failed: ${m.en}`);
   }
 
   const body = (res.data ?? {}) as Record<string, unknown>;
@@ -113,42 +113,30 @@ async function pgLogin(cfg: AppConfig): Promise<PgResult<{ token: string }>> {
   if (res.status >= 200 && res.status < 300 && !tokenRaw) {
     const keys = Object.keys(body).join(", ") || "—";
     return {
-      ...fail(
-        `PasarGuard ورود را تایید کرد (HTTP ${res.status}) ولی توکن در پاسخ نبود (کلیدهای دریافتی: ${keys})`,
-        `PasarGuard accepted the login (HTTP ${res.status}) but no token was in the response (received keys: ${keys})`
-      ),
+      ...fail(`PasarGuard accepted the login (HTTP ${res.status}) but no token was in the response (received keys: ${keys})`, `PasarGuard accepted the login (HTTP ${res.status}) but no token was in the response (received keys: ${keys})`),
       status: res.status,
     };
   }
   if (res.status === 401) {
     return {
-      ...fail(
-        "ورود به PasarGuard ناموفق بود — نام کاربری یا رمز عبور اشتباه است",
-        "PasarGuard login failed — wrong username or password"
-      ),
+      ...fail("PasarGuard login failed — wrong username or password", "PasarGuard login failed — wrong username or password"),
       status: 401,
     };
   }
   if (res.status === 403) {
     return {
-      ...fail("این حساب PasarGuard غیرفعال شده است", "This PasarGuard account is disabled"),
+      ...fail("This PasarGuard account is disabled", "This PasarGuard account is disabled"),
       status: 403,
     };
   }
   if (res.status === 404) {
     return {
-      ...fail(
-        `مسیر ${base}/api/admin/token پیدا نشد — این آدرس یک پنل PasarGuard نیست (نسخه قدیمی یا سرویس دیگر)`,
-        `The path ${base}/api/admin/token was not found — this address is not a PasarGuard panel (older version or another service)`
-      ),
+      ...fail(`The path ${base}/api/admin/token was not found — this address is not a PasarGuard panel (older version or another service)`, `The path ${base}/api/admin/token was not found — this address is not a PasarGuard panel (older version or another service)`),
       status: 404,
     };
   }
   return {
-    ...fail(
-      `ورود به PasarGuard ناموفق بود (HTTP ${res.status} روی ${base})`,
-      `PasarGuard login failed (HTTP ${res.status} on ${base})`
-    ),
+    ...fail(`PasarGuard login failed (HTTP ${res.status} on ${base})`, `PasarGuard login failed (HTTP ${res.status} on ${base})`),
     status: res.status,
   };
 }
@@ -201,10 +189,7 @@ export async function pgFullBackup(
         files.push({ name: `${sec.name}.json`, json: JSON.stringify(res.data, null, 2) });
       } else if (sec.required) {
         return {
-          ...fail(
-            `دریافت «${sec.name}» از PasarGuard ناموفق بود (HTTP ${res.status} روی ${sec.path})`,
-            `Fetching "${sec.name}" from PasarGuard failed (HTTP ${res.status} on ${sec.path})`
-          ),
+          ...fail(`Fetching "${sec.name}" from PasarGuard failed (HTTP ${res.status} on ${sec.path})`, `Fetching "${sec.name}" from PasarGuard failed (HTTP ${res.status} on ${sec.path})`),
           status: res.status,
         };
       } else {
@@ -213,7 +198,7 @@ export async function pgFullBackup(
     } catch (e: unknown) {
       if (sec.required) {
         const m = pgErrMsg(e);
-        return fail(`دریافت «${sec.name}» ناموفق بود: ${m.fa}`, `Fetching "${sec.name}" failed: ${m.en}`);
+        return fail(`Fetching "${sec.name}" failed: ${m.en}`, `Fetching "${sec.name}" failed: ${m.en}`);
       }
       notes.push(`${sec.name}: ${pgErrMsg(e).en} - skipped`);
     }
@@ -238,7 +223,7 @@ export async function pgFullBackup(
     files.push({ name: "users.json", json: JSON.stringify({ total: all.length, users: all }, null, 2) });
   } catch (e: unknown) {
     const m = pgErrMsg(e);
-    return fail(`دریافت کاربران PasarGuard ناموفق بود: ${m.fa}`, `Fetching PasarGuard users failed: ${m.en}`);
+    return fail(`Fetching PasarGuard users failed: ${m.en}`, `Fetching PasarGuard users failed: ${m.en}`);
   }
 
   const manifest = {
@@ -292,7 +277,7 @@ function buildTar(entries: { name: string; data: Buffer }[]): Buffer {
   return Buffer.concat(blocks);
 }
 
-/** Connection test used by the «تست اتصال» button: login + version + user count. */
+/** Connection test used by the «Test connection» button: login + version + user count. */
 export async function pgTestConnection(
   cfg: AppConfig
 ): Promise<PgResult<{ base: string; username: string; pgVersion?: string }>> {

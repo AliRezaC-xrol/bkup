@@ -112,7 +112,7 @@ export async function hmDetectBase(cfg: AppConfig): Promise<HmResult<HmProbe>> {
   if (g.__hmBase && g.__hmBase.key === key) return { ok: true, data: g.__hmBase };
 
   const candidates = hmBaseCandidates(cfg.hmUrl);
-  if (candidates.length === 0) return fail("آدرس HMPanel تنظیم نشده است", "HMPanel URL is not configured");
+  if (candidates.length === 0) return fail("HMPanel URL is not configured", "HMPanel URL is not configured");
 
   const ax = axiosFor(cfg, 12000);
   const tried: string[] = [];
@@ -136,10 +136,7 @@ export async function hmDetectBase(cfg: AppConfig): Promise<HmResult<HmProbe>> {
       tried.push(`${base}/health -> ${hmErrMsg(e).en}`);
     }
   }
-  return fail(
-    `اتصال به HMPanel برقرار نشد — هیچ‌کدام از مسیرهای API پیدا نشدند (${tried.join(" | ")})`,
-    `Could not reach HMPanel — none of the API paths responded (${tried.join(" | ")})`
-  );
+  return fail(`Could not reach HMPanel — none of the API paths responded (${tried.join(" | ")})`, `Could not reach HMPanel — none of the API paths responded (${tried.join(" | ")})`);
 }
 
 /** Login to HMPanel and cache the JWT. Uses the health-detected base. */
@@ -152,9 +149,9 @@ export async function hmLogin(
     return { ok: true, data: cached }; // access token valid ~24h; login is rate-limited → reuse
   }
 
-  if (!cfg.hmUrl.trim()) return fail("آدرس HMPanel تنظیم نشده است", "HMPanel URL is not configured");
+  if (!cfg.hmUrl.trim()) return fail("HMPanel URL is not configured", "HMPanel URL is not configured");
   if (!cfg.hmUsername.trim() || !cfg.hmPassword) {
-    return fail("نام کاربری و رمز عبور HMPanel را وارد کنید (حساب SUPER_ADMIN)", "Enter the HMPanel username and password (a SUPER_ADMIN account)");
+    return fail("Enter the HMPanel username and password (a SUPER_ADMIN account)", "Enter the HMPanel username and password (a SUPER_ADMIN account)");
   }
 
   const probe = await hmDetectBase(cfg);
@@ -169,7 +166,7 @@ export async function hmLogin(
     });
   } catch (e: unknown) {
     const m = hmErrMsg(e);
-    return fail(`ورود به HMPanel ناموفق بود: ${m.fa}`, `HMPanel login failed: ${m.en}`);
+    return fail(`HMPanel login failed: ${m.en}`, `HMPanel login failed: ${m.en}`);
   }
 
   // 2xx = success (official hmpanel answers **201** on login — NestJS default).
@@ -213,36 +210,24 @@ export async function hmLogin(
   if (res.status >= 200 && res.status < 300 && !tokenRaw) {
     const keys = Object.keys(body).join(", ") || "—";
     return {
-      ...fail(
-        `HMPanel ورود را تایید کرد (HTTP ${res.status}) ولی توکن در پاسخ نبود (کلیدهای دریافتی: ${keys}) — نسخه پنل با API مورد انتظار فرق دارد`,
-        `HMPanel accepted the login (HTTP ${res.status}) but no token was in the response (received keys: ${keys}) — the panel version differs from the expected API`
-      ),
+      ...fail(`HMPanel accepted the login (HTTP ${res.status}) but no token was in the response (received keys: ${keys}) — the panel version differs from the expected API`, `HMPanel accepted the login (HTTP ${res.status}) but no token was in the response (received keys: ${keys}) — the panel version differs from the expected API`),
       status: res.status,
     };
   }
   if (res.status === 401 || res.status === 403) {
     return {
-      ...fail(
-        "ورود به HMPanel ناموفق بود — نام کاربری/رمز عبور اشتباه است یا این حساب ادمین کل (SUPER_ADMIN) نیست",
-        "HMPanel login failed — wrong username/password or this account is not a SUPER_ADMIN"
-      ),
+      ...fail("HMPanel login failed — wrong username/password or this account is not a SUPER_ADMIN", "HMPanel login failed — wrong username/password or this account is not a SUPER_ADMIN"),
       status: res.status,
     };
   }
   if (res.status === 429) {
     return {
-      ...fail(
-        "تعداد تلاش‌های ورود زیاد است (محدودیت سرور پنل) — یک دقیقه بعد دوباره امتحان کنید",
-        "Too many login attempts (panel rate limit) — try again in a minute"
-      ),
+      ...fail("Too many login attempts (panel rate limit) — try again in a minute", "Too many login attempts (panel rate limit) — try again in a minute"),
       status: 429,
     };
   }
   return {
-    ...fail(
-      `ورود به HMPanel ناموفق بود (HTTP ${res.status} روی ${probe.data.base})`,
-      `HMPanel login failed (HTTP ${res.status} on ${probe.data.base})`
-    ),
+    ...fail(`HMPanel login failed (HTTP ${res.status} on ${probe.data.base})`, `HMPanel login failed (HTTP ${res.status} on ${probe.data.base})`),
     status: res.status,
   };
 }
@@ -268,7 +253,7 @@ export async function hmFullBackup(
     });
   } catch (e: unknown) {
     const m = hmErrMsg(e);
-    return fail(`ساخت بکاپ روی HMPanel ناموفق بود: ${m.fa}`, `Creating the HMPanel backup failed: ${m.en}`);
+    return fail(`Creating the HMPanel backup failed: ${m.en}`, `Creating the HMPanel backup failed: ${m.en}`);
   }
 
   // token expired mid-flight → re-login once and retry
@@ -282,7 +267,7 @@ export async function hmFullBackup(
       });
     } catch (e: unknown) {
       const m = hmErrMsg(e);
-      return fail(`ساخت بکاپ روی HMPanel ناموفق بود: ${m.fa}`, `Creating the HMPanel backup failed: ${m.en}`);
+      return fail(`Creating the HMPanel backup failed: ${m.en}`, `Creating the HMPanel backup failed: ${m.en}`);
     }
   }
 
@@ -292,7 +277,7 @@ export async function hmFullBackup(
     const d = Array.isArray(detail) ? detail.join("; ") : detail;
     return {
       ...fail(
-        `ساخت بکاپ روی HMPanel ناموفق بود (HTTP ${createRes.status})${d ? ` — ${d}` : ""}`,
+        `Creating the HMPanel backup failed (HTTP ${createRes.status})${d ? ` — ${d}` : ""}`,
         `Creating the HMPanel backup failed (HTTP ${createRes.status})${d ? ` — ${d}` : ""}`
       ),
       status: createRes.status,
@@ -300,7 +285,7 @@ export async function hmFullBackup(
   }
 
   const id = String(createRes.data?.id ?? createRes.data?.file ?? "");
-  if (!id) return fail("پاسخ HMPanel فاقد شناسه فایل بکاپ بود", "The HMPanel response had no backup file id");
+  if (!id) return fail("The HMPanel response had no backup file id", "The HMPanel response had no backup file id");
 
   // 2) download the archive (?token= works for file streams — official jwt strategy)
   const dax = axiosFor(cfg, DOWNLOAD_TIMEOUT_MS);
@@ -310,22 +295,22 @@ export async function hmFullBackup(
       responseType: "arraybuffer",
     });
     if (dl.status === 401 || dl.status === 403) {
-      return fail("دانلود بکاپ مجاز نشد (دسترسی SUPER_ADMIN لازم است)", "Backup download was not allowed (SUPER_ADMIN access required)");
+      return fail("Backup download was not allowed (SUPER_ADMIN access required)", "Backup download was not allowed (SUPER_ADMIN access required)");
     }
     if (dl.status >= 300) {
-      return fail(`دانلود فایل بکاپ ناموفق بود (HTTP ${dl.status})`, `Downloading the backup file failed (HTTP ${dl.status})`);
+      return fail(`Downloading the backup file failed (HTTP ${dl.status})`, `Downloading the backup file failed (HTTP ${dl.status})`);
     }
     const buf = Buffer.from(dl.data);
-    if (buf.length === 0) return fail("فایل بکاپ خالی بود", "The backup file was empty");
+    if (buf.length === 0) return fail("The backup file was empty", "The backup file was empty");
     const fileName = id.endsWith(".tar.gz") ? id : `${id}.tar.gz`;
     return { ok: true, data: { buf, fileName, size: buf.length } };
   } catch (e: unknown) {
     const m = hmErrMsg(e);
-    return fail(`خطای دانلود بکاپ: ${m.fa}`, `Backup download error: ${m.en}`);
+    return fail(`Backup download error: ${m.en}`, `Backup download error: ${m.en}`);
   }
 }
 
-/** Connection test used by the «تست اتصال» button: detect base → login → report version. */
+/** Connection test used by the «Test connection» button: detect base → login → report version. */
 export async function hmTestConnection(
   cfg: AppConfig
 ): Promise<HmResult<{ base: string; username: string; hmVersion?: string; premium?: boolean }>> {
@@ -345,11 +330,11 @@ export async function hmTestConnection(
 /** Bilingual axios error text. */
 function hmErrMsg(e: unknown): Bi {
   if (axios.isAxiosError(e)) {
-    if (e.code === "ECONNREFUSED") return bi("اتصال رد شد (سرویس HMPanel در دسترس نیست)", "Connection refused (the HMPanel service is unreachable)");
-    if (e.code === "ETIMEDOUT" || e.code === "ECONNABORTED") return bi("مهلت اتصال به پایان رسید", "The connection timed out");
-    if (e.code === "ENOTFOUND") return bi("هاست پیدا نشد", "Host not found");
+    if (e.code === "ECONNREFUSED") return bi("Connection refused (the HMPanel service is unreachable)", "Connection refused (the HMPanel service is unreachable)");
+    if (e.code === "ETIMEDOUT" || e.code === "ECONNABORTED") return bi("The connection timed out", "The connection timed out");
+    if (e.code === "ENOTFOUND") return bi("Host not found", "Host not found");
     if (e.code === "CERT_HAS_EXPIRED" || e.code === "DEPTH_ZERO_SELF_SIGNED_CERT") {
-      return bi("گواهی SSL نامعتبر است (گزینه نادیده‌گرفتن SSL را فعال کنید)", "Invalid SSL certificate (enable the ignore-SSL option)");
+      return bi("Invalid SSL certificate (enable the ignore-SSL option)", "Invalid SSL certificate (enable the ignore-SSL option)");
     }
     return bi(e.message, e.message);
   }

@@ -26,6 +26,6 @@ export async function DELETE(
     }
   }
   await db.backupRun.delete({ where: { id: run.id } });
-  await log("info", bi(`رکورد بکاپ #${run.id} حذف شد`, `Backup record #${run.id} was deleted`));
+  await log("info", bi(`Backup record #${run.id} was deleted`, `Backup record #${run.id} was deleted`));
   return NextResponse.json({ ok: true });
 }

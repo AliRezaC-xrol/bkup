@@ -66,9 +66,6 @@ export async function POST(req: NextRequest) {
   const row = await db.reassembledBackup.create({
     data: { name: safeName, panel, parts: ordered.length, size, filePath: outPath },
   });
-  await log("info", bi(
-    `پارت‌های بکاپ در وب‌پنل به یک فایل کامل برگردانده شد: ${safeName} (${ordered.length} قطعه)`,
-    `Backup parts were reassembled in the web panel into one complete file: ${safeName} (${ordered.length} parts)`
-  ));
+  await log("info", bi(`Backup parts were reassembled in the web panel into one complete file: ${safeName} (${ordered.length} parts)`, `Backup parts were reassembled in the web panel into one complete file: ${safeName} (${ordered.length} parts)`));
   return NextResponse.json(row, { status: 201 });
 }

@@ -16,7 +16,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "PASSWORD_TOO_SHORT" }, { status: 400 });
     }
     await changePassword(String(current || ""), String(next));
-    await log("success", bi("پسورد پنل وب تغییر کرد", "The web panel password was changed"));
+    await log("success", bi("The web panel password was changed", "The web panel password was changed"));
     return NextResponse.json({ ok: true });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : "CHANGE_FAILED";
