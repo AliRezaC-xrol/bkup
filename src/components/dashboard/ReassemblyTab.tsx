@@ -13,6 +13,7 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Combine, Download, Trash2, UploadCloud, Inbox, Archive, Check, X, Search, ChevronRight, AlertTriangle, Plus, ShieldCheck } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { useLang } from "@/components/dashboard/lang";
 import { TimeAgo } from "@/components/dashboard/TimeAgo";
@@ -69,6 +70,11 @@ const formatMissing = (parts: number[]) =>
 
 // Memoized row: picking one backup only re-renders the two rows whose
 // selection changed — not the whole list.
+/** Fill {placeholders} in a dict template. */
+function tr(tpl: string, params: Record<string, string | number>): string {
+  return Object.entries(params).reduce((s, [k, v]) => s.replaceAll(`{${k}}`, String(v)), tpl);
+}
+
 const BackupChoiceRow = memo(function BackupChoiceRow({
   choice, active, onToggle,
 }: {
@@ -110,7 +116,7 @@ const BackupChoiceRow = memo(function BackupChoiceRow({
 
 // Memoized history row: idles while unrelated parts of the tab re-render.
 const HistoryRow = memo(function HistoryRow({
-  row, busy, verifyState, verifying, onVerify, onDelete,
+  row, busy, verifyState, verifying, onVerify, onDelete, selected, onSelect,
 }: {
   row: ReassembledDTO;
   busy: boolean;
@@ -118,10 +124,19 @@ const HistoryRow = memo(function HistoryRow({
   verifying: boolean;
   onVerify: (row: ReassembledDTO) => void;
   onDelete: (row: ReassembledDTO) => void;
+  selected: boolean;
+  onSelect: (row: ReassembledDTO, on: boolean) => void;
 }) {
   const { t } = useLang();
   return (
-    <TableRow className="group">
+    <TableRow className="group data-[state=selected]:bg-primary/5" data-state={selected ? "selected" : undefined}>
+      <TableCell className="w-10">
+        <Checkbox
+          checked={selected}
+          aria-label={row.name}
+          onCheckedChange={(v) => onSelect(row, v === true)}
+        />
+      </TableCell>
       <TableCell className="whitespace-nowrap text-xs tabular-nums"><TimeAgo date={row.createdAt} className="text-xs" /></TableCell>
       <TableCell className="max-w-64">
         <div className="flex items-center gap-1.5">
@@ -202,6 +217,10 @@ export function ReassemblyTab() {
   const [history, setHistory] = useState<ReassembledDTO[]>([]);
   const [deleting, setDeleting] = useState<ReassembledDTO | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
+  // bulk selection over the history table (checkbox per row + select-all)
+  const [pickedRows, setPickedRows] = useState<Set<number>>(new Set());
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
   // per-row integrity results — recomputing SHA-256 on demand, same as Backups
   const [verifyingId, setVerifyingId] = useState<number | null>(null);
   const [verified, setVerified] = useState<Map<number, VerifyResult>>(new Map());
@@ -482,6 +501,35 @@ export function ReassemblyTab() {
 
   // recompute the SHA-256 of the merged file on disk and compare it with the
   // recorded size — a corrupted reassembled file must never reach a restore
+  function toggleHistoryRow(id: number, on: boolean) {
+    setPickedRows((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(id); else next.delete(id);
+      return next;
+    });
+  }
+  function toggleAllHistory(on: boolean) {
+    setPickedRows(on ? new Set(history.map((r) => r.id)) : new Set());
+  }
+  async function doBulkDelete() {
+    setBulkBusy(true);
+    try {
+      const ids = [...pickedRows];
+      const results = await Promise.allSettled(ids.map((id) => fetch(`/api/reassembly/${id}`, { method: "DELETE" })));
+      const failed = results.filter((r) => r.status === "rejected" || !r.value.ok).length;
+      if (failed === 0) {
+        toast({ title: t("deleted") });
+      } else {
+        toast({ title: tr(t("bulk_partial"), { ok: ids.length - failed, fail: failed }), variant: "destructive" });
+      }
+      setPickedRows(new Set());
+      await loadHistory();
+    } finally {
+      setBulkBusy(false);
+      setBulkOpen(false);
+    }
+  }
+
   async function doVerify(row: ReassembledDTO) {
     setVerifyingId(row.id);
     try {
@@ -769,8 +817,27 @@ export function ReassemblyTab() {
       </Card>
 
       <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">{t("reassembly_history")}</CardTitle>
+        <CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
+          <CardTitle className="text-base">
+            {t("reassembly_history")}
+            {pickedRows.size > 0 && (
+              <span className="ms-2 rounded bg-primary/10 px-1.5 py-0.5 align-middle text-[10px] font-semibold tabular-nums text-primary">
+                {pickedRows.size}
+              </span>
+            )}
+          </CardTitle>
+          {pickedRows.size > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 gap-1.5 border-red-500/40 text-red-600 hover:bg-red-500/10 hover:text-red-700"
+              onClick={() => setBulkOpen(true)}
+              disabled={bulkBusy}
+            >
+              {bulkBusy ? <Combine className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+              {t("delete_selected")} ({pickedRows.size})
+            </Button>
+          )}
         </CardHeader>
         <CardContent>
           {history.length === 0 ? (
@@ -783,6 +850,13 @@ export function ReassemblyTab() {
               <Table>
                 <TableHeader className="sticky top-0 z-10 bg-card/95 backdrop-blur">
                   <TableRow>
+                    <TableHead className="w-10">
+                      <Checkbox
+                        checked={history.length > 0 && pickedRows.size === history.length}
+                        aria-label={t("select_all")}
+                        onCheckedChange={(v) => toggleAllHistory(v === true)}
+                      />
+                    </TableHead>
                     <TableHead className="min-w-40">{t("col_time")}</TableHead>
                     <TableHead className="min-w-44">{t("col_file")}</TableHead>
                     <TableHead>{t("col_parts")}</TableHead>
@@ -800,6 +874,8 @@ export function ReassemblyTab() {
                       verifying={verifyingId === r.id}
                       onVerify={doVerify}
                       onDelete={askDelete}
+                      selected={pickedRows.has(r.id)}
+                      onSelect={(row, on) => toggleHistoryRow(row.id, on)}
                     />
                   ))}
                 </TableBody>
@@ -825,6 +901,27 @@ export function ReassemblyTab() {
               }}
             >
               {t("delete")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={bulkOpen} onOpenChange={(o) => !o && setBulkOpen(false)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("reassembly_bulk_confirm_title")}</AlertDialogTitle>
+            <AlertDialogDescription>{t("reassembly_bulk_confirm_desc")}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              onClick={(e) => {
+                e.preventDefault();
+                doBulkDelete();
+              }}
+            >
+              {t("delete_selected")} ({pickedRows.size})
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

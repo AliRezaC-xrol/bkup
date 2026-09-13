@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import {
-  Server, Send, Timer, Save, Loader2, ShieldCheck, Info, KeyRound, Eye, Boxes, Shield, FileDown, FileUp, AlertTriangle,
+  Server, Send, Timer, Save, Loader2, ShieldCheck, Info, KeyRound, Eye, Boxes, Shield, FileDown, FileUp, AlertTriangle, LogOut,
 } from "lucide-react";
 import { useLang } from "@/components/dashboard/lang";
 import type { AppConfigDTO } from "./types";
@@ -51,6 +51,27 @@ export function SettingsTab({ config, onSaved, onPasswordChanged }: Props) {
   const [newPass, setNewPass] = useState("");
   const [confPass, setConfPass] = useState("");
   const [changingPw, setChangingPw] = useState(false);
+  const [revokeOpen, setRevokeOpen] = useState(false);
+  const [revoking, setRevoking] = useState(false);
+
+  /** Sign out every browser/device (this one included) — bumps sessionsVersion. */
+  async function revokeEverywhere() {
+    setRevoking(true);
+    try {
+      const res = await fetch("/api/auth/revoke-sessions", { method: "POST" });
+      if (res.ok) {
+        toast({ title: t("revoke_done") });
+        setRevokeOpen(false);
+        setTimeout(onPasswordChanged, 800); // session is dead → login screen
+      } else {
+        toast({ title: t("error"), variant: "destructive" });
+      }
+    } catch {
+      toast({ title: t("network_error"), variant: "destructive" });
+    } finally {
+      setRevoking(false);
+    }
+  }
 
   // ── settings file export / import ──
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -791,13 +812,42 @@ export function SettingsTab({ config, onSaved, onPasswordChanged }: Props) {
               <Input id="confPw" type="password" dir="ltr" className="text-start" autoComplete="new-password" minLength={4}
                 value={confPass} onChange={(e) => setConfPass(e.target.value)} required />
             </div>
-            <div className="sm:col-span-3">
+            <div className="sm:col-span-3 flex flex-wrap items-center gap-2">
               <Button type="submit" variant="outline" disabled={changingPw} className="gap-2">
                 {changingPw ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
                 {t("change_pass")}
               </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                className="gap-2 text-amber-600 hover:text-amber-700 hover:bg-amber-500/10"
+                onClick={() => setRevokeOpen(true)}
+              >
+                <LogOut className="h-4 w-4" />
+                {t("revoke_all")}
+              </Button>
             </div>
           </form>
+          <AlertDialog open={revokeOpen} onOpenChange={(o) => !o && setRevokeOpen(false)}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>{t("revoke_confirm_title")}</AlertDialogTitle>
+                <AlertDialogDescription>{t("revoke_confirm_desc")}</AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>{t("cancel")}</AlertDialogCancel>
+                <AlertDialogAction
+                  className="bg-amber-600 text-white hover:bg-amber-700"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    void revokeEverywhere();
+                  }}
+                >
+                  {revoking ? <Loader2 className="h-4 w-4 animate-spin" /> : t("revoke_all")}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </CardContent>
       </Card>
 

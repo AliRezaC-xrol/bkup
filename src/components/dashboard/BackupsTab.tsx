@@ -36,6 +36,14 @@ const PANELS = [
 
 export type PanelFilter = "all" | (typeof PANELS)[number]["key"];
 
+/** Time-range filter windows. */
+type RangeKey = "all" | "24h" | "7d" | "30d";
+const RANGE_MS: Record<Exclude<RangeKey, "all">, number> = {
+  "24h": 24 * 3600_000,
+  "7d": 7 * 24 * 3600_000,
+  "30d": 30 * 24 * 3600_000,
+};
+
 export function BackupsTab({
   runs, onRefresh,
   // lifted state — lets the Dashboard panel-health tiles drill into a panel
@@ -53,6 +61,7 @@ export function BackupsTab({
   const { t } = useLang();
   const { toast } = useToast();
   const [filter, setFilter] = useState<"all" | "success" | "failed">("all");
+  const [range, setRange] = useState<RangeKey>("all");
   // works with EITHER the lifted state (dashboard drill-down) or local state
   const [panelFilterLocal, setPanelFilterLocal] = useState<PanelFilter>("all");
   const panelFilter = panelFilterProp ?? panelFilterLocal;
@@ -81,13 +90,15 @@ export function BackupsTab({
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
+    const cutoff = range === "all" ? 0 : Date.now() - RANGE_MS[range];
     return runs.filter(
       (r) =>
         (filter === "all" || r.status === filter) &&
         (panelFilter === "all" || r.panel === panelFilter) &&
+        (range === "all" || new Date(r.startedAt).getTime() >= cutoff) &&
         (!q || (r.fileName ?? `#${r.id}`).toLowerCase().includes(q))
     );
-  }, [runs, filter, panelFilter, query]);
+  }, [runs, filter, panelFilter, query, range]);
 
   // chip counts — reflect the loaded history window, so the numbers always
   // agree with what the table can actually show
@@ -103,6 +114,20 @@ export function BackupsTab({
     const base: Record<PanelFilter, number> = { all: runs.length, "3x-ui": 0, hmpanel: 0, pasarguard: 0, rebecca: 0 };
     for (const r of runs) if (r.panel in base) base[r.panel as PanelFilter] += 1;
     return base;
+  }, [runs]);
+
+  // time-range chips — count of runs inside each window (independent of the
+  // other chips, same convention as the status/panel counts)
+  const rangeCounts = useMemo(() => {
+    const now = Date.now();
+    const c: Record<RangeKey, number> = { all: runs.length, "24h": 0, "7d": 0, "30d": 0 };
+    for (const r of runs) {
+      const age = now - new Date(r.startedAt).getTime();
+      if (age <= RANGE_MS["24h"]) c["24h"] += 1;
+      if (age <= RANGE_MS["7d"]) c["7d"] += 1;
+      if (age <= RANGE_MS["30d"]) c["30d"] += 1;
+    }
+    return c;
   }, [runs]);
 
   // per-row Telegram deep link — built once per (chatId, run) pair
@@ -314,6 +339,26 @@ export function BackupsTab({
                   }`}
                 >
                   {panelCounts[p.key]}
+                </span>
+              </button>
+            ))}
+          </div>
+          <div className="flex rounded-lg border p-0.5" role="group" aria-label={t("range_aria")}>
+            {(["all", "24h", "7d", "30d"] as const).map((r) => (
+              <button
+                key={r}
+                onClick={() => setRange(r)}
+                className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                  range === r ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {r === "all" ? t("filter_all") : r}
+                <span
+                  className={`rounded px-1 text-[10px] tabular-nums ${
+                    range === r ? "bg-primary-foreground/20 text-primary-foreground" : "bg-muted text-muted-foreground"
+                  }`}
+                >
+                  {rangeCounts[r]}
                 </span>
               </button>
             ))}

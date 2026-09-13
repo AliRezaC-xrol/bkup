@@ -72,6 +72,14 @@ export async function changePassword(current: string, next: string) {
   });
 }
 
+/** Invalidate every issued session (all devices, this one included). */
+export async function revokeAllSessions(): Promise<void> {
+  await db.systemConfig.update({
+    where: { id: 1 },
+    data: { sessionsVersion: { increment: 1 } },
+  });
+}
+
 /** Set password without knowing the old one (CLI only — guarded by CLI secret). */
 export async function setPasswordDirect(password: string) {
   const row = await getSystem();

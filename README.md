@@ -36,8 +36,8 @@ same install covers anything from a few backups a day to one every few minutes.
 - **3x-ui, HM Panel, PasarGuard and Rebecca in one place** — each panel enabled independently, each with its own connection test
 - **Telegram delivery** — every backup arrives as a file in your chat or channel; nothing to download by hand
 - **Your schedule** — interval in seconds, kept across reboots by the systemd service
-- **Web panel** — dashboard, live logs, backup history with per-backup download and delete, plus a file-name search that combines with the status and panel filters
-- **Reassemble split backups** — parts delivered to Telegram are merged back into the one complete file right in the web panel, with a downloadable history; you can also pick the parts straight from your stored backups instead of uploading them — part sets of the same file are grouped under one header, so the whole set is one tap away
+- **Web panel** — dashboard, live logs, backup history with per-backup download and delete, plus a file-name search that combines with the status, panel and time-range (24h / 7d / 30d) filters
+- **Reassemble split backups** — parts delivered to Telegram are merged back into the one complete file right in the web panel, with a downloadable, bulk-deletable history; you can also pick the parts straight from your stored backups instead of uploading them — part sets of the same file are grouped under one header, so the whole set is one tap away
 - **Restore to any server** — push a backup (a normal run or a reassembled file) back onto a server over SSH; the panel is installed automatically if it is missing, every step streams live, and the run can be cancelled
 - **Disk cleanup on demand** — System → Storage previews orphan files left by crashed runs and backups beyond the retention limit, then removes them with one click
 - **Settings file** — export every panel, Telegram and schedule setting as JSON and import it on another server; hidden credentials keep their current values, a full export moves them too
@@ -45,6 +45,7 @@ same install covers anything from a few backups a day to one every few minutes.
 - **Jump to the Telegram message** — every successful row in the history (and on the dashboard) carries a link that opens the exact Telegram message the backup was delivered to, topic included
 - **Desktop notifications** — turn on the bell in the header and a failed backup raises a system notification even when the panel tab is in the background
 - **Panel health at a glance** — the dashboard shows one tile per panel with the last backup age, success rate and run count; tapping it opens the history pre-filtered to that panel
+- **Session control** — a single button in Settings signs every browser out of the panel at once (this one included), useful when a password was shared or a device is lost
 - **Terminal menu** — `bkup` handles status, panel URL, password, port, logs, update and uninstall without opening the web panel
 
 ## Install
@@ -90,6 +91,8 @@ You can also reassemble parts that are already stored in the **Backups** section
 
 Part sets of the same file are recognized on sight: every group gets its own header with the original file name and a **have/total** badge — green when the whole set is visible, amber when parts are missing. The **Add all** button on the header picks every visible part of that file in one tap (and turns into **Remove** to undo), so assembling a split backup no longer means ticking each part by hand. Picking a single part still flags the missing siblings with an **Add missing parts** shortcut right where the warning appears.
 
+The reassembly history itself is now a working list: every row carries a checkbox and the header offers **select all**, so a batch of stale merged files goes away with one **Delete selected** — files and records together, exactly like the per-row delete.
+
 ## Restore Backup to a Server
 
 The **Restore** section lets you restore a backup directly to a server over **SSH**.
@@ -133,6 +136,10 @@ credentials** writes the real values for a full migration. **Import settings**
 on another install applies the file through the exact same validation the
 settings form uses — masked credentials simply keep the values already on that
 server.
+
+## Log Out Everywhere
+
+Settings → **Web panel security** has two actions now. Changing the password still signs every device out as before. Next to it, **Log out everywhere** invalidates every issued session immediately — the phone you checked this morning, the office browser, and the tab you are using right now — without touching the password. Each device simply lands on the login screen and signs back in with the panel password, which makes it the right tool the moment a password was shared one time too many or a device goes missing.
 
 ## Dark Mode & Home-Screen App
 
