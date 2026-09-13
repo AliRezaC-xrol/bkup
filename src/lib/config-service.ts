@@ -61,7 +61,7 @@ async function migrateLegacy(cfg: BackupConfig): Promise<BackupConfig> {
         xuiEnabled: false,
       },
     });
-    await log("info", bi("تنظیمات HMPanel از نسخه قبلی به کارت مستقل پنل منتقل شد", "HMPanel settings were migrated from the previous version to the dedicated panel card"));
+    await log("info", bi("HMPanel settings were migrated from the previous version to the dedicated panel card", "HMPanel settings were migrated from the previous version to the dedicated panel card"));
     return migrated;
   } catch {
     return cfg; // non-fatal — next call retries

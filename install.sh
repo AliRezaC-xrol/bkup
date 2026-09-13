@@ -257,12 +257,51 @@ cp -r public .next/standalone/public
 mkdir -p .next/standalone/.next
 cp -r .next/static .next/standalone/.next/static
 mkdir -p .next/standalone/data
+if [ -d "$APP_DIR/data" ]; then
+  cp -a "$APP_DIR/data/." .next/standalone/data/ 2>/dev/null || true
+fi
+# Critical fix: copy package.json into standalone for version fallback
+cp -a "$APP_DIR/package.json" .next/standalone/package.json 2>/dev/null || true
 [ -f .next/standalone/server.js ] || die "build output is incomplete (standalone/server.js missing) — run 'npm run build' in $APP_DIR to see the real error"
 ok "build complete"
 
 # ── 6. configuration files ──────────────────────────────────
 info "[6/8] Writing configuration…"
-cat > "$APP_DIR/.env" <<EOF
+# ── .env handling: for existing installs, merge preserving existing values
+# This fixes the bug where re-running installer would overwrite custom env vars
+if [ -f "$APP_DIR/.env" ] && [ -f "$APP_DIR/db/custom.db" ]; then
+  # Existing installation — preserve .env, ensure required keys exist, update PORT if needed
+  info "existing .env found — merging with new template (preserving existing values)"
+  # Update PORT if it was changed (or keep old)
+  if grep -qE '^PORT=' "$APP_DIR/.env" 2>/dev/null; then
+    # Replace PORT line with current PORT value
+    sed -i "s/^PORT=.*/PORT=${PORT}/" "$APP_DIR/.env" 2>/dev/null || true
+  else
+    echo "PORT=${PORT}" >> "$APP_DIR/.env"
+  fi
+  # Ensure other required keys exist
+  grep -qE '^DATABASE_URL=' "$APP_DIR/.env" 2>/dev/null || echo "DATABASE_URL=file:${APP_DIR}/db/custom.db" >> "$APP_DIR/.env"
+  grep -qE '^BACKUP_DIR=' "$APP_DIR/.env" 2>/dev/null || echo "BACKUP_DIR=${APP_DIR}/backups" >> "$APP_DIR/.env"
+  grep -qE '^TZ=' "$APP_DIR/.env" 2>/dev/null || echo "TZ=Asia/Tehran" >> "$APP_DIR/.env"
+  grep -qE '^BKUP_APP_DIR=' "$APP_DIR/.env" 2>/dev/null || echo "BKUP_APP_DIR=${APP_DIR}" >> "$APP_DIR/.env"
+  grep -qE '^ABX_APP_DIR=' "$APP_DIR/.env" 2>/dev/null || echo "ABX_APP_DIR=${APP_DIR}" >> "$APP_DIR/.env"
+  grep -qE '^BKUP_ENV_FILE=' "$APP_DIR/.env" 2>/dev/null || echo "BKUP_ENV_FILE=${APP_DIR}/.env" >> "$APP_DIR/.env"
+  grep -qE '^ABX_ENV_FILE=' "$APP_DIR/.env" 2>/dev/null || echo "ABX_ENV_FILE=${APP_DIR}/.env" >> "$APP_DIR/.env"
+  # Merge from .env.example if present
+  if [ -f "$APP_DIR/.env.example" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      [[ "$line" =~ ^[[:space:]]*# ]] && continue
+      [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+      key="$(echo "$line" | cut -d= -f1 | tr -d '[:space:]')"
+      [ -z "$key" ] && continue
+      if ! grep -qE "^${key}=" "$APP_DIR/.env" 2>/dev/null; then
+        echo "$line" >> "$APP_DIR/.env"
+      fi
+    done < "$APP_DIR/.env.example"
+  fi
+else
+  # Fresh install — create new .env
+  cat > "$APP_DIR/.env" <<EOF
 PORT=${PORT}
 DATABASE_URL=file:${APP_DIR}/db/custom.db
 BACKUP_DIR=${APP_DIR}/backups
@@ -272,6 +311,7 @@ ABX_APP_DIR=${APP_DIR}
 BKUP_ENV_FILE=${APP_DIR}/.env
 ABX_ENV_FILE=${APP_DIR}/.env
 EOF
+fi
 chmod 600 "$APP_DIR/.env"
 [ -f "$APP_DIR/.cli-secret" ] || (command -v openssl >/dev/null 2>&1 && openssl rand -hex 24 > "$APP_DIR/.cli-secret") || head -c 32 /dev/urandom | md5sum | cut -c1-48 > "$APP_DIR/.cli-secret"
 chmod 600 "$APP_DIR/.cli-secret"
@@ -281,6 +321,7 @@ if [ -n "${GITHUB_TOKEN:-}" ]; then
   chmod 600 "$APP_DIR/.github-token"
 fi
 ok ".env + .cli-secret"
+
 
 # panel password (direct DB write) — only for fresh installs
 if [ "$PW_SET" != "1" ]; then

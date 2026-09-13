@@ -103,17 +103,14 @@ async function sendOneDocument(
         | null;
 
       if (res.status === 429) {
-        lastError = bi(
-          `محدودیت نرخ تلگرام (429)${body?.description ? ": " + body.description : ""}`,
-          `Telegram rate limit (429)${body?.description ? ": " + body.description : ""}`
-        );
+        lastError = bi(`Telegram rate limit (429)${body?.description ? ": " + body.description : ""}`, `Telegram rate limit (429)${body?.description ? ": " + body.description : ""}`);
         continue;
       }
       if (res.ok && body?.ok && body.result?.message_id) {
         return { ok: true, data: { messageId: body.result.message_id } };
       }
       lastError = body?.description
-        ? bi(`تلگرام: ${body.description}`, `Telegram: ${body.description}`)
+        ? bi(`Telegram: ${body.description}`, `Telegram: ${body.description}`)
         : bi(`HTTP ${res.status}`, `HTTP ${res.status}`);
       // 4xx (except 429) are permanent — do not retry
       if (res.status >= 400 && res.status < 500 && res.status !== 429) break;
@@ -130,17 +127,14 @@ async function sendOneDocument(
       }
       const ambiguous = /timeout|abort|reset|ETIMEDOUT|ECONNABORTED|ECONNRESET|socket/i.test(t) || /timeout|abort/i.test(code);
       lastError = ambiguous
-        ? bi(
-            "ارسال قطع شد — فایل ممکن است رسیده باشد؛ برای جلوگیری از ارسال تکراری، دوباره تلاش نشد",
-            "The upload was interrupted - the file may have been delivered; not retrying to avoid a duplicate"
-          )
+        ? bi("The upload was interrupted - the file may have been delivered; not retrying to avoid a duplicate", "The upload was interrupted - the file may have been delivered; not retrying to avoid a duplicate")
         : bi(t, t);
       break;
     }
   }
   return lastError
     ? { ok: false, error: lastError.fa, errorBi: lastError }
-    : fail("ارسال به تلگرام ناموفق بود", "Sending to Telegram failed");
+    : fail("Sending to Telegram failed", "Sending to Telegram failed");
 }
 
 /** Translate low-level fetch failures into a plain English cause. */
@@ -178,8 +172,8 @@ export async function sendBackupDocument(
   method: string,
   panel: TgPanel = "3x-ui"
 ): Promise<TgResult<{ messageIds: number[] }>> {
-  if (!cfg.telegramBotToken.trim()) return fail("توکن بات تلگرام تنظیم نشده است", "The Telegram bot token is not configured");
-  if (!cfg.telegramChatId.trim()) return fail("آیدی چت تلگرام تنظیم نشده است", "The Telegram chat ID is not configured");
+  if (!cfg.telegramBotToken.trim()) return fail("The Telegram bot token is not configured", "The Telegram bot token is not configured");
+  if (!cfg.telegramChatId.trim()) return fail("The Telegram chat ID is not configured", "The Telegram chat ID is not configured");
 
   const limit = isLocalBase(cfg) ? LOCAL_DOC_LIMIT : DOC_LIMIT;
   if (buf.length <= limit) {
@@ -189,7 +183,7 @@ export async function sendBackupDocument(
   }
   if (buf.length > LOCAL_DOC_LIMIT) {
     return fail(
-      `حجم بکاپ از سقف ۲ گیگابایت تلگرام بیشتر است و قابل ارسال نیست`,
+      `Backup size exceeds Telegram 2GB limit and cannot be sent`,
       "The backup exceeds Telegram's 2 GB limit and cannot be delivered"
     );
   }
@@ -256,8 +250,8 @@ export async function deleteMessage(cfg: AppConfig, messageId: number): Promise<
 
 /** Send an arbitrary text message (update notices, etc.). */
 export async function sendMessage(cfg: AppConfig, text: string): Promise<TgResult> {
-  if (!cfg.telegramBotToken.trim()) return fail("توکن بات تلگرام تنظیم نشده است", "The Telegram bot token is not configured");
-  if (!cfg.telegramChatId.trim()) return fail("آیدی چت تلگرام تنظیم نشده است", "The Telegram chat ID is not configured");
+  if (!cfg.telegramBotToken.trim()) return fail("The Telegram bot token is not configured", "The Telegram bot token is not configured");
+  if (!cfg.telegramChatId.trim()) return fail("The Telegram chat ID is not configured", "The Telegram chat ID is not configured");
   try {
     const res = await fetch(tgUrl(cfg, "sendMessage"), {
       signal: AbortSignal.timeout(TG_FETCH_TIMEOUT),
@@ -279,8 +273,8 @@ export async function sendMessage(cfg: AppConfig, text: string): Promise<TgResul
 
 /** Send a plain text message — used by the "Test Telegram" button. */
 export async function sendTestMessage(cfg: AppConfig): Promise<TgResult> {
-  if (!cfg.telegramBotToken.trim()) return fail("توکن بات تلگرام را وارد کنید", "Enter the Telegram bot token");
-  if (!cfg.telegramChatId.trim()) return fail("آیدی چت تلگرام را وارد کنید", "Enter the Telegram chat ID");
+  if (!cfg.telegramBotToken.trim()) return fail("Enter the Telegram bot token", "Enter the Telegram bot token");
+  if (!cfg.telegramChatId.trim()) return fail("Enter the Telegram chat ID", "Enter the Telegram chat ID");
   try {
     const res = await fetch(tgUrl(cfg, "sendMessage"), {
       signal: AbortSignal.timeout(TG_FETCH_TIMEOUT),
@@ -301,6 +295,6 @@ export async function sendTestMessage(cfg: AppConfig): Promise<TgResult> {
       : { ok: false, error: `HTTP ${res.status}` };
   } catch (e: unknown) {
     const t = e instanceof Error ? e.message : String(e);
-    return fail(`خطای اتصال به تلگرام: ${t}`, `Telegram connection error: ${t}`);
+    return fail(`Telegram connection error: ${t}`, `Telegram connection error: ${t}`);
   }
 }

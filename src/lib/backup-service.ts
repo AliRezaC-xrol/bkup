@@ -58,10 +58,7 @@ const g = globalThis as unknown as { __xuiRunning?: boolean };
  */
 export async function runBackup(trigger: "auto" | "manual"): Promise<CycleResult> {
   if (g.__xuiRunning) {
-    const skipMsg = bi(
-      "اجرای قبلی هنوز در حال انجام است — این چرخه رد شد",
-      "The previous run is still in progress — this cycle was skipped"
-    );
+    const skipMsg = bi("The previous run is still in progress — this cycle was skipped", "The previous run is still in progress — this cycle was skipped");
     const skip: BackupOutcome = {
       runId: -1,
       panel: "3x-ui",
@@ -70,7 +67,7 @@ export async function runBackup(trigger: "auto" | "manual"): Promise<CycleResult
       errorBi: skipMsg,
       durationMs: 0,
     };
-    await log("warn", bi("چرخه قبلی هنوز تمام نشده؛ بکاپ این دوره رد شد", "The previous cycle has not finished yet; this backup cycle was skipped"));
+    await log("warn", bi("The previous cycle has not finished yet; this backup cycle was skipped", "The previous cycle has not finished yet; this backup cycle was skipped"));
     return { outcomes: [skip], ok: false, durationMs: 0 };
   }
   g.__xuiRunning = true;
@@ -85,10 +82,7 @@ export async function runBackup(trigger: "auto" | "manual"): Promise<CycleResult
     const newest = await db.backupRun.findFirst({ where: { trigger: "auto" }, orderBy: { startedAt: "desc" }, select: { startedAt: true } });
     if (newest && Date.now() - new Date(newest.startedAt).getTime() < Math.max(10, cfg.intervalSeconds) * 800) {
       g.__xuiRunning = false;
-      await log("warn", bi(
-        "چرخهٔ بکاپ تکراری در همان بازهٔ زمان‌بندی سرکوب شد",
-        "A duplicate backup cycle within the same scheduling window was suppressed"
-      ));
+      await log("warn", bi("A duplicate backup cycle within the same scheduling window was suppressed", "A duplicate backup cycle within the same scheduling window was suppressed"));
       return { outcomes: [], ok: true, durationMs: 0 };
     }
   }
@@ -101,7 +95,7 @@ export async function runBackup(trigger: "auto" | "manual"): Promise<CycleResult
 
   if (targets.length === 0) {
     g.__xuiRunning = false;
-    await log("warn", bi("هیچ پنلی فعال نیست — ابتدا اتصال یکی از پنل‌ها را در تنظیمات فعال کنید", "No panel is enabled — first enable a panel connection in Settings"));
+    await log("warn", bi("No panel is enabled — first enable a panel connection in Settings", "No panel is enabled — first enable a panel connection in Settings"));
     return { outcomes: [], ok: false, durationMs: 0 };
   }
 
@@ -115,18 +109,12 @@ export async function runBackup(trigger: "auto" | "manual"): Promise<CycleResult
   try {
     await cleanupTelegramOld(cfg);
   } catch (e: unknown) {
-    await log("warn", bi(
-      `پاک‌سازی تلگرام با خطا مواجه شد: ${e instanceof Error ? e.message : String(e)}`,
-      `Telegram cleanup hit an error: ${e instanceof Error ? e.message : String(e)}`
-    ));
+    await log("warn", bi(`Telegram cleanup hit an error: ${e instanceof Error ? e.message : String(e)}`, `Telegram cleanup hit an error: ${e instanceof Error ? e.message : String(e)}`));
   }
   try {
     await sweepOrphanFiles(cfg);
   } catch (e: unknown) {
-    await log("warn", bi(
-      `پاک‌سازی فایل‌های بی‌صاحب با خطا مواجه شد: ${e instanceof Error ? e.message : String(e)}`,
-      `Orphan-file cleanup hit an error: ${e instanceof Error ? e.message : String(e)}`
-    ));
+    await log("warn", bi(`Orphan-file cleanup hit an error: ${e instanceof Error ? e.message : String(e)}`, `Orphan-file cleanup hit an error: ${e instanceof Error ? e.message : String(e)}`));
   }
 
   g.__xuiRunning = false;
@@ -147,7 +135,7 @@ async function runPanelBackup(
     run = await db.backupRun.create({ data: { status: "running", trigger, panel } });
   } catch (e: unknown) {
     const error = e instanceof Error ? e.message : String(e);
-    await log("error", bi(`ثبت چرخه بکاپ ${panelTitle(panel)} ناموفق بود: ${error}`, `Could not create the ${panelTitle(panel)} backup run record: ${error}`));
+    await log("error", bi(`Could not create the ${panelTitle(panel)} backup run record: ${error}`, `Could not create the ${panelTitle(panel)} backup run record: ${error}`));
     return { runId: -1, panel, status: "failed", error, durationMs: 0 };
   }
 
@@ -166,7 +154,7 @@ async function runPanelBackup(
       // ── HMPanel: FULL archive via official API (db + config + uploads,
       //    premium data included when the panel is a Premium edition) ──
       const hm = await hmFullBackup(cfg);
-      if (!hm.ok || !hm.data) throwBi(hm.error ?? "بکاپ HMPanel ناموفق بود", hm.errorBi?.en ?? "The HMPanel backup failed");
+      if (!hm.ok || !hm.data) throwBi(hm.error ?? "The HMPanel backup failed", hm.errorBi?.en ?? "The HMPanel backup failed");
       buf = hm.data.buf;
       fileName = hm.data.fileName;
       method = "hm-full";
@@ -174,14 +162,14 @@ async function runPanelBackup(
       // ── PasarGuard: FULL logical snapshot via official API (users + hosts +
       //    nodes + cores + groups + settings + templates) packed as tar.gz ──
       const pg = await pgFullBackup(cfg);
-      if (!pg.ok || !pg.data) throwBi(pg.error ?? "بکاپ PasarGuard ناموفق بود", pg.errorBi?.en ?? "The PasarGuard backup failed");
+      if (!pg.ok || !pg.data) throwBi(pg.error ?? "The PasarGuard backup failed", pg.errorBi?.en ?? "The PasarGuard backup failed");
       buf = pg.data.buf;
       fileName = pg.data.fileName;
       method = "pg-full";
     } else if (panel === "rebecca") {
       // ── Rebecca: FULL export via official API (database + configuration) ──
       const rb = await rbFullBackup(cfg);
-      if (!rb.ok || !rb.data) throwBi(rb.error ?? "بکاپ Rebecca ناموفق بود", rb.errorBi?.en ?? "The Rebecca backup failed");
+      if (!rb.ok || !rb.data) throwBi(rb.error ?? "The Rebecca backup failed", rb.errorBi?.en ?? "The Rebecca backup failed");
       buf = rb.data.buf;
       fileName = rb.data.fileName;
       method = "rb-full";
@@ -195,7 +183,7 @@ async function runPanelBackup(
         method = "local";
       } else {
         const sess = await login(cfg, cfg.authMode !== "bearer" && trigger === "manual");
-        if (!sess.ok) throwBi(sess.error ?? "ورود به پنل ناموفق بود", sess.errorBi?.en ?? sess.error ?? "Panel login failed");
+        if (!sess.ok) throwBi(sess.error ?? "Panel login failed", sess.errorBi?.en ?? sess.error ?? "Panel login failed");
 
         let dbRes = mode === "json" ? null : await getDb(cfg, sess.data!);
         // One retry with a fresh session on auth failure
@@ -210,21 +198,15 @@ async function runPanelBackup(
           fileName = timestampName("x-ui", "db");
           method = "db";
         } else if (mode === "db") {
-          throwBi(dbRes?.error ?? "دانلود دیتابیس ناموفق بود", dbRes?.errorBi?.en ?? "The database download failed");
+          throwBi(dbRes?.error ?? "The database download failed", dbRes?.errorBi?.en ?? "The database download failed");
         } else {
           // auto mode: fall back to JSON export
           if (dbRes && !dbRes.ok) {
-            warnNoteBi = bi(
-              `فایل دیتابیس دریافت نشد (${dbRes.error}) — خروجی JSON جایگزین شد`,
-              `The database file could not be fetched (${dbRes.errorBi?.en ?? dbRes.error}) — a JSON export was used instead`
-            );
+            warnNoteBi = bi(`The database file could not be fetched (${dbRes.errorBi?.en ?? dbRes.error}) — a JSON export was used instead`, `The database file could not be fetched (${dbRes.errorBi?.en ?? dbRes.error}) — a JSON export was used instead`);
           }
           const js = await getJsonExport(cfg, sess.data!);
           if (!js.ok || !js.data) {
-            throwBi(
-              `بکاپ کامل ناموفق بود. دیتابیس: ${dbRes?.error ?? "نامشخص"} | JSON: ${js.error ?? "نامشخص"}`,
-              `The full backup failed. Database: ${dbRes?.errorBi?.en ?? "unknown"} | JSON: ${js.errorBi?.en ?? "unknown"}`
-            );
+            throwBi(`The full backup failed. Database: ${dbRes?.errorBi?.en ?? "unknown"} | JSON: ${js.errorBi?.en ?? "unknown"}`, `The full backup failed. Database: ${dbRes?.errorBi?.en ?? "unknown"} | JSON: ${js.errorBi?.en ?? "unknown"}`);
           }
           buf = Buffer.from(js.data.json, "utf8");
           fileName = timestampName("x-ui", "json");
@@ -241,20 +223,14 @@ async function runPanelBackup(
     const dir = backupDir();
     const filePath = path.join(dir, fileName);
     fs.writeFileSync(filePath, buf);
-    await log("info", bi(
-      `[${panelTitle(panel)}] فایل بکاپ ذخیره شد: ${fileName} (${formatSize(buf.length)})`,
-      `[${panelTitle(panel)}] backup file saved: ${fileName} (${formatSize(buf.length)})`
-    ));
+    await log("info", bi(`[${panelTitle(panel)}] backup file saved: ${fileName} (${formatSize(buf.length)})`, `[${panelTitle(panel)}] backup file saved: ${fileName} (${formatSize(buf.length)})`));
 
     // 3) Send to Telegram — ANY size; large files go out as parts
     const tg = await sendBackupDocument(cfg, buf, fileName, method, panel);
     if (!tg.ok) {
-      throwBi(`ارسال به تلگرام ناموفق بود: ${tg.error}`, `Sending to Telegram failed: ${tg.errorBi?.en ?? tg.error}`);
+      throwBi(`Sending to Telegram failed: ${tg.errorBi?.en ?? tg.error}`, `Sending to Telegram failed: ${tg.errorBi?.en ?? tg.error}`);
     }
-    await log("success", bi(
-      `[${panelTitle(panel)}] بکاپ کامل با موفقیت به تلگرام ارسال شد (چت ${cfg.telegramChatId})`,
-      `[${panelTitle(panel)}] the full backup was sent to Telegram successfully (chat ${cfg.telegramChatId})`
-    ));
+    await log("success", bi(`[${panelTitle(panel)}] the full backup was sent to Telegram successfully (chat ${cfg.telegramChatId})`, `[${panelTitle(panel)}] the full backup was sent to Telegram successfully (chat ${cfg.telegramChatId})`));
 
     if (warnNoteBi) await log("warn", warnNoteBi);
 
@@ -297,7 +273,7 @@ async function runPanelBackup(
       where: { id: run.id },
       data: { status: "failed", finishedAt: new Date(), error: storeBi(errBi, error), durationMs },
     });
-    await log("error", bi(`[${panelTitle(panel)}] بکاپ ناموفق بود: ${error}`, `[${panelTitle(panel)}] the backup failed: ${errBi?.en ?? error}`));
+    await log("error", bi(`[${panelTitle(panel)}] the backup failed: ${errBi?.en ?? error}`, `[${panelTitle(panel)}] the backup failed: ${errBi?.en ?? error}`));
     outcome = { runId: run.id, panel, status: "failed", error, errorBi: errBi, durationMs };
   }
 
@@ -306,23 +282,23 @@ async function runPanelBackup(
 
 /** Archive integrity gate — a delivered backup must be a real archive, never an error page. */
 function verifyArchive(fileName: string, buf: Buffer): { ok: true } | { ok: false; error: string; errorBi: Bi } {
-  if (buf.length === 0) return fail("فایل بکاپ خالی بود", "The backup file was empty");
+  if (buf.length === 0) return fail("The backup file was empty", "The backup file was empty");
   const head = buf.subarray(0, 4);
   const isGzip = head[0] === 0x1f && head[1] === 0x8b;
   const isZip = head[0] === 0x50 && head[1] === 0x4b;
   const lower = fileName.toLowerCase();
   if ((lower.endsWith(".gz") || lower.endsWith(".tgz")) && !isGzip) {
-    return fail("فایل بکاپ ساختار gzip معتبر ندارد", "The backup file is not a valid gzip archive");
+    return fail("The backup file is not a valid gzip archive", "The backup file is not a valid gzip archive");
   }
   if (lower.endsWith(".zip") && !isZip) {
-    return fail("فایل بکاپ ساختار zip معتبر ندارد", "The backup file is not a valid zip archive");
+    return fail("The backup file is not a valid zip archive", "The backup file is not a valid zip archive");
   }
   // a JSON error body or an HTML error page must never be stored/sent as a backup
   const looksJson = head[0] === 0x7b || head[0] === 0x5b;
   const looksHtml = head[0] === 0x3c;
   const isPlaintextFormat = lower.endsWith(".json") || lower.endsWith(".db");
   if (!isGzip && !isZip && !isPlaintextFormat && (looksJson || looksHtml)) {
-    return fail("پنل به‌جای فایل بکاپ پیام خطا برگرداند", "The panel answered with an error message instead of the backup file");
+    return fail("The panel answered with an error message instead of the backup file", "The panel answered with an error message instead of the backup file");
   }
   return { ok: true };
 }
@@ -340,19 +316,16 @@ function panelTitle(panel: PanelId): string {
 function readLocalDb(p: string): { ok: true; buf: Buffer } | { ok: false; error: string; errorBi: Bi } {
   try {
     if (!p.trim()) {
-      return fail("مسیر فایل دیتابیس لوکال تنظیم نشده است", "The local database file path is not configured");
+      return fail("The local database file path is not configured", "The local database file path is not configured");
     }
     const resolved = p.trim();
     if (!fs.existsSync(resolved)) {
-      return fail(
-        `فایل در مسیر «${resolved}» پیدا نشد (اگر بات داخل Docker اجرا می‌شود، مسیر را mount کنید)`,
-        `The file was not found at "${resolved}" (if the bot runs inside Docker, mount the path)`
-      );
+      return fail(`The file was not found at "${resolved}" (if the bot runs inside Docker, mount the path)`, `The file was not found at "${resolved}" (if the bot runs inside Docker, mount the path)`);
     }
     return { ok: true, buf: fs.readFileSync(resolved) };
   } catch (e: unknown) {
     const t = e instanceof Error ? e.message : String(e);
-    return fail(`خواندن فایل لوکال ناموفق بود: ${t}`, `Reading the local file failed: ${t}`);
+    return fail(`Reading the local file failed: ${t}`, `Reading the local file failed: ${t}`);
   }
 }
 
@@ -384,7 +357,7 @@ async function cleanupTelegramOld(cfg: Awaited<ReturnType<typeof getConfig>>) {
       }
       if (allDeleted) {
         await db.backupRun.update({ where: { id: row.id }, data: { tgDeleted: true } });
-        await log("info", bi(`بکاپ قدیمی تلگرام حذف شد (پیام ${ids[0]})`, `Old Telegram backup deleted (message ${ids[0]})`));
+        await log("info", bi(`Old Telegram backup deleted (message ${ids[0]})`, `Old Telegram backup deleted (message ${ids[0]})`));
       } else {
         break;
       }

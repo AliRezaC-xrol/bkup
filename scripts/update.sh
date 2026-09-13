@@ -12,6 +12,13 @@
 # running version untouched — it will NEVER "update" to a stale copy.
 #
 # Preserves: database (db/custom.db), backups, .env, .cli-secret
+# Fixes in v1.2.0:
+#   - Backup package.json before overwriting, restore on build failure
+#     so next update can retry (prevents "says updated but panel still old")
+#   - Fix /proc/meminfo typo (was /proc/memsay)
+#   - Merge .env.example into .env preserving existing values, adding missing keys
+#   - Copy package.json into .next/standalone for runtime version fallback
+#   - Verify standalone contains new version after build
 # =============================================================
 set -uo pipefail
 
@@ -27,6 +34,7 @@ LOG_FILE="$STATE_DIR/update.log"
 REPO="${GITHUB_REPO:-AliRezaC-xrol/bkup}"
 
 say() { if [ "$WEB_MODE" = "1" ]; then echo "$*"; else echo -e "$*"; fi; }
+ok()  { say "[OK] $*"; }
 
 write_state() {
   # web app reads $cwd/data → standalone cwd; write both spots
@@ -45,6 +53,76 @@ if state != "running":
 json.dump(data, open(path, "w"), indent=2)
 PY
   done
+}
+
+merge_env() {
+  # Merge .env.example into .env: preserve existing values, add missing keys.
+  # Also ensure critical keys like BKUP_APP_DIR, ABX_APP_DIR, etc. exist.
+  local env_file="$APP_DIR/.env"
+  local example_file="$APP_DIR/.env.example"
+
+  # If .env doesn't exist, create from example + defaults
+  if [ ! -f "$env_file" ]; then
+    if [ -f "$example_file" ]; then
+      cp "$example_file" "$env_file"
+    else
+      touch "$env_file"
+    fi
+  fi
+
+  # Ensure required keys from install.sh template exist (PORT, DATABASE_URL, etc.)
+  # We add them if missing, preserving existing values.
+  local port_val
+  port_val="$(grep -E '^PORT=' "$env_file" 2>/dev/null | cut -d= -f2- | head -1)"
+  if [ -z "$port_val" ]; then
+    port_val="3000"
+    echo "PORT=$port_val" >> "$env_file"
+  fi
+
+  # DATABASE_URL
+  if ! grep -qE '^DATABASE_URL=' "$env_file" 2>/dev/null; then
+    echo "DATABASE_URL=file:$APP_DIR/db/custom.db" >> "$env_file"
+  fi
+  # BACKUP_DIR
+  if ! grep -qE '^BACKUP_DIR=' "$env_file" 2>/dev/null; then
+    echo "BACKUP_DIR=$APP_DIR/backups" >> "$env_file"
+  fi
+  # TZ
+  if ! grep -qE '^TZ=' "$env_file" 2>/dev/null; then
+    echo "TZ=Asia/Tehran" >> "$env_file"
+  fi
+  # BKUP_APP_DIR
+  if ! grep -qE '^BKUP_APP_DIR=' "$env_file" 2>/dev/null; then
+    echo "BKUP_APP_DIR=$APP_DIR" >> "$env_file"
+  fi
+  # ABX_APP_DIR (legacy compat)
+  if ! grep -qE '^ABX_APP_DIR=' "$env_file" 2>/dev/null; then
+    echo "ABX_APP_DIR=$APP_DIR" >> "$env_file"
+  fi
+  # BKUP_ENV_FILE
+  if ! grep -qE '^BKUP_ENV_FILE=' "$env_file" 2>/dev/null; then
+    echo "BKUP_ENV_FILE=$APP_DIR/.env" >> "$env_file"
+  fi
+  # ABX_ENV_FILE
+  if ! grep -qE '^ABX_ENV_FILE=' "$env_file" 2>/dev/null; then
+    echo "ABX_ENV_FILE=$APP_DIR/.env" >> "$env_file"
+  fi
+
+  # Merge keys from .env.example that are not in .env
+  if [ -f "$example_file" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      # Skip comments and empty lines
+      [[ "$line" =~ ^[[:space:]]*# ]] && continue
+      [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+      # Extract key (before =)
+      key="$(echo "$line" | cut -d= -f1 | tr -d '[:space:]')"
+      [ -z "$key" ] && continue
+      if ! grep -qE "^${key}=" "$env_file" 2>/dev/null; then
+        echo "$line" >> "$env_file"
+        say "    + added missing env key: $key (from .env.example)"
+      fi
+    done < "$example_file"
+  fi
 }
 
 FROM_V="${ABX_FROM_VERSION:-$(python3 -c "import json;print(json.load(open('$APP_DIR/package.json'))['version'])" 2>/dev/null || echo '?')}"
@@ -107,6 +185,12 @@ if [ "$GOT" != "${TAG#v}" ]; then
   exit 1
 fi
 
+# ── CRITICAL FIX: backup current package.json so we can restore on build failure
+# This prevents the bug where package.json is new but standalone is old,
+# causing next run to think it's already latest.
+PKG_BACKUP="/tmp/bkup-package-backup-${FROM_V}.json"
+cp -a "$APP_DIR/package.json" "$PKG_BACKUP" 2>/dev/null || true
+
 # copy code over the install, never touching runtime data
 for item in src prisma public scripts docs docker .github \
             package.json bun.lock package-lock.json tsconfig.json next.config.ts \
@@ -118,6 +202,8 @@ rm -rf /tmp/abx-update /tmp/abx-update.tar.gz
 
 NEW_VERSION="$(grep -o '"version": *"[^"]*"' "$APP_DIR/package.json" | head -1 | cut -d'"' -f4)"
 if [ "$NEW_VERSION" != "${TAG#v}" ]; then
+  # Restore backup if post-copy verification fails
+  [ -f "$PKG_BACKUP" ] && cp -a "$PKG_BACKUP" "$APP_DIR/package.json" 2>/dev/null || true
   write_state error "$FROM_V" "" "post-copy verification failed"
   say "[FAIL] post-copy verification failed (disk has v${NEW_VERSION:-unknown}) — running version left untouched"
   exit 1
@@ -125,9 +211,13 @@ fi
 
 say "==> [2/6] Code updated → v$NEW_VERSION  ${WEB_MODE:+(release $TAG)}"
 
+# ── .env merge: preserve existing values, add missing keys from new template
+say "==> [2.5/6] Merging .env with new template (preserving existing values)…"
+merge_env
+say "    .env merged — existing values preserved, missing keys added"
 
 # ── low-RAM guard: swap so the build and the app are never OOM-killed ──
-MEM_MB=$(awk '/MemTotal/{print int($2/1024)}' /proc/memsay 2>/dev/null || echo 0)
+MEM_MB=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
 if [ "$MEM_MB" -lt 3000 ] && [ -z "$(swapon --noheadings 2>/dev/null)" ]; then
   say "small-RAM server (${MEM_MB}MB) detected — creating 2G swap (prevents OOM build/service kills)"
   fallocate -l 2G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
@@ -135,11 +225,41 @@ if [ "$MEM_MB" -lt 3000 ] && [ -z "$(swapon --noheadings 2>/dev/null)" ]; then
   grep -q "^/swapfile" /etc/fstab 2>/dev/null || echo "/swapfile none swap sw 0 0" >> /etc/fstab
   ok "swap enabled"
 fi
+
 say "==> [3/6] Installing dependencies + generating Prisma client…"
-bash "$SCRIPT_DIR/build-native.sh" || {
+if ! bash "$SCRIPT_DIR/build-native.sh"; then
+  # ── CRITICAL FIX: restore package.json on build failure so next update retries
+  if [ -f "$PKG_BACKUP" ]; then
+    cp -a "$PKG_BACKUP" "$APP_DIR/package.json" 2>/dev/null || true
+    say "    ↩ restored package.json to v$FROM_V (build failed, will retry on next update)"
+  fi
   write_state error "$FROM_V" "" "build failed"
-  say "[FAIL] build failed — previous version is still running"; exit 1
-}
+  say "[FAIL] build failed — previous version is still running (v$FROM_V)"
+  say "       Fix the build error and run update again. Package.json restored to v$FROM_V so update will retry."
+  rm -f "$PKG_BACKUP"
+  exit 1
+fi
+rm -f "$PKG_BACKUP"
+
+# ── Post-build verification: ensure standalone has correct version
+STANDALONE_PKG="$APP_DIR/.next/standalone/package.json"
+if [ -f "$STANDALONE_PKG" ]; then
+  STANDALONE_V="$(grep -o '"version": *"[^"]*"' "$STANDALONE_PKG" | head -1 | cut -d'"' -f4)"
+  if [ "$STANDALONE_V" != "$NEW_VERSION" ]; then
+    say "⚠ warning: standalone package.json version ($STANDALONE_V) != expected ($NEW_VERSION), fixing..."
+    cp -a "$APP_DIR/package.json" "$STANDALONE_PKG" 2>/dev/null || true
+  fi
+else
+  # build-native.sh should have copied it, but ensure it exists
+  cp -a "$APP_DIR/package.json" "$STANDALONE_PKG" 2>/dev/null || true
+fi
+
+# Also verify that the built server.js exists and is not stale
+if [ ! -f "$APP_DIR/.next/standalone/server.js" ]; then
+  write_state error "$FROM_V" "$NEW_VERSION" "build output missing"
+  say "[FAIL] build completed but standalone/server.js missing — aborting"
+  exit 1
+fi
 
 say "==> [4/6] Applying database migrations (data preserved)…"
 DB_URL=$(grep -E '^DATABASE_URL=' "$APP_DIR/.env" 2>/dev/null | cut -d= -f2- || true)
@@ -194,6 +314,15 @@ if [ "$OK" = "1" ]; then
   write_state done "$FROM_V" "$NEW_VERSION"
   rm -f /tmp/.bkup-update-notice
   say "[OK] Update complete: v$FROM_V -> v$NEW_VERSION (service is healthy — web panel and CLI are now on v$NEW_VERSION)"
+  # Final verification: ensure running version matches expected
+  RUNNING_V="$(curl -sf "http://127.0.0.1:${PORT}/api/system/info" 2>/dev/null | grep -o '"appVersion": *"[^"]*"' | head -1 | cut -d'"' -f4)"
+  if [ -n "$RUNNING_V" ] && [ "$RUNNING_V" != "$NEW_VERSION" ]; then
+    say "⚠ warning: API reports v$RUNNING_V but expected v$NEW_VERSION — service may need a second restart"
+    if [ -n "$SVC" ]; then
+      systemctl restart "$SVC" 2>/dev/null
+      sleep 3
+    fi
+  fi
   exit 0
 else
   write_state error "$FROM_V" "$NEW_VERSION" "health check failed"

@@ -87,7 +87,7 @@ export async function POST(req: NextRequest) {
     if (!res.ok) {
       return NextResponse.json({ error: res.error ?? "systemctl failed" }, { status: 500 });
     }
-    await log("info", bi(`سرویس با دستور «${action}» از پنل وب کنترل شد`, `The service was controlled from the web panel with the "${action}" command`));
+    await log("info", bi(`The service was controlled from the web panel with the "${action}" command`, `The service was controlled from the web panel with the "${action}" command`));
     return NextResponse.json({ ok: true, state: await state() });
   } catch (e: unknown) {
     return NextResponse.json(

@@ -54,7 +54,7 @@ function isMasked(v: unknown): boolean {
 function validateUrl(v: unknown, label: string): { fa: string; en: string } | null {
   const url = String(v ?? "").trim();
   if (url && !/^https?:\/\//i.test(url)) {
-    return bi(`آدرس ${label} باید با http:// یا https:// شروع شود`, `The ${label} URL must start with http:// or https://`);
+    return bi(`The ${label} URL must start with http:// or https://`, `The ${label} URL must start with http:// or https://`);
   }
   return null;
 }
@@ -86,10 +86,7 @@ export async function PUT(req: NextRequest) {
       if (!Number.isFinite(n) || n < 10 || n > 86400) {
         return NextResponse.json(
           {
-            ...failMsg(bi(
-              "فاصله بکاپ باید بین ۱۰ ثانیه تا ۲۴ ساعت باشد",
-              "The backup interval must be between 10 seconds and 24 hours"
-            )),
+            ...failMsg(bi("The backup interval must be between 10 seconds and 24 hours", "The backup interval must be between 10 seconds and 24 hours")),
           },
           { status: 400 }
         );
@@ -103,13 +100,13 @@ export async function PUT(req: NextRequest) {
       patch.tgAutoDeleteKeep = Math.max(0, Math.floor(Number(patch.tgAutoDeleteKeep) || 0));
     }
     if (patch.authMode !== undefined && !["session", "bearer"].includes(String(patch.authMode))) {
-      return NextResponse.json({ ...failMsg(bi("حالت احراز هویت نامعتبر است", "Invalid authentication mode")) }, { status: 400 });
+      return NextResponse.json({ ...failMsg(bi("Invalid authentication mode", "Invalid authentication mode")) }, { status: 400 });
     }
     if (patch.backupMode !== undefined && !["auto", "db", "json", "local"].includes(String(patch.backupMode))) {
-      return NextResponse.json({ ...failMsg(bi("حالت بکاپ نامعتبر است", "Invalid backup mode")) }, { status: 400 });
+      return NextResponse.json({ ...failMsg(bi("Invalid backup mode", "Invalid backup mode")) }, { status: 400 });
     }
     if (patch.panelUrl !== undefined) {
-      const err = validateUrl(patch.panelUrl, "پنل 3x-ui");
+      const err = validateUrl(patch.panelUrl, "3x-ui panel");
       if (err) return NextResponse.json({ ...failMsg(err) }, { status: 400 });
       patch.panelUrl = String(patch.panelUrl).trim().replace(/\/+$/, "");
     }
@@ -133,12 +130,12 @@ export async function PUT(req: NextRequest) {
     invalidateSession();
     hmInvalidateSession();
     restartScheduler();
-    await log("info", bi("تنظیمات به‌روزرسانی شد", "Settings were updated"));
+    await log("info", bi("Settings were updated", "Settings were updated"));
     return NextResponse.json(maskConfig(updated));
   } catch (e: unknown) {
     return NextResponse.json(
       { ...failMsg(bi(
-        e instanceof Error ? e.message : "خطای نامشخص در ذخیره تنظیمات",
+        e instanceof Error ? e.message : "Unknown error while saving settings",
         e instanceof Error ? e.message : "Unknown error while saving settings"
       )) },
       { status: 500 }

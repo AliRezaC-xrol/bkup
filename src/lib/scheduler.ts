@@ -60,7 +60,7 @@ async function tick() {
   if (!cfg.enabled) return; // stopped while waiting
 
   if (s.busy) {
-    await log("warn", bi("اجرای قبلی هنوز در جریان است؛ این تیک رد شد", "The previous run is still in progress; this tick was skipped"));
+    await log("warn", bi("The previous run is still in progress; this tick was skipped", "The previous run is still in progress; this tick was skipped"));
     scheduleNext(); // keep the rhythm going
     return;
   }
@@ -69,7 +69,7 @@ async function tick() {
   try {
     await runBackup("auto");
   } catch (e: unknown) {
-    await log("error", bi(`خطای غیرمنتظره در زمان‌بند: ${e instanceof Error ? e.message : String(e)}`, `Unexpected scheduler error: ${e instanceof Error ? e.message : String(e)}`));
+    await log("error", bi(`Unexpected scheduler error: ${e instanceof Error ? e.message : String(e)}`, `Unexpected scheduler error: ${e instanceof Error ? e.message : String(e)}`));
   } finally {
     s.busy = false;
   }
@@ -121,7 +121,7 @@ export function bootstrapScheduler() {
   import("@/lib/db").then(({ db }) =>
     db.backupRun.updateMany({
       where: { status: "running" },
-      data: { status: "failed", error: "اجرای بکاپ با ری‌استارت سرویس قطع شد", durationMs: 0 },
+      data: { status: "failed", error: "Backup execution was interrupted by service restart", durationMs: 0 },
     }).catch(() => undefined)
   );
   scheduleNext();

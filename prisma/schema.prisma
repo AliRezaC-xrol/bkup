@@ -110,3 +110,39 @@ model AppLog {
 
   @@index([ts])
 }
+
+// Singleton row (id = 1) holding restore feature configuration
+model RestoreConfig {
+  id              Int      @id @default(1)
+  // Install script URLs for each panel — defaults to official repos.
+  // The user can override each with their own GitHub URL.
+  xuiInstallScript String  @default("https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh")
+  hmInstallScript  String  @default("https://raw.githubusercontent.com/neoauroraproject/hmpanel/main/install.sh")
+  pgInstallScript  String  @default("https://raw.githubusercontent.com/PasarGuard/panel/main/install.sh")
+  rbInstallScript  String  @default("https://raw.githubusercontent.com/rebeccapanel/Rebecca/main/install.sh")
+  // GitHub token for private repos (optional, used when fetching install scripts)
+  githubToken      String  @default("")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+// One row per restore execution
+model RestoreJob {
+  id           Int      @id @default(autoincrement())
+  startedAt    DateTime @default(now())
+  finishedAt   DateTime?
+  status       String   // running | success | failed
+  panel        String   // 3x-ui | hmpanel | pasarguard | rebecca
+  backupId     Int?     // id of the BackupRun or ReassembledBackup
+  backupName   String?
+  backupSource String   // backup-run | reassembled
+  backupPath   String?  // local file path of the backup
+  sshHost      String
+  sshPort      Int
+  sshUser      String
+  error        String?
+  durationMs   Int?
+  steps        String?  // JSON array of step progress objects
+
+  @@index([startedAt])
+}

@@ -18,7 +18,7 @@ export async function GET(
   const { id } = await ctx.params;
   const run = await db.backupRun.findUnique({ where: { id: Number(id) } });
   if (!run || !run.filePath || !fs.existsSync(run.filePath)) {
-    return NextResponse.json({ error: "فایل بکاپ پیدا نشد", errorBi: bi("فایل بکاپ پیدا نشد", "The backup file was not found") }, { status: 404 });
+    return NextResponse.json({ error: "The backup file was not found", errorBi: bi("The backup file was not found", "The backup file was not found") }, { status: 404 });
   }
   const buf = fs.readFileSync(run.filePath);
   return new NextResponse(new Uint8Array(buf), {

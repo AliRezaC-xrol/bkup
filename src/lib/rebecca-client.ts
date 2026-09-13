@@ -55,11 +55,11 @@ export function rbNormalizeUrl(raw: string): string {
 /** Bilingual axios error text. */
 function rbErrMsg(e: unknown): Bi {
   if (axios.isAxiosError(e)) {
-    if (e.code === "ECONNREFUSED") return bi("اتصال رد شد (سرویس Rebecca در دسترس نیست)", "Connection refused (the Rebecca service is unreachable)");
-    if (e.code === "ETIMEDOUT" || e.code === "ECONNABORTED") return bi("مهلت اتصال به پایان رسید", "The connection timed out");
-    if (e.code === "ENOTFOUND") return bi("هاست پیدا نشد", "Host not found");
+    if (e.code === "ECONNREFUSED") return bi("Connection refused (the Rebecca service is unreachable)", "Connection refused (the Rebecca service is unreachable)");
+    if (e.code === "ETIMEDOUT" || e.code === "ECONNABORTED") return bi("The connection timed out", "The connection timed out");
+    if (e.code === "ENOTFOUND") return bi("Host not found", "Host not found");
     if (e.code === "CERT_HAS_EXPIRED" || e.code === "DEPTH_ZERO_SELF_SIGNED_CERT") {
-      return bi("گواهی SSL نامعتبر است (گزینه نادیده‌گرفتن SSL را فعال کنید)", "Invalid SSL certificate (enable the ignore-SSL option)");
+      return bi("Invalid SSL certificate (enable the ignore-SSL option)", "Invalid SSL certificate (enable the ignore-SSL option)");
     }
     return bi(e.message, e.message);
   }
@@ -69,9 +69,9 @@ function rbErrMsg(e: unknown): Bi {
 
 /** Login → Bearer token. Accepts any 2xx with access_token (JSON body, form fallback). */
 async function rbLogin(cfg: AppConfig): Promise<RbResult<{ token: string }>> {
-  if (!cfg.rebeccaUrl.trim()) return fail("آدرس Rebecca تنظیم نشده است", "Rebecca URL is not configured");
+  if (!cfg.rebeccaUrl.trim()) return fail("Rebecca URL is not configured", "Rebecca URL is not configured");
   if (!cfg.rebeccaUsername.trim() || !cfg.rebeccaPassword) {
-    return fail("نام کاربری و رمز عبور Rebecca را وارد کنید (حساب ادمین)", "Enter the Rebecca username and password (an admin account)");
+    return fail("Enter the Rebecca username and password (an admin account)", "Enter the Rebecca username and password (an admin account)");
   }
 
   const base = rbNormalizeUrl(cfg.rebeccaUrl);
@@ -92,7 +92,7 @@ async function rbLogin(cfg: AppConfig): Promise<RbResult<{ token: string }>> {
     }
   } catch (e: unknown) {
     const m = rbErrMsg(e);
-    return fail(`ورود به Rebecca ناموفق بود: ${m.fa}`, `Rebecca login failed: ${m.en}`);
+    return fail(`Rebecca login failed: ${m.en}`, `Rebecca login failed: ${m.en}`);
   }
 
   const body = (res.data ?? {}) as Record<string, unknown>;
@@ -107,18 +107,12 @@ async function rbLogin(cfg: AppConfig): Promise<RbResult<{ token: string }>> {
   }
   if (res.status === 401 || res.status === 403) {
     return {
-      ...fail(
-        "ورود به Rebecca ناموفق بود — نام کاربری/رمز عبور اشتباه است یا این حساب غیرفعال شده",
-        "Rebecca login failed — wrong username/password or this account is disabled"
-      ),
+      ...fail("Rebecca login failed — wrong username/password or this account is disabled", "Rebecca login failed — wrong username/password or this account is disabled"),
       status: res.status,
     };
   }
   return {
-    ...fail(
-      `ورود به Rebecca ناموفق بود (HTTP ${res.status} روی ${base})`,
-      `Rebecca login failed (HTTP ${res.status} on ${base})`
-    ),
+    ...fail(`Rebecca login failed (HTTP ${res.status} on ${base})`, `Rebecca login failed (HTTP ${res.status} on ${base})`),
     status: res.status,
   };
 }
@@ -150,24 +144,24 @@ export async function rbFullBackup(
     }
   } catch (e: unknown) {
     const m = rbErrMsg(e);
-    return fail(`ساخت بکاپ روی Rebecca ناموفق بود: ${m.fa}`, `Creating the Rebecca backup failed: ${m.en}`);
+    return fail(`Creating the Rebecca backup failed: ${m.en}`, `Creating the Rebecca backup failed: ${m.en}`);
   }
 
   if (res.status === 401 || res.status === 403) {
-    return fail("دانلود بکاپ Rebecca مجاز نشد (دسترسی ادمین لازم است)", "The Rebecca backup download was not allowed (admin access required)");
+    return fail("The Rebecca backup download was not allowed (admin access required)", "The Rebecca backup download was not allowed (admin access required)");
   }
   if (res.status === 409) {
-    return fail("بکاپ Rebecca در این نصب غیرفعال است (فقط نصب باینری)", "Rebecca backups are disabled on this install (binary runtime only)");
+    return fail("Rebecca backups are disabled on this install (binary runtime only)", "Rebecca backups are disabled on this install (binary runtime only)");
   }
   if (res.status >= 300) {
-    return fail(`دانلود بکاپ Rebecca ناموفق بود (HTTP ${res.status})`, `Downloading the Rebecca backup failed (HTTP ${res.status})`);
+    return fail(`Downloading the Rebecca backup failed (HTTP ${res.status})`, `Downloading the Rebecca backup failed (HTTP ${res.status})`);
   }
 
   const buf = Buffer.from(res.data);
-  if (buf.length === 0) return fail("فایل بکاپ Rebecca خالی بود", "The Rebecca backup file was empty");
+  if (buf.length === 0) return fail("The Rebecca backup file was empty", "The Rebecca backup file was empty");
   // a JSON error body would arrive as 200 with JSON — reject it
   if (buf[0] === 0x7b && buf[1] === 0x22) {
-    return fail("پاسخ Rebecca به‌جای فایل بکاپ، JSON بود", "Rebecca answered with JSON instead of the backup file");
+    return fail("Rebecca answered with JSON instead of the backup file", "Rebecca answered with JSON instead of the backup file");
   }
 
   const cd = String(res.headers["content-disposition"] ?? "");
@@ -192,12 +186,9 @@ export async function rbTestConnection(
     if (res.status >= 200 && res.status < 300) {
       return { ok: true, data: { base, username: cfg.rebeccaUsername.trim() } };
     }
-    return fail(
-      `توکن پذیرفته نشد (HTTP ${res.status}) — نسخه پنل با API مورد انتظار فرق دارد`,
-      `The token was rejected (HTTP ${res.status}) — the panel version differs from the expected API`
-    );
+    return fail(`The token was rejected (HTTP ${res.status}) — the panel version differs from the expected API`, `The token was rejected (HTTP ${res.status}) — the panel version differs from the expected API`);
   } catch (e: unknown) {
     const m = rbErrMsg(e);
-    return fail(`خطای اتصال: ${m.fa}`, `Connection error: ${m.en}`);
+    return fail(`Connection error: ${m.en}`, `Connection error: ${m.en}`);
   }
 }

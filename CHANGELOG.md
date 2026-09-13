@@ -3,6 +3,43 @@
 All notable changes to **bkup** are documented here.
 Versions follow [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] — 2026-09-13
+
+### Added
+- **Restore feature** — full restore flow for 3x-ui, HM Panel, PasarGuard, Rebecca via SSH. Upload backup or use existing backup, run restore with live step logs.
+- **Restore History** — list of all restore jobs with status (running, success, failed, cancelled), duration, single delete and select-all deletion.
+- **Cloudflare DNS integration** — manage Cloudflare DNS records from panel, with proper permission IDs (Zone Read `c8fed203ed3043cba015a93ad1616f1f`, DNS Edit `4755a26eedb94da69e1066d98aa820be`), inline IP/proxy edit, delete by ID, paste on HTTP, history button.
+- **SSH restore dependencies** — `ssh2` marked as `serverExternalPackages` to avoid Turbopack bundling issues, `@types/ssh2` added.
+- **New Prisma models** — `RestoreConfig` (singleton id=1, install script URLs, GitHub token) and `RestoreJob` (panel, backup source, SSH details, steps JSON).
+
+### Fixed
+- **Update bug root-cause (critical)** — fixed issue where CLI menu option 7 or web-panel update said "updated" but panel stayed on old version:
+  - Backup `package.json` before overwriting code, restore on build failure so next update can retry (prevents `vFROM == TAG` false-positive "Already latest")
+  - Fix typo `/proc/memsay` → `/proc/meminfo` in `scripts/update.sh` (was causing MEM_MB=0 and unnecessary swap creation)
+  - Merge `.env.example` into `.env` preserving existing values, adding missing keys (PORT, DATABASE_URL, BACKUP_DIR, TZ, BKUP_APP_DIR, ABX_APP_DIR, BKUP_ENV_FILE, ABX_ENV_FILE) instead of overwriting or preserving verbatim
+  - Copy `package.json` into `.next/standalone/` after build so runtime fallback `src/lib/version.ts` works even if `NEXT_PUBLIC_APP_VERSION` is missing
+  - Post-build verification that standalone contains correct version and `server.js` exists
+  - Health check verifies running API version matches expected, restarts service if mismatch
+  - Define missing `ok()` helper in update.sh (was calling undefined function)
+- **install.sh .env handling** — for existing installs, merge instead of overwriting `.env`, preserving custom values and adding missing keys from template.
+- **build-native.sh** — copy `data/` into standalone/data and `package.json` into standalone, verify version, clean re-copy of static/public for correctness after failed build.
+- **Restore cancel** — precise cancel with immediate abort and status `Cancelled` in history, not `Running`.
+- **UI fixes**:
+  - Brand `bkup` correctly aligned left corner on tablet/iPad/PC/laptop, not centered
+  - Reassemble button full-width on phone like Choose Files
+  - Backup mode fields show full text, not truncated
+  - System update buttons side-by-side centered opposite each other
+  - Remove phrase ", with zero guesswork." from restore description
+  - Change footer tagline to "Backup & Restore for 3x-ui, HM Panel, PasarGuard, Rebecca" (comma before Rebecca)
+  - Remove Clear all button when select-all checkbox exists (IMG_4064)
+  - Cloudflare DNS "To update to" close icon changed from Trash2 to XCircle (close/remove from list, not delete DNS)
+- **HM Panel AMD64** — improved native install handling, handle both `compose.yml` and `docker-compose.yml`, better verification for AMD64.
+- **Version fallback** — `src/lib/version.ts` hardcoded fallback updated from 1.1.0 to 1.2.0, runtime reads `package.json` from `process.cwd()` (standalone).
+
+### Changed
+- **Version bump** — `package.json` version 1.1.0 → 1.2.0, `next.config.ts` adds `serverExternalPackages: ["ssh2"]`
+- **Dependencies** — added `ssh2@^1.17.0`, `@types/ssh2@^1.15.6`, updated `bun.lock` and `package-lock.json`
+
 ## [1.1.0] — 2026-09-10
 
 - **Rebecca Panel support** — fourth independent panel; true full backup through the official Rebecca API

@@ -22,9 +22,6 @@ export async function DELETE(
     if (row.filePath && fs.existsSync(row.filePath)) fs.unlinkSync(row.filePath);
   } catch { /* file may already be gone */ }
   await db.reassembledBackup.delete({ where: { id: row.id } });
-  await log("info", bi(
-    `بکاپ برگردانده‌شده #${row.id} حذف شد`,
-    `Reassembled backup #${row.id} was deleted`
-  ));
+  await log("info", bi(`Reassembled backup #${row.id} was deleted`, `Reassembled backup #${row.id} was deleted`));
   return NextResponse.json({ ok: true });
 }

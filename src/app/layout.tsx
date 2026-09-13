@@ -5,7 +5,7 @@ import { Toaster } from "@/components/ui/toaster";
 export const metadata: Metadata = {
   title: "bkup",
   description:
-    "bkup — automatic backups of 3x-ui, HM Panel and PasarGuard panels delivered to Telegram. Scheduler, password-protected web panel, CLI and one-command updates.",
+    "bkup — automatic backups of 3x-ui, HM Panel and PasarGuard panels to Telegram. Scheduler, password-protected web panel, CLI and one-command updates.",
   icons: {
     icon: "/logo-mark.png",
   },

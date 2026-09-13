@@ -39,7 +39,7 @@ export async function POST(req: NextRequest) {
         path: "/",
         maxAge: 7 * 24 * 3600,
       });
-      await log("success", bi("پسورد پنل وب ساخته شد (setup اولیه)", "The web panel password was created (initial setup)"));
+      await log("success", bi("The web panel password was created (initial setup)", "The web panel password was created (initial setup)"));
       return NextResponse.json({ ok: true, setup: true });
     }
 
@@ -48,7 +48,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "SETUP_REQUIRED" }, { status: 400 });
     }
     if (!verifyPassword(password, row)) {
-      await log("warn", bi("تلاش ناموفق برای ورود به پنل وب", "A failed sign-in attempt on the web panel"));
+      await log("warn", bi("A failed sign-in attempt on the web panel", "A failed sign-in attempt on the web panel"));
       return NextResponse.json({ error: "WRONG_PASSWORD" }, { status: 401 });
     }
     const token = await issueSession();

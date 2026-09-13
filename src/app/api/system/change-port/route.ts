@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
     }
     fs.writeFileSync(envFile, lines.join("\n") + "\n");
 
-    await log("info", bi(`درخواست تغییر پورت وب‌پنل به ${p} — سرویس ظرف چند ثانیه ری‌استارت می‌شود`, `A web panel port change to ${p} was requested — the service restarts within a few seconds`));
+    await log("info", bi(`A web panel port change to ${p} was requested — the service restarts within a few seconds`, `A web panel port change to ${p} was requested — the service restarts within a few seconds`));
 
     // schedule detached restart: current unit first (bkup), then the legacy one
     const restart = spawn(

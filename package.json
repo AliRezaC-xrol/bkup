@@ -1,6 +1,6 @@
 {
   "name": "bkup",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "scripts": {
     "dev": "next dev -p 3000 2>&1 | tee dev.log",
@@ -73,11 +73,11 @@
     "recharts": "^2.15.4",
     "sharp": "^0.34.3",
     "sonner": "^2.0.6",
+    "ssh2": "^1.17.0",
     "tailwind-merge": "^3.3.1",
     "tailwindcss-animate": "^1.0.7",
     "uuid": "^11.1.0",
     "vaul": "^1.1.2",
-    "z-ai-web-dev-sdk": "^0.0.18",
     "zod": "^4.0.2",
     "zustand": "^5.0.6"
   },
@@ -85,6 +85,7 @@
     "@tailwindcss/postcss": "^4",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/ssh2": "^1.15.6",
     "bun-types": "^1.3.4",
     "eslint": "^9",
     "eslint-config-next": "^16.1.1",
@@ -92,7 +93,7 @@
     "tw-animate-css": "^1.3.5",
     "typescript": "^5"
   },
-  "description": "bkup — automatic backups of 3x-ui, HM Panel & PasarGuard panels delivered to Telegram",
+  "description": "bkup \u2014 automatic backups of 3x-ui, HM Panel & PasarGuard panels to Telegram",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/AliRezaC-xrol/bkup.git"

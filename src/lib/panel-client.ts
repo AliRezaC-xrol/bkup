@@ -73,7 +73,7 @@ export async function login(cfg: AppConfig, force = false): Promise<PanelRequest
   }
 
   const base = buildBaseUrl(cfg);
-  if (!base) return fail("آدرس پنل تنظیم نشده است", "Panel URL is not configured");
+  if (!base) return fail("Panel URL is not configured", "Panel URL is not configured");
 
   const ax = axiosFor(cfg);
   let flavor: PanelSession["flavor"] = "unknown";
@@ -116,12 +116,12 @@ export async function login(cfg: AppConfig, force = false): Promise<PanelRequest
           ? body.msg
           : `HTTP ${loginRes.status}`;
       invalidateSession();
-      return { ...fail(`ورود به پنل ناموفق بود: ${msg}`, `Panel login failed: ${msg}`), status: loginRes.status };
+      return { ...fail(`Panel login failed: ${msg}`, `Panel login failed: ${msg}`), status: loginRes.status };
     }
 
     const rawCookies = loginRes.headers["set-cookie"];
     if (!rawCookies?.length) {
-      return fail("پنل کوکی سشن برنگرداند", "The panel did not return a session cookie");
+      return fail("The panel did not return a session cookie", "The panel did not return a session cookie");
     }
     const cookie = rawCookies.map(splitCookie).join("; ");
 
@@ -131,7 +131,7 @@ export async function login(cfg: AppConfig, force = false): Promise<PanelRequest
   } catch (e: unknown) {
     invalidateSession();
     const m = errMsg(e);
-    return fail(`خطای اتصال به پنل: ${m.fa}`, `Panel connection error: ${m.en}`);
+    return fail(`Panel connection error: ${m.en}`, `Panel connection error: ${m.en}`);
   }
 }
 
@@ -160,29 +160,29 @@ export async function getDb(
       responseType: "arraybuffer",
     });
     if (res.status === 401 || res.status === 404) {
-      return { ...fail(`احراز هویت نامعتبر است (HTTP ${res.status})`, `Invalid authentication (HTTP ${res.status})`), status: res.status };
+      return { ...fail(`Invalid authentication (HTTP ${res.status})`, `Invalid authentication (HTTP ${res.status})`), status: res.status };
     }
     if (res.status !== 200) {
-      return { ...fail(`دانلود دیتابیس ناموفق (HTTP ${res.status})`, `Database download failed (HTTP ${res.status})`), status: res.status };
+      return { ...fail(`Database download failed (HTTP ${res.status})`, `Database download failed (HTTP ${res.status})`), status: res.status };
     }
     const buf = Buffer.from(res.data);
     // Some panels return JSON errors with 200 — detect and reject
     const ct = String(res.headers["content-type"] ?? "");
     if (ct.includes("application/json") || (buf.length > 0 && buf[0] === 0x7b && buf[1] === 0x22)) {
-      let msg = bi("پاسخ JSON به‌جای فایل دیتابیس", "The panel answered with JSON instead of the database file");
+      let msg = bi("The panel answered with JSON instead of the database file", "The panel answered with JSON instead of the database file");
       try {
         const j = JSON.parse(buf.toString("utf8"));
         if (j?.msg) msg = bi(String(j.msg), String(j.msg));
       } catch { /* ignore */ }
       return { ok: false, error: msg.fa, errorBi: msg };
     }
-    if (buf.length === 0) return fail("فایل دیتابیس خالی بود", "The database file was empty");
+    if (buf.length === 0) return fail("The database file was empty", "The database file was empty");
     const cd = String(res.headers["content-disposition"] ?? "");
     const m = cd.match(/filename\s*=\s*"?([^";]+)"?/i);
     return { ok: true, data: { buf, filename: m?.[1] ?? "x-ui.db" } };
   } catch (e: unknown) {
     const m = errMsg(e);
-    return fail(`خطای دانلود دیتابیس: ${m.fa}`, `Database download error: ${m.en}`);
+    return fail(`Database download error: ${m.en}`, `Database download error: ${m.en}`);
   }
 }
 
@@ -197,7 +197,7 @@ export async function getJsonExport(
   try {
     const inb = await ax.get(`${base}/panel/api/inbounds/list`, { headers });
     if (inb.status !== 200 || inb.data?.success !== true) {
-      return fail(`دریافت اینباندها ناموفق بود (HTTP ${inb.status})`, `Fetching inbounds failed (HTTP ${inb.status})`);
+      return fail(`Fetching inbounds failed (HTTP ${inb.status})`, `Fetching inbounds failed (HTTP ${inb.status})`);
     }
     const st = await ax.post(`${base}/panel/setting/all`, null, { headers });
     const settings = st.status === 200 && st.data?.success === true ? st.data.obj : null;
@@ -215,36 +215,36 @@ export async function getJsonExport(
     return { ok: true, data: { json: JSON.stringify(payload, null, 2) } };
   } catch (e: unknown) {
     const m = errMsg(e);
-    return fail(`خطای ساخت خروجی JSON: ${m.fa}`, `JSON export error: ${m.en}`);
+    return fail(`JSON export error: ${m.en}`, `JSON export error: ${m.en}`);
   }
 }
 
-/** Lightweight connection test used by the "تست اتصال" button. */
+/** Lightweight connection test used by the "Test connection" button. */
 export async function testConnection(
   cfg: AppConfig
 ): Promise<PanelRequestResult<{ inboundCount: number; flavor: string }>> {
   const base = buildBaseUrl(cfg);
-  if (!cfg.panelUrl.trim()) return fail("آدرس پنل را وارد کنید", "Enter the panel URL");
+  if (!cfg.panelUrl.trim()) return fail("Enter the panel URL", "Enter the panel URL");
 
   if (cfg.authMode === "bearer") {
-    if (!cfg.apiToken.trim()) return fail("توکن API را وارد کنید", "Enter the API token");
+    if (!cfg.apiToken.trim()) return fail("Enter the API token", "Enter the API token");
     const ax = axiosFor(cfg);
     try {
       const res = await ax.get(`${base}/panel/api/inbounds/list`, {
         headers: { Authorization: `Bearer ${cfg.apiToken.trim()}` },
       });
       if (res.status !== 200 || res.data?.success !== true) {
-        return fail(`توکن API نامعتبر است (HTTP ${res.status})`, `Invalid API token (HTTP ${res.status})`);
+        return fail(`Invalid API token (HTTP ${res.status})`, `Invalid API token (HTTP ${res.status})`);
       }
       return { ok: true, data: { inboundCount: (res.data.obj ?? []).length, flavor: "v3 (token)" } };
     } catch (e: unknown) {
       const m = errMsg(e);
-      return fail(`خطای اتصال: ${m.fa}`, `Connection error: ${m.en}`);
+      return fail(`Connection error: ${m.en}`, `Connection error: ${m.en}`);
     }
   }
 
   if (!cfg.panelUsername.trim() || !cfg.panelPassword) {
-    return fail("نام کاربری و رمز عبور پنل را وارد کنید", "Enter the panel username and password");
+    return fail("Enter the panel username and password", "Enter the panel username and password");
   }
   const loginRes = await login(cfg, true);
   if (!loginRes.ok || !loginRes.data) return { ok: false, error: loginRes.error, errorBi: loginRes.errorBi };
@@ -255,10 +255,10 @@ export async function testConnection(
       headers: authHeaders(cfg, loginRes.data),
     });
     if (res.status === 401 || res.status === 404) {
-      return fail("سشن پذیرفته نشد — مسیر پایه یا مشخصات را بررسی کنید", "Session was rejected — check the base path or credentials");
+      return fail("Session was rejected — check the base path or credentials", "Session was rejected — check the base path or credentials");
     }
     if (res.status !== 200 || res.data?.success !== true) {
-      return fail(`اتصال برقرار شد ولی دریافت داده ناموفق بود (HTTP ${res.status})`, `Connected, but fetching data failed (HTTP ${res.status})`);
+      return fail(`Connected, but fetching data failed (HTTP ${res.status})`, `Connected, but fetching data failed (HTTP ${res.status})`);
     }
     return {
       ok: true,
@@ -266,18 +266,18 @@ export async function testConnection(
     };
   } catch (e: unknown) {
     const m = errMsg(e);
-    return fail(`خطای اتصال: ${m.fa}`, `Connection error: ${m.en}`);
+    return fail(`Connection error: ${m.en}`, `Connection error: ${m.en}`);
   }
 }
 
 /** Bilingual axios error text. */
 function errMsg(e: unknown): Bi {
   if (axios.isAxiosError(e)) {
-    if (e.code === "ECONNREFUSED") return bi("اتصال رد شد (پنل در دسترس نیست)", "Connection refused (panel is unreachable)");
-    if (e.code === "ETIMEDOUT" || e.code === "ECONNABORTED") return bi("مهلت اتصال به پایان رسید", "The connection timed out");
-    if (e.code === "ENOTFOUND") return bi("هاست پیدا نشد", "Host not found");
+    if (e.code === "ECONNREFUSED") return bi("Connection refused (panel is unreachable)", "Connection refused (panel is unreachable)");
+    if (e.code === "ETIMEDOUT" || e.code === "ECONNABORTED") return bi("The connection timed out", "The connection timed out");
+    if (e.code === "ENOTFOUND") return bi("Host not found", "Host not found");
     if (e.code === "CERT_HAS_EXPIRED" || e.code === "DEPTH_ZERO_SELF_SIGNED_CERT") {
-      return bi("گواهی SSL نامعتبر است (گزینه نادیده‌گرفتن SSL را فعال کنید)", "Invalid SSL certificate (enable the ignore-SSL option)");
+      return bi("Invalid SSL certificate (enable the ignore-SSL option)", "Invalid SSL certificate (enable the ignore-SSL option)");
     }
     return bi(e.message, e.message);
   }

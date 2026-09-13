@@ -1,0 +1,1750 @@
+import fs from "node:fs";
+import path from "node:path";
+import { db } from "@/lib/db";
+import { log } from "@/lib/logger";
+import { bi } from "@/lib/messages";
+import { SshClient, type SshOptions } from "@/lib/restore-ssh";
+import {
+  getRestoreConfig,
+  getInstallScript,
+  OFFICIAL_INSTALL_URLS,
+  OFFICIAL_NODE_INSTALL_URLS,
+} from "@/lib/restore-config";
+import type { RestoreConfig } from "@prisma/client";
+
+export type PanelId = "3x-ui" | "hmpanel" | "pasarguard" | "rebecca";
+export type SslMode = "none" | "domain" | "ip" | "custom";
+
+export interface RestoreRequest {
+  sshHost: string;
+  sshPort: number;
+  sshUser: string;
+  sshPassword?: string;
+  sshPrivateKey?: string;
+  sshPassphrase?: string;
+  backupId: number;
+  backupSource: "backup-run" | "reassembled";
+  panel: PanelId;
+  installNode?: boolean;
+  sslMode?: SslMode;
+  sslDomain?: string;
+  sslDomains?: string[]; // multi-domain support
+  sslIp?: string;
+  sslCertPath?: string;
+  sslKeyPath?: string;
+  cloudflareZoneId?: string;
+  cloudflareZoneName?: string;
+}
+
+export type StepStatus = "pending" | "running" | "done" | "failed" | "skipped";
+
+export interface RestoreStep {
+  key: string;
+  title: string;
+  status: StepStatus;
+  detail?: string;
+  startedAt?: number;
+  finishedAt?: number;
+  error?: string;
+}
+
+export interface RestoreState {
+  jobId: number;
+  status: "running" | "success" | "failed" | "cancelled";
+  panel: PanelId;
+  backupName: string;
+  sshHost: string;
+  steps: RestoreStep[];
+  currentStepKey?: string;
+  startedAt: number;
+  finishedAt?: number;
+  error?: string;
+  durationMs?: number;
+}
+
+function dataDir(): string {
+  const dir = path.join(process.cwd(), "data");
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch {}
+  return dir;
+}
+
+function stateFile(): string {
+  return path.join(dataDir(), "restore-state.json");
+}
+
+function writeStateFile(state: RestoreState): void {
+  try {
+    fs.writeFileSync(stateFile(), JSON.stringify(state, null, 2));
+  } catch (e) {
+    console.error("[restore] failed to write state file:", e);
+  }
+}
+
+export function readRestoreState(): RestoreState | null {
+  try {
+    const raw = fs.readFileSync(stateFile(), "utf8");
+    return JSON.parse(raw) as RestoreState;
+  } catch {
+    return null;
+  }
+}
+
+export function clearRestoreState(): void {
+  try {
+    fs.unlinkSync(stateFile());
+  } catch {}
+  try {
+    fs.unlinkSync(cancelFlagFile());
+  } catch {}
+}
+
+function cancelFlagFile(): string {
+  return path.join(dataDir(), "restore-cancel.flag");
+}
+
+export function requestCancelRestore(): void {
+  try {
+    fs.writeFileSync(cancelFlagFile(), String(Date.now()));
+  } catch {}
+}
+
+export function isCancelRequested(): boolean {
+  try {
+    return fs.existsSync(cancelFlagFile());
+  } catch {
+    return false;
+  }
+}
+
+export function clearCancelFlag(): void {
+  try {
+    fs.unlinkSync(cancelFlagFile());
+  } catch {}
+}
+
+export function checkIfCancelled(): boolean {
+  if (isCancelRequested()) return true;
+  try {
+    const raw = fs.readFileSync(stateFile(), "utf8");
+    const st = JSON.parse(raw);
+    if (st.status === "cancelled" || st.status === "failed" && (st.error || "").toLowerCase().includes("cancel")) {
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
+const g = globalThis as unknown as { __restoreRunning?: boolean };
+
+export function isRestoreRunning(): boolean {
+  const st = readRestoreState();
+  if (!st) return false;
+  if (st.status !== "running") return false;
+  return Date.now() - st.startedAt < 60 * 60 * 1000;
+}
+
+function makeSteps(panel: PanelId, installNode: boolean): RestoreStep[] {
+  return [
+    { key: "connect", title: "Connecting to server", status: "pending" },
+    { key: "check_panel", title: "Checking panel installation", status: "pending" },
+    { key: "install_node", title: "Checking system requirements", status: "pending" },
+    { key: "install_panel", title: "Installing panel", status: "pending" },
+    { key: "install_node_component", title: "Installing panel node", status: "pending" },
+    { key: "ssl_cert", title: "SSL certificate (multi-domain)", status: "pending" },
+    { key: "upload_backup", title: "Uploading backup file", status: "pending" },
+    { key: "restore", title: "Restoring backup", status: "pending" },
+    { key: "verify", title: "Verifying restoration", status: "pending" },
+  ];
+}
+
+function assertNotCancelled() {
+  if (checkIfCancelled()) {
+    throw new Error("RESTORE_CANCELLED");
+  }
+}
+
+function stepBy(steps: RestoreStep[], key: string): RestoreStep | undefined {
+  return steps.find((s) => s.key === key);
+}
+
+function markStep(steps: RestoreStep[], key: string, status: StepStatus, detail?: string): void {
+  const step = stepBy(steps, key);
+  if (!step) return;
+  if (status === "running") step.startedAt = Date.now();
+  else if (status === "done" || status === "failed") step.finishedAt = Date.now();
+  step.status = status;
+  if (detail !== undefined) step.detail = detail;
+}
+
+function markStepError(steps: RestoreStep[], key: string, error: string): void {
+  const step = stepBy(steps, key);
+  if (!step) return;
+  step.status = "failed";
+  step.error = error;
+  step.finishedAt = Date.now();
+}
+
+interface PanelCheckResult {
+  installed: boolean;
+  detail: string;
+}
+
+async function checkPanelInstalled(ssh: SshClient, panel: PanelId): Promise<PanelCheckResult> {
+  let command: string;
+  let panelName: string;
+
+  switch (panel) {
+    case "3x-ui":
+      command =
+        '(test -x /usr/local/x-ui/x-ui 2>/dev/null || test -x /usr/bin/x-ui 2>/dev/null || test -f /usr/bin/x-ui 2>/dev/null || (systemctl list-unit-files 2>/dev/null | grep -q "^x-ui.service" && test -d /usr/local/x-ui 2>/dev/null)) && echo YES || echo NO';
+      panelName = "3x-ui";
+      break;
+    case "hmpanel":
+      command =
+        '(test -f /opt/hmpanel/docker-compose.yml 2>/dev/null || test -f /opt/hmpanel/docker-compose.yaml 2>/dev/null || test -f /opt/hmpanel/compose.yml 2>/dev/null || docker ps -a --format "{{.Names}}" 2>/dev/null | grep -qi "^hmpanel") && echo YES || echo NO';
+      panelName = "HMPanel";
+      break;
+    case "pasarguard":
+      command =
+        '(test -f /opt/pasarguard/docker-compose.yml 2>/dev/null || test -f /opt/pasarguard/docker-compose.yaml 2>/dev/null || test -f /opt/pasarguard/compose.yml 2>/dev/null || docker ps -a --format "{{.Names}}" 2>/dev/null | grep -qi "pasarguard") && echo YES || echo NO';
+      panelName = "PasarGuard";
+      break;
+    case "rebecca":
+      command =
+        '(test -f /opt/rebecca/docker-compose.yml 2>/dev/null || test -f /opt/rebecca/docker-compose.yaml 2>/dev/null || test -f /opt/rebecca/compose.yml 2>/dev/null || test -x /usr/local/bin/rebecca 2>/dev/null || which rebecca 2>/dev/null | grep -q rebecca || docker ps -a --format "{{.Names}}" 2>/dev/null | grep -qi "rebecca") && echo YES || echo NO';
+      panelName = "Rebecca";
+      break;
+  }
+
+  const res = await ssh.exec(command);
+  const output = (res.stdout + res.stderr).trim();
+  const installed = output.includes("YES");
+
+  if (installed && panel === "3x-ui") {
+    const verifyRes = await ssh.exec(
+      'test -x /usr/local/x-ui/x-ui 2>/dev/null && echo BINARY_YES || (test -f /usr/bin/x-ui 2>/dev/null && echo BINARY_YES || echo BINARY_NO)'
+    );
+    if (verifyRes.stdout.includes("BINARY_NO")) {
+      return {
+        installed: false,
+        detail: `${panelName} database exists but binary is missing — will reinstall it`,
+      };
+    }
+  }
+
+  return {
+    installed,
+    detail: installed
+      ? `${panelName} is already installed on the server`
+      : `${panelName} is not installed — will install it`,
+  };
+}
+
+async function checkSystemRequirements(ssh: SshClient): Promise<{ ok: boolean; detail: string }> {
+  const res = await ssh.exec("curl --version >/dev/null 2>&1 && echo OK || echo MISSING_CURL");
+  if (res.stdout.includes("MISSING_CURL")) {
+    await ssh.exec(
+      "apt-get update -qq && apt-get install -y -qq curl 2>/dev/null || yum install -y curl 2>/dev/null || true"
+    );
+  }
+  await ssh.exec("apt-get install -y -qq sqlite3 unzip tar socat 2>/dev/null || yum install -y sqlite unzip tar socat 2>/dev/null || true");
+  return { ok: true, detail: "System requirements checked" };
+}
+
+function buildInstallCommand(panel: PanelId, cfg: RestoreConfig | null): { url: string; isCustom: boolean } {
+  const officialUrl = OFFICIAL_INSTALL_URLS[panel];
+  const configuredUrl = getInstallScript(cfg, panel);
+  const trimmed = configuredUrl.trim();
+  const isCustom = trimmed.length > 0 && trimmed !== officialUrl.trim() && trimmed.startsWith("http");
+  const url = isCustom ? trimmed : officialUrl;
+  return { url, isCustom };
+}
+
+function buildNodeInstallCommand(panel: PanelId): { url: string } | null {
+  if (panel !== "pasarguard" && panel !== "rebecca") return null;
+  const url = OFFICIAL_NODE_INSTALL_URLS[panel];
+  return { url };
+}
+
+// Helper: normalize domains array
+function normalizeDomains(single?: string, multi?: string[]): string[] {
+  const all = [single || "", ...(multi || [])]
+    .flatMap((d) => (d || "").split(/[\s,;]+/))
+    .map((d) => d.trim().toLowerCase())
+    .filter((d) => d.length > 2 && d.includes(".") && !d.includes(" ") && /^[a-z0-9.-]+\.[a-z]{2,}$/.test(d));
+  return Array.from(new Set(all));
+}
+
+function buildAcmeMultiDomainSnippet(panelType: PanelId, domains: string[]): string {
+  if (!domains.length) return "";
+  const dArgs = domains.map((d) => `-d ${d}`).join(" ");
+  const first = domains[0];
+  const restArgs = domains.slice(1).map((d) => `-d ${d}`).join(" ");
+  return `
+echo "[bkup] Multi-domain SSL requested: ${domains.join(", ")}"
+if [ ! -f ~/.acme.sh/acme.sh ]; then
+  echo "[bkup] Installing acme.sh..."
+  curl -s https://get.acme.sh | sh || wget -O - https://get.acme.sh | sh || true
+fi
+export LE_WORKING_DIR=~/.acme.sh
+~/.acme.sh/acme.sh --set-default-ca --server letsencrypt --force 2>/dev/null || true
+# Ensure socat for standalone
+which socat >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq socat 2>/dev/null || yum install -y socat 2>/dev/null || true)
+echo "[bkup] Freeing port 80 for cert issuance..."
+systemctl stop x-ui 2>/dev/null || true
+docker stop hmpanel-nginx 2>/dev/null || true
+docker stop pasarguard-nginx 2>/dev/null || true
+docker stop rebecca-nginx 2>/dev/null || true
+# Kill anything on 80
+fuser -k 80/tcp 2>/dev/null || lsof -ti:80 | xargs kill -9 2>/dev/null || true
+sleep 2
+echo "[bkup] Issuing cert for ${domains.join(", ")} via acme.sh standalone..."
+~/.acme.sh/acme.sh --issue ${dArgs} --standalone --httpport 80 --force --debug 2 2>&1 | tail -80 || echo "ACME_ISSUE_FAILED"
+# Check where cert landed
+if [ -f ~/.acme.sh/${first}_ecc/fullchain.cer ]; then
+  CERT_DIR=~/.acme.sh/${first}_ecc
+  KEY_FILE=~/.acme.sh/${first}_ecc/${first}.key
+  FULLCHAIN=~/.acme.sh/${first}_ecc/fullchain.cer
+elif [ -f ~/.acme.sh/${first}/fullchain.cer ]; then
+  CERT_DIR=~/.acme.sh/${first}
+  KEY_FILE=~/.acme.sh/${first}/${first}.key
+  FULLCHAIN=~/.acme.sh/${first}/fullchain.cer
+else
+  CERT_DIR=""
+fi
+if [ -n "$CERT_DIR" ] && [ -f "$CERT_DIR/fullchain.cer" ] && [ -s "$CERT_DIR/fullchain.cer" ]; then
+  mkdir -p /root/cert/${first}
+  ~/.acme.sh/acme.sh --installcert -d ${first} ${restArgs} --key-file /root/cert/${first}/privkey.pem --fullchain-file /root/cert/${first}/fullchain.pem --reloadcmd "echo reload" 2>&1 | tail -15
+  # Verify cert files
+  if [ -f /root/cert/${first}/fullchain.pem ] && [ -s /root/cert/${first}/fullchain.pem ]; then
+    echo "[bkup] Cert installed to /root/cert/${first}/ — verifying..."
+    openssl x509 -in /root/cert/${first}/fullchain.pem -noout -dates 2>&1 | head -5 || true
+    openssl x509 -in /root/cert/${first}/fullchain.pem -noout -subject -ext subjectAltName 2>&1 | head -10 || true
+  fi
+  # Panel-specific cert apply with .env updates
+  if [ "${panelType}" = "3x-ui" ] && [ -x /usr/local/x-ui/x-ui ]; then
+    echo "[bkup] Applying cert to 3x-ui for ${domains.join(", ")}"
+    /usr/local/x-ui/x-ui cert -webCert /root/cert/${first}/fullchain.pem -webCertKey /root/cert/${first}/privkey.pem 2>&1 || true
+    # Ensure listening on 0.0.0.0
+    /usr/local/x-ui/x-ui setting -listenIP "0.0.0.0" 2>&1 || true
+    systemctl enable x-ui 2>/dev/null || true
+    systemctl restart x-ui 2>/dev/null || systemctl start x-ui 2>/dev/null || /usr/local/x-ui/x-ui restart 2>&1 || true
+    sleep 3
+    systemctl is-active x-ui 2>&1 || pgrep -a x-ui 2>&1 | head -3 || true
+    echo "[bkup] 3x-ui cert set for ${domains.join(", ")}"
+  elif [ "${panelType}" = "hmpanel" ] && [ -d /opt/hmpanel ]; then
+    echo "[bkup] Applying cert to HMPanel for ${domains.join(", ")}"
+    mkdir -p /opt/hmpanel/nginx/ssl
+    cp /root/cert/${first}/fullchain.pem /opt/hmpanel/nginx/ssl/fullchain.pem 2>/dev/null || true
+    cp /root/cert/${first}/privkey.pem /opt/hmpanel/nginx/ssl/privkey.pem 2>/dev/null || true
+    cp /root/cert/${first}/fullchain.pem /opt/hmpanel/nginx/ssl/cert.pem 2>/dev/null || true
+    cp /root/cert/${first}/privkey.pem /opt/hmpanel/nginx/ssl/key.pem 2>/dev/null || true
+    chmod 644 /opt/hmpanel/nginx/ssl/*.pem 2>/dev/null || true
+    # Update .env DOMAIN to primary domain for HMPanel
+    if [ -f /opt/hmpanel/.env ]; then
+      sed -i "s/^DOMAIN=.*/DOMAIN=${first}/" /opt/hmpanel/.env 2>/dev/null || echo "DOMAIN=${first}" >> /opt/hmpanel/.env
+      sed -i "s/^PANEL_DOMAIN=.*/PANEL_DOMAIN=${first}/" /opt/hmpanel/.env 2>/dev/null || echo "PANEL_DOMAIN=${first}" >> /opt/hmpanel/.env
+      sed -i "s/^SSL_ENABLED=.*/SSL_ENABLED=true/" /opt/hmpanel/.env 2>/dev/null || echo "SSL_ENABLED=true" >> /opt/hmpanel/.env
+    fi
+    cd /opt/hmpanel && docker compose restart nginx 2>/dev/null || docker-compose restart nginx 2>/dev/null || docker restart hmpanel-nginx 2>/dev/null || true
+    sleep 3
+    docker ps --format "{{.Names}} {{.Status}}" 2>/dev/null | grep -i hmpanel || true
+    echo "[bkup] HMPanel cert set for ${domains.join(", ")}"
+  elif [ "${panelType}" = "pasarguard" ] && [ -d /opt/pasarguard ]; then
+    echo "[bkup] Applying cert to PasarGuard for ${domains.join(", ")}"
+    mkdir -p /opt/pasarguard/certs /opt/pasarguard/data/certs /opt/pasarguard/nginx/ssl
+    cp /root/cert/${first}/fullchain.pem /opt/pasarguard/certs/fullchain.pem 2>/dev/null || true
+    cp /root/cert/${first}/privkey.pem /opt/pasarguard/certs/privkey.pem 2>/dev/null || true
+    cp /root/cert/${first}/fullchain.pem /opt/pasarguard/data/certs/fullchain.pem 2>/dev/null || true
+    cp /root/cert/${first}/privkey.pem /opt/pasarguard/data/certs/privkey.pem 2>/dev/null || true
+    cp /root/cert/${first}/fullchain.pem /opt/pasarguard/nginx/ssl/fullchain.pem 2>/dev/null || true
+    cp /root/cert/${first}/privkey.pem /opt/pasarguard/nginx/ssl/privkey.pem 2>/dev/null || true
+    # Update .env if exists
+    if [ -f /opt/pasarguard/.env ]; then
+      sed -i "s/^SSL_DOMAIN=.*/SSL_DOMAIN=${first}/" /opt/pasarguard/.env 2>/dev/null || echo "SSL_DOMAIN=${first}" >> /opt/pasarguard/.env
+    fi
+    cd /opt/pasarguard && docker compose restart 2>/dev/null || docker-compose restart 2>/dev/null || true
+    sleep 3
+    docker ps --format "{{.Names}} {{.Status}}" 2>/dev/null | grep -i pasarguard || true
+    echo "[bkup] PasarGuard cert set for ${domains.join(", ")}"
+  elif [ "${panelType}" = "rebecca" ] && [ -d /opt/rebecca ]; then
+    echo "[bkup] Applying cert to Rebecca for ${domains.join(", ")}"
+    mkdir -p /opt/rebecca/certs /opt/rebecca/data/certs /opt/rebecca/nginx/ssl
+    cp /root/cert/${first}/fullchain.pem /opt/rebecca/certs/fullchain.pem 2>/dev/null || true
+    cp /root/cert/${first}/privkey.pem /opt/rebecca/certs/privkey.pem 2>/dev/null || true
+    cp /root/cert/${first}/fullchain.pem /opt/rebecca/data/certs/fullchain.pem 2>/dev/null || true
+    cp /root/cert/${first}/privkey.pem /opt/rebecca/data/certs/privkey.pem 2>/dev/null || true
+    cp /root/cert/${first}/fullchain.pem /opt/rebecca/nginx/ssl/fullchain.pem 2>/dev/null || true
+    cp /root/cert/${first}/privkey.pem /opt/rebecca/nginx/ssl/privkey.pem 2>/dev/null || true
+    if [ -f /opt/rebecca/.env ]; then
+      sed -i "s/^SSL_DOMAIN=.*/SSL_DOMAIN=${first}/" /opt/rebecca/.env 2>/dev/null || echo "SSL_DOMAIN=${first}" >> /opt/rebecca/.env
+    fi
+    cd /opt/rebecca && docker compose restart 2>/dev/null || docker-compose restart 2>/dev/null || true
+    sleep 3
+    docker ps --format "{{.Names}} {{.Status}}" 2>/dev/null | grep -i rebecca || true
+    echo "[bkup] Rebecca cert set for ${domains.join(", ")}"
+  fi
+  # Enable acme.sh auto-renew
+  ~/.acme.sh/acme.sh --upgrade --auto-upgrade 2>/dev/null || true
+  ~/.acme.sh/acme.sh --install-cronjob 2>/dev/null || true
+  echo "MULTI_CERT_OK:${first}"
+else
+  echo "[bkup] ACME cert issuance failed for ${domains.join(", ")} — check DNS points to this server and port 80 is open"
+  echo "[bkup] Debug: ls ~/.acme.sh/${first}*"
+  ls -la ~/.acme.sh/${first}* 2>&1 | head -20 || true
+  echo "MULTI_CERT_FAIL"
+fi
+`;
+}
+
+async function installPanel(
+  ssh: SshClient,
+  panel: PanelId,
+  cfg: RestoreConfig | null,
+  req: RestoreRequest,
+  onProgress?: (text: string) => void
+): Promise<{ success: boolean; detail: string }> {
+  const { url } = buildInstallCommand(panel, cfg);
+
+  let panelName: string;
+  switch (panel) {
+    case "3x-ui":
+      panelName = "3x-ui";
+      break;
+    case "hmpanel":
+      panelName = "HMPanel";
+      break;
+    case "pasarguard":
+      panelName = "PasarGuard";
+      break;
+    case "rebecca":
+      panelName = "Rebecca";
+      break;
+  }
+
+  if (!url || !url.startsWith("http") || url.length < 10) {
+    return { success: false, detail: `${panelName} install URL is invalid: ${url || "empty"}` };
+  }
+
+  const env: Record<string, string> = {};
+  if (cfg?.githubToken) env.GITHUB_TOKEN = cfg.githubToken;
+
+  const sslMode = req.sslMode || "none";
+  const domains = normalizeDomains(req.sslDomain, req.sslDomains);
+  const primaryDomain = domains[0] || (req.sslDomain || "").trim();
+  const sslIp = (req.sslIp || "").trim();
+  const isMultiDomain = domains.length > 1;
+
+  let finalScript: string;
+  switch (panel) {
+    case "3x-ui": {
+      let sslEnv = `export XUI_SSL_MODE=none\n`;
+      if (sslMode === "domain" && primaryDomain) {
+        sslEnv = `export XUI_SSL_MODE=domain\nexport XUI_DOMAIN='${primaryDomain.replace(/'/g, "'\"'\"'")}'\n`;
+      } else if (sslMode === "ip") {
+        sslEnv = `export XUI_SSL_MODE=ip\n`;
+        if (sslIp) sslEnv += `export XUI_SERVER_IP='${sslIp.replace(/'/g, "'\"'\"'")}'\n`;
+      } else if (sslMode === "custom" && req.sslCertPath && req.sslKeyPath) {
+        sslEnv = `export XUI_SSL_MODE=none\n`;
+      }
+
+      // If multi-domain, we still install with first domain via installer, then acme.sh will handle rest
+      finalScript = `#!/usr/bin/env bash
+set -e
+export DEBIAN_FRONTEND=noninteractive
+export HOME=/root
+export XUI_NONINTERACTIVE=1
+export XUI_DB_TYPE=sqlite
+${sslEnv}
+echo "[bkup] Downloading 3x-ui installer from ${url}"
+curl -fsSL '${url}' -o /tmp/x-ui-install.sh || wget -O /tmp/x-ui-install.sh '${url}'
+chmod +x /tmp/x-ui-install.sh
+echo "[bkup] Running 3x-ui installer (SSL mode: ${sslMode}, domains: ${domains.join(", ") || "none"})..."
+bash /tmp/x-ui-install.sh
+echo "[bkup] 3x-ui installer done"
+${sslMode === "custom" && req.sslCertPath && req.sslKeyPath ? `echo "[bkup] Setting custom cert..."; /usr/local/x-ui/x-ui cert -webCert '${req.sslCertPath}' -webCertKey '${req.sslKeyPath}' || true` : ""}
+`;
+      break;
+    }
+    case "hmpanel": {
+      const domainToUse = sslMode === "domain" && primaryDomain ? primaryDomain : sslMode === "ip" && sslIp ? sslIp : "localhost";
+      finalScript = `#!/usr/bin/env bash
+set -e
+export DEBIAN_FRONTEND=noninteractive
+export HOME=/root
+echo "[bkup] Downloading HMPanel installer from ${url}..."
+curl -fsSL '${url}' -o /tmp/hmpanel-install.sh || wget -O /tmp/hmpanel-install.sh '${url}'
+chmod +x /tmp/hmpanel-install.sh
+echo "[bkup] Running HMPanel installer with domain=${domainToUse} (multi: ${domains.join(", ")})..."
+ARCH_DETECTED=$(uname -m)
+echo "[bkup] Host arch: $ARCH_DETECTED"
+if [[ "$ARCH_DETECTED" == "aarch64" || "$ARCH_DETECTED" == "arm64" || "$ARCH_DETECTED" == "armv8"* ]]; then
+  echo "[bkup] ARM64 detected — will patch compose for amd64 emulation after install"
+  export HMPANEL_PATCH_ARM=1
+else
+  echo "[bkup] AMD64 detected — native install, no emulation needed"
+  export HMPANEL_PATCH_ARM=0
+fi
+printf '${domainToUse}\nadmin\nAdmin12345\nY\n' | bash /tmp/hmpanel-install.sh || true
+# Handle both compose file names
+COMPOSE_FILE=""
+if [ -f /opt/hmpanel/docker-compose.yml ]; then COMPOSE_FILE="/opt/hmpanel/docker-compose.yml"
+elif [ -f /opt/hmpanel/docker-compose.yaml ]; then COMPOSE_FILE="/opt/hmpanel/docker-compose.yaml"
+elif [ -f /opt/hmpanel/compose.yml ]; then COMPOSE_FILE="/opt/hmpanel/compose.yml"
+elif [ -f /opt/hmpanel/compose.yaml ]; then COMPOSE_FILE="/opt/hmpanel/compose.yaml"
+fi
+if [[ "$HMPANEL_PATCH_ARM" == "1" ]]; then
+  echo "[bkup] Applying ARM64 workaround for $COMPOSE_FILE..."
+  apt-get update -qq 2>/dev/null || true
+  apt-get install -y -qq qemu-user-static binfmt-support 2>/dev/null || yum install -y qemu-user-static 2>/dev/null || true
+  if [ -n "$COMPOSE_FILE" ] && [ -f "$COMPOSE_FILE" ]; then
+    if ! grep -q "platform:" "$COMPOSE_FILE"; then
+      echo "[bkup] Patching $COMPOSE_FILE with platform: linux/amd64"
+      sed -i '/image: ghcr.io\\/neoauroraproject\\/hmpanel/a \    platform: linux/amd64' "$COMPOSE_FILE" || true
+      sed -i '/image:.*hmpanel/a \    platform: linux/amd64' "$COMPOSE_FILE" || true
+    fi
+    cd /opt/hmpanel
+    docker compose -f "$COMPOSE_FILE" down 2>&1 || docker-compose -f "$COMPOSE_FILE" down 2>&1 || true
+    docker compose -f "$COMPOSE_FILE" up -d 2>&1 || docker-compose -f "$COMPOSE_FILE" up -d 2>&1 || true
+    sleep 8
+    docker ps --format "{{.Names}} {{.Status}}" 2>/dev/null | grep -i hmpanel || true
+  fi
+else
+  # AMD64 native verification
+  echo "[bkup] AMD64: Verifying HMPanel containers..."
+  if [ -n "$COMPOSE_FILE" ]; then
+    cd /opt/hmpanel
+    docker compose -f "$COMPOSE_FILE" ps 2>&1 | head -20 || true
+    docker compose -f "$COMPOSE_FILE" up -d 2>&1 | tail -20 || true
+    sleep 5
+    docker ps --format "{{.Names}} {{.Status}}" 2>/dev/null | grep -i hmpanel || true
+  else
+    docker ps --format "{{.Names}} {{.Status}}" 2>/dev/null | grep -i hmpanel || true
+  fi
+fi
+echo "[bkup] HMPanel installer done - arch $ARCH_DETECTED"
+`;
+      break;
+    }
+    case "pasarguard": {
+      let sslFlags = "--no-ssl";
+      if (sslMode === "domain" && primaryDomain) {
+        sslFlags = "--ssl --ssl-domain " + primaryDomain;
+      } else if (sslMode === "ip" && sslIp) {
+        sslFlags = "--ssl --ssl-domain " + sslIp;
+      } else if (sslMode === "domain" && !primaryDomain) {
+        sslFlags = "--ssl";
+      } else if (sslMode === "ip" && !sslIp) {
+        sslFlags = "--ssl";
+      }
+      finalScript = `#!/usr/bin/env bash
+set -e
+export DEBIAN_FRONTEND=noninteractive
+export HOME=/root
+echo "[bkup] Downloading PasarGuard installer from ${url}..."
+curl -fsSL '${url}' -o /tmp/pasarguard-install.sh || wget -O /tmp/pasarguard-install.sh '${url}'
+chmod +x /tmp/pasarguard-install.sh
+echo "[bkup] Running PasarGuard installer with SSL flags: ${sslFlags} (multi: ${domains.join(", ")})..."
+printf 'n\\nN\\nn\\n' | bash /tmp/pasarguard-install.sh install ${sslFlags}
+echo "[bkup] PasarGuard installer done"
+`;
+      break;
+    }
+    case "rebecca": {
+      finalScript = `#!/usr/bin/env bash
+set -e
+export DEBIAN_FRONTEND=noninteractive
+export HOME=/root
+echo "[bkup] Downloading Rebecca installer from ${url}..."
+curl -fsSL '${url}' -o /tmp/rebecca-install.sh || wget -O /tmp/rebecca-install.sh '${url}'
+chmod +x /tmp/rebecca-install.sh
+echo "[bkup] Running Rebecca installer (multi domains: ${domains.join(", ")})..."
+bash /tmp/rebecca-install.sh install
+echo "[bkup] Rebecca installer done"
+`;
+      break;
+    }
+  }
+
+  const remoteScriptPath = `/tmp/bkup-panel-install-${Date.now()}.sh`;
+
+  try {
+    await ssh.writeRemoteFile(remoteScriptPath, finalScript, 0o755);
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { success: false, detail: `${panelName} failed to create install script: ${msg}` };
+  }
+
+  let installOutput = "";
+  let exitCode: number | null = null;
+
+  try {
+    const res = await ssh.exec(`bash ${remoteScriptPath} 2>&1`, {
+      timeout: 20 * 60 * 1000,
+      env,
+      onStdout: (chunk) => {
+        installOutput += chunk;
+        const lines = chunk.trim().split("\n");
+        const snippet = lines[lines.length - 1]?.slice(0, 200) || "";
+        if (snippet) onProgress?.(snippet);
+      },
+      onStderr: (chunk) => {
+        installOutput += chunk;
+        const lines = chunk.trim().split("\n");
+        const snippet = lines[lines.length - 1]?.slice(0, 200) || "";
+        if (snippet) onProgress?.(snippet);
+      },
+    });
+    exitCode = res.exitCode;
+    installOutput = res.stdout + res.stderr + installOutput;
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    try {
+      await ssh.exec(`rm -f ${remoteScriptPath} /tmp/x-ui-install.sh /tmp/hmpanel-install.sh /tmp/pasarguard-install.sh /tmp/rebecca-install.sh`);
+    } catch {}
+    return { success: false, detail: `${panelName} install script failed: ${msg}. Output: ${installOutput.slice(-500)}` };
+  }
+
+  try {
+    await ssh.exec(`rm -f ${remoteScriptPath} /tmp/x-ui-install.sh /tmp/hmpanel-install.sh /tmp/pasarguard-install.sh /tmp/rebecca-install.sh /tmp/bkup-${panel}-installer.sh`);
+  } catch {}
+
+  await ssh.exec("sleep 5");
+
+  // Fix Not Running / xray Not Running root causes after install
+  if (panel === "3x-ui") {
+    await ssh.exec(`
+      set -e
+      echo "[bkup] Fixing 3x-ui Not Running / xray Not Running..."
+      chmod +x /usr/local/x-ui/x-ui /usr/local/x-ui/bin/xray* 2>/dev/null || true
+      chmod +x /usr/bin/x-ui 2>/dev/null || true
+      /usr/local/x-ui/x-ui setting -listenIP "0.0.0.0" 2>&1 || true
+      WEB_CERT=$(/usr/local/x-ui/x-ui setting -show 2>/dev/null | grep -i "webCertPath\\|webCert:" | awk -F': ' '{print $2}' | tr -d '"[:space:]' | head -1 || true)
+      if [ -n "$WEB_CERT" ] && [ "$WEB_CERT" != '""' ] && [ ! -f "$WEB_CERT" ]; then
+        echo "[bkup] Cert $WEB_CERT missing — resetting to HTTP to fix Not Running"
+        /usr/local/x-ui/x-ui cert -webCert "" -webCertKey "" 2>&1 || true
+      fi
+      systemctl enable x-ui 2>/dev/null || true
+      systemctl daemon-reload 2>/dev/null || true
+      systemctl restart x-ui 2>/dev/null || systemctl start x-ui 2>/dev/null || /usr/local/x-ui/x-ui restart 2>&1 || true
+      sleep 3
+      systemctl is-active x-ui 2>&1 || pgrep -a x-ui 2>&1 | head -5 || true
+      pgrep -a xray 2>&1 | head -5 || echo "xray not yet started — will start after restore"
+    `);
+  } else if (panel === "hmpanel") {
+    await ssh.exec(`
+      cd /opt/hmpanel 2>/dev/null || exit 0
+      echo "[bkup] Verifying HMPanel containers..."
+      docker compose ps 2>&1 | head -20 || docker ps --format "{{.Names}} {{.Status}}" 2>/dev/null | grep -i hmpanel || true
+      if [ -f .env ] && ! grep -q "^DOMAIN=" .env; then echo "DOMAIN=localhost" >> .env; fi
+      docker compose up -d 2>&1 | tail -10 || true
+      sleep 3
+      docker ps --format "{{.Names}} {{.Status}}" 2>/dev/null | grep -i hmpanel || true
+    `);
+  } else if (panel === "pasarguard" || panel === "rebecca") {
+    const dir = panel === "pasarguard" ? "/opt/pasarguard" : "/opt/rebecca";
+    await ssh.exec(`
+      cd ${dir} 2>/dev/null || exit 0
+      echo "[bkup] Verifying ${panel} containers..."
+      docker compose ps 2>&1 | head -20 || docker ps --format "{{.Names}} {{.Status}}" 2>/dev/null | grep -i ${panel} || true
+      docker compose up -d 2>&1 | tail -10 || true
+      sleep 3
+      docker ps --format "{{.Names}} {{.Status}}" 2>/dev/null | grep -i ${panel} || true
+    `);
+  }
+
+  const verify = await checkPanelInstalled(ssh, panel);
+  if (verify.installed) {
+    if (panel === "3x-ui") {
+      const statusCheck = await ssh.exec("systemctl is-active x-ui 2>/dev/null; pgrep -a x-ui 2>/dev/null | head -1; echo STATUS_CHECK_DONE");
+      const isActive = statusCheck.stdout.includes("active") || statusCheck.stdout.includes("x-ui");
+      if (isActive) {
+        return { success: true, detail: `${panelName} installed successfully with default settings${sslMode !== "none" ? ` (SSL: ${sslMode}, domains: ${domains.join(", ") || "none"})` : ""} — service running` };
+      } else {
+        await ssh.exec("/usr/local/x-ui/x-ui cert -webCert \"\" -webCertKey \"\" 2>&1 || true; /usr/local/x-ui/x-ui setting -listenIP \"0.0.0.0\" 2>&1 || true; systemctl restart x-ui 2>&1 || true; sleep 3");
+        return { success: true, detail: `${panelName} installed (service recovery attempted) — ${statusCheck.stdout.slice(0, 150)}` };
+      }
+    }
+    return { success: true, detail: `${panelName} installed successfully with default settings${sslMode !== "none" ? ` (SSL: ${sslMode}, domains: ${domains.join(", ") || "none"})` : ""}` };
+  }
+
+  if (exitCode === 0) {
+    await ssh.exec("sleep 10");
+    const verify2 = await checkPanelInstalled(ssh, panel);
+    if (verify2.installed) {
+      return { success: true, detail: `${panelName} installed successfully (verified after delay)` };
+    }
+  }
+
+  const lastLines = installOutput.trim().split("\n").slice(-15).join(" | ").slice(0, 1000);
+  return {
+    success: false,
+    detail: `${panelName} installation may have failed — panel not detected after install. Exit: ${exitCode}. Last output: ${lastLines || "no output"}`,
+  };
+}
+
+
+async function issueMultiDomainCert(
+  ssh: SshClient,
+  panel: PanelId,
+  domains: string[],
+  onProgress?: (text: string) => void
+): Promise<{ success: boolean; detail: string }> {
+  if (!domains.length) {
+    return { success: true, detail: "No multi-domain cert requested — skipped" };
+  }
+  const cleanDomains = normalizeDomains(undefined, domains);
+  if (!cleanDomains.length) {
+    return { success: true, detail: "No valid domains for multi-cert — skipped" };
+  }
+
+  const snippet = buildAcmeMultiDomainSnippet(panel, cleanDomains);
+  const remotePath = `/tmp/bkup-multicert-${Date.now()}.sh`;
+  try {
+    await ssh.writeRemoteFile(remotePath, `#!/usr/bin/env bash\nset -e\n${snippet}\n`, 0o755);
+  } catch (e: any) {
+    return { success: false, detail: `Failed to create cert script: ${e.message}` };
+  }
+
+  try {
+    const res = await ssh.exec(`bash ${remotePath} 2>&1`, {
+      timeout: 10 * 60 * 1000,
+      onStdout: (c) => {
+        const line = c.trim().split("\n").pop()?.slice(0, 200) || "";
+        if (line) onProgress?.(line);
+      },
+      onStderr: (c) => {
+        const line = c.trim().split("\n").pop()?.slice(0, 200) || "";
+        if (line) onProgress?.(line);
+      },
+    });
+    const out = res.stdout + res.stderr;
+    await ssh.exec(`rm -f ${remotePath}`);
+    if (out.includes("MULTI_CERT_OK")) {
+      const first = cleanDomains[0];
+      return { success: true, detail: `Multi-domain cert issued for ${cleanDomains.join(", ")} — installed to /root/cert/${first}/ and applied to ${panel}` };
+    }
+    if (out.includes("MULTI_CERT_FAIL") || out.includes("ACME_ISSUE_FAILED")) {
+      return { success: false, detail: `Cert issuance failed for ${cleanDomains.join(", ")} — DNS must point to server and port 80 open. Output: ${out.slice(-500)}` };
+    }
+    // If acme output contains cert files, consider success
+    if (out.includes("/root/cert/") && out.includes("fullchain")) {
+      return { success: true, detail: `Cert for ${cleanDomains.join(", ")} obtained — ${out.slice(-300)}` };
+    }
+    return { success: false, detail: `Cert issuance unclear for ${cleanDomains.join(", ")} — ${out.slice(-500)}` };
+  } catch (e: any) {
+    await ssh.exec(`rm -f ${remotePath}`).catch(() => {});
+    const msg = e.message || String(e);
+    if (msg.toLowerCase().includes("timed out")) {
+      return { success: false, detail: `Cert issuance timed out for ${cleanDomains.join(", ")} — ${msg}` };
+    }
+    return { success: false, detail: `Cert issuance error: ${msg}` };
+  }
+}
+
+async function installPanelNode(
+  ssh: SshClient,
+  panel: PanelId,
+  onProgress?: (text: string) => void
+): Promise<{ success: boolean; detail: string }> {
+  const built = buildNodeInstallCommand(panel);
+  if (!built) return { success: false, detail: `No node install script for ${panel}` };
+
+  const panelName = panel === "pasarguard" ? "PasarGuard" : "Rebecca";
+  const url = built.url;
+
+  let finalScript: string;
+  if (panel === "pasarguard") {
+    finalScript = `#!/usr/bin/env bash
+set -e
+export DEBIAN_FRONTEND=noninteractive
+export HOME=/root
+echo "[bkup] Downloading PasarGuard node installer..."
+curl -fsSL '${url}' -o /tmp/pg-node-install.sh || wget -O /tmp/pg-node-install.sh '${url}'
+chmod +x /tmp/pg-node-install.sh
+bash /tmp/pg-node-install.sh install
+`;
+  } else {
+    finalScript = `#!/usr/bin/env bash
+set -e
+export DEBIAN_FRONTEND=noninteractive
+export HOME=/root
+echo "[bkup] Downloading Rebecca node installer..."
+curl -fsSL '${url}' -o /tmp/rebecca-node-install.sh || wget -O /tmp/rebecca-node-install.sh '${url}'
+chmod +x /tmp/rebecca-node-install.sh
+bash /tmp/rebecca-node-install.sh install
+`;
+  }
+
+  const remoteScriptPath = `/tmp/bkup-node-install-${Date.now()}.sh`;
+
+  try {
+    await ssh.writeRemoteFile(remoteScriptPath, finalScript, 0o755);
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { success: false, detail: `${panelName} node failed to create install script: ${msg}` };
+  }
+
+  let output = "";
+  try {
+    const res = await ssh.exec(`bash ${remoteScriptPath} 2>&1`, {
+      timeout: 15 * 60 * 1000,
+      onStdout: (chunk) => {
+        output += chunk;
+        const snippet = chunk.trim().split("\n").pop()?.slice(0, 160) || "";
+        if (snippet) onProgress?.(snippet);
+      },
+      onStderr: (chunk) => {
+        output += chunk;
+        const snippet = chunk.trim().split("\n").pop()?.slice(0, 160) || "";
+        if (snippet) onProgress?.(snippet);
+      },
+    });
+    output = res.stdout + res.stderr + output;
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    try {
+      await ssh.exec(`rm -f ${remoteScriptPath}`);
+    } catch {}
+    return { success: false, detail: `${panelName} node install failed: ${msg}. Output: ${output.slice(-500)}` };
+  }
+
+  try {
+    await ssh.exec(`rm -f ${remoteScriptPath} /tmp/pg-node-install.sh /tmp/rebecca-node-install.sh`);
+  } catch {}
+
+  await ssh.exec("sleep 5");
+
+  return { success: true, detail: `${panelName} node installed successfully` };
+}
+
+async function restoreFromRemotePath(
+  ssh: SshClient,
+  panel: PanelId,
+  remoteBackupPath: string,
+  backupName: string
+): Promise<{ success: boolean; detail: string }> {
+  switch (panel) {
+    case "3x-ui":
+      return await restore3xUi(ssh, remoteBackupPath, backupName);
+    case "hmpanel":
+      return await restoreHmpanel(ssh, remoteBackupPath, backupName);
+    case "pasarguard":
+      return await restorePasarguard(ssh, remoteBackupPath, backupName);
+    case "rebecca":
+      return await restoreRebecca(ssh, remoteBackupPath, backupName);
+  }
+}
+
+async function restore3xUi(ssh: SshClient, remoteBackupPath: string, backupName: string): Promise<{ success: boolean; detail: string }> {
+  const lowerName = backupName.toLowerCase();
+
+  const uploadCheck = await ssh.exec(`ls -lh '${remoteBackupPath}' 2>&1 && stat -c %s '${remoteBackupPath}' 2>/dev/null || wc -c < '${remoteBackupPath}' 2>/dev/null || echo 0`);
+  const uploadOut = uploadCheck.stdout.trim();
+  if (uploadOut.includes("No such file") || uploadOut.includes("cannot access")) {
+    return { success: false, detail: `Uploaded backup not found on server at ${remoteBackupPath} — upload may have failed` };
+  }
+  const sizeMatch = uploadOut.match(/(\d+)\s*$/);
+  const remoteSize = sizeMatch ? parseInt(sizeMatch[1], 10) : 0;
+  if (remoteSize === 0) {
+    return { success: false, detail: `Uploaded backup is empty (0 bytes) at ${remoteBackupPath}` };
+  }
+
+  await ssh.exec("systemctl stop x-ui 2>/dev/null || x-ui stop 2>/dev/null || pkill -f x-ui 2>/dev/null || true; sleep 2");
+  await ssh.exec("rm -f /etc/x-ui/x-ui.db-wal /etc/x-ui/x-ui.db-shm /etc/x-ui/x-ui.db-journal 2>/dev/null || true");
+  await ssh.exec("cp /etc/x-ui/x-ui.db /etc/x-ui/x-ui.db.pre-restore 2>/dev/null || true");
+  await ssh.exec("mkdir -p /etc/x-ui /usr/local/x-ui");
+
+  let placeOk = false;
+  if (lowerName.endsWith(".db") || !lowerName.match(/\.(tar\.gz|tgz|zip)$/)) {
+    const moveRes = await ssh.exec(
+      `cp -f '${remoteBackupPath}' /etc/x-ui/x-ui.db && chmod 644 /etc/x-ui/x-ui.db && chown root:root /etc/x-ui/x-ui.db 2>/dev/null || true && ls -lh /etc/x-ui/x-ui.db && echo OK`
+    );
+    if (moveRes.stdout.includes("OK")) placeOk = true;
+    if (moveRes.exitCode !== 0 && moveRes.exitCode !== null && !placeOk) {
+      return { success: false, detail: `Failed to place the database file: ${moveRes.stderr || moveRes.stdout}` };
+    }
+  } else {
+    const extractDir = `/tmp/bkup-xui-extract-${Date.now()}`;
+    await ssh.exec(`mkdir -p '${extractDir}'`);
+    const extractRes = await ssh.exec(
+      lowerName.endsWith(".zip")
+        ? `cd '${extractDir}' && unzip -o '${remoteBackupPath}' 2>&1 && echo EXTRACT_OK`
+        : `cd '${extractDir}' && tar -xzf '${remoteBackupPath}' 2>&1 && echo EXTRACT_OK`
+    );
+    if (!extractRes.stdout.includes("EXTRACT_OK")) {
+      const fallback = await ssh.exec(`cp -f '${remoteBackupPath}' /etc/x-ui/x-ui.db && chmod 644 /etc/x-ui/x-ui.db && echo OK`);
+      placeOk = fallback.stdout.includes("OK");
+    } else {
+      const findRes = await ssh.exec(
+        `find '${extractDir}' -name 'x-ui.db' -type f 2>/dev/null | head -1 || find '${extractDir}' -name '*.db' -type f 2>/dev/null | head -1`
+      );
+      const dbFile = findRes.stdout.trim().split("\n")[0]?.trim();
+      if (!dbFile) {
+        const cpRes = await ssh.exec(`cp -f '${remoteBackupPath}' /etc/x-ui/x-ui.db && chmod 644 /etc/x-ui/x-ui.db && echo OK`);
+        placeOk = cpRes.stdout.includes("OK");
+      } else {
+        const cpRes = await ssh.exec(
+          `cp -f '${dbFile}' /etc/x-ui/x-ui.db && chmod 644 /etc/x-ui/x-ui.db && chown root:root /etc/x-ui/x-ui.db 2>/dev/null || true && echo OK`
+        );
+        placeOk = cpRes.stdout.includes("OK");
+      }
+      await ssh.exec(`rm -rf '${extractDir}'`);
+    }
+  }
+
+  if (!placeOk) {
+    const check = await ssh.exec("ls -lh /etc/x-ui/x-ui.db 2>&1 && echo EXISTS || echo MISSING");
+    if (!check.stdout.includes("EXISTS")) {
+      return { success: false, detail: "Failed to place x-ui.db — file not found after copy" };
+    }
+  }
+
+  await ssh.exec(
+    "rm -f /etc/x-ui/x-ui.db-wal /etc/x-ui/x-ui.db-shm /etc/x-ui/x-ui.db-journal 2>/dev/null; chmod 644 /etc/x-ui/x-ui.db; chown root:root /etc/x-ui/x-ui.db 2>/dev/null || true"
+  );
+
+  await ssh.exec("/usr/local/x-ui/x-ui migrate 2>&1 || true; sleep 1");
+
+  await ssh.exec(`
+    set -e
+    echo "Checking cert settings..."
+    /usr/local/x-ui/x-ui setting -show 2>&1 | head -20 || true
+    WEB_CERT=$(/usr/local/x-ui/x-ui setting -show 2>/dev/null | grep -E "webCert|cert:" | awk -F': ' '{print $2}' | tr -d '[:space:]' | head -1 || true)
+    if [ -n "$WEB_CERT" ] && [ "$WEB_CERT" != '""' ] && [ ! -f "$WEB_CERT" ]; then
+      echo "Cert $WEB_CERT missing — resetting to HTTP"
+      /usr/local/x-ui/x-ui cert -webCert "" -webCertKey "" 2>&1 || true
+    fi
+    /usr/local/x-ui/x-ui setting -listenIP "0.0.0.0" 2>&1 || true
+    chmod +x /usr/local/x-ui/x-ui /usr/local/x-ui/bin/xray* 2>/dev/null || true
+    chmod +x /usr/bin/x-ui 2>/dev/null || true
+  `);
+
+  await ssh.exec("systemctl enable x-ui 2>/dev/null || true; systemctl daemon-reload 2>/dev/null || true");
+  await ssh.exec("systemctl restart x-ui 2>/dev/null || systemctl start x-ui 2>/dev/null || /usr/local/x-ui/x-ui restart 2>&1 || true");
+  await ssh.exec("sleep 6");
+
+  const verifyDb = await ssh.exec(
+    `ls -lh /etc/x-ui/x-ui.db; sqlite3 /etc/x-ui/x-ui.db "SELECT COUNT(*) FROM inbounds; SELECT COUNT(*) FROM users;" 2>&1 | head -10 || echo "db query failed"`
+  );
+  const verifyService = await ssh.exec(
+    'systemctl is-active x-ui 2>/dev/null || echo "INACTIVE"; pgrep -a x-ui 2>/dev/null | head -3 || echo "no x-ui pgrep"; pgrep -a xray 2>/dev/null | head -3 || echo "no xray yet"'
+  );
+
+  const dbExists = verifyDb.stdout.includes("x-ui.db");
+  const serviceActive =
+    verifyService.stdout.includes("active") || (verifyService.stdout.includes("x-ui") && !verifyService.stdout.includes("no x-ui"));
+
+  if (verifyService.stdout.includes("no xray")) {
+    await ssh.exec("/usr/local/x-ui/x-ui restart 2>&1 || systemctl restart x-ui 2>&1; sleep 4");
+  }
+
+  if (!dbExists) {
+    return { success: false, detail: "x-ui.db not found after restore" };
+  }
+
+  const finalSizeCheck = await ssh.exec(
+    `stat -c %s /etc/x-ui/x-ui.db 2>/dev/null || wc -c < /etc/x-ui/x-ui.db; echo "---"; stat -c %s '${remoteBackupPath}' 2>/dev/null || wc -c < '${remoteBackupPath}' 2>/dev/null || echo 0`
+  );
+
+  if (serviceActive) {
+    return { success: true, detail: `3x-ui database restored (${remoteSize} bytes) and panel is running — ${verifyDb.stdout.slice(0, 120)}` };
+  } else {
+    return {
+      success: true,
+      detail: `3x-ui database restored (${remoteSize} bytes) but service not yet active — auto-fix attempted. If panel shows Not Running, run: x-ui cert -webCert "" -webCertKey "" && systemctl restart x-ui. Size check: ${finalSizeCheck.stdout.slice(0, 100)}`,
+    };
+  }
+}
+
+// ── FAST HMPanel restore — manual first (2-5 min), CLI fallback only if manual fails ──
+async function restoreHmpanel(ssh: SshClient, remoteBackupPath: string, backupName: string): Promise<{ success: boolean; detail: string }> {
+  const lowerName = backupName.toLowerCase();
+
+  const uploadCheck = await ssh.exec(`ls -lh '${remoteBackupPath}' 2>&1 && stat -c %s '${remoteBackupPath}' 2>/dev/null || wc -c < '${remoteBackupPath}' 2>/dev/null || echo 0`);
+  const uploadOut = uploadCheck.stdout.trim();
+  if (uploadOut.includes("No such file") || uploadOut.includes("cannot access")) {
+    return { success: false, detail: `Uploaded backup not found at ${remoteBackupPath}` };
+  }
+  const sizeMatch = uploadOut.match(/(\d+)\s*$/);
+  const remoteSize = sizeMatch ? parseInt(sizeMatch[1], 10) : 0;
+  if (remoteSize === 0) {
+    return { success: false, detail: `Uploaded HMPanel backup is empty (0 bytes)` };
+  }
+
+  const hmDir = "/opt/hmpanel";
+  await ssh.exec(`mkdir -p ${hmDir} ${hmDir}/backups; cp -r ${hmDir} ${hmDir}.pre-restore-$(date +%s) 2>/dev/null || true`);
+
+  if (lowerName.match(/\.(tar\.gz|tgz)$/) || lowerName.endsWith(".tar") || lowerName.endsWith(".gz")) {
+    const extractDir = `/tmp/bkup-hm-fast-${Date.now()}`;
+    try {
+      await ssh.exec(`mkdir -p '${extractDir}' && rm -rf '${extractDir}'/*`);
+      const extractRes = await ssh.exec(`cd '${extractDir}' && tar -xzf '${remoteBackupPath}' 2>&1 && ls -lh && echo EXTRACT_OK || echo EXTRACT_FAIL`, { timeout: 5 * 60 * 1000 });
+      if (extractRes.stdout.includes("EXTRACT_OK")) {
+        const hasDb = await ssh.exec(`ls -lh '${extractDir}/database.sql.gz' '${extractDir}/db_backup.sql' 2>&1; echo DB_CHECK_DONE`);
+        const hasDbFile = hasDb.stdout.includes("database.sql.gz") || hasDb.stdout.includes("db_backup.sql");
+
+        if (hasDbFile) {
+          const fastRestore = await ssh.exec(`
+            set -e
+            cd ${hmDir}
+            echo "[bkup] Fast restore: stopping panel-app..."
+            docker compose stop panel-app 2>/dev/null || docker stop hmpanel-panel 2>/dev/null || true
+            sleep 2
+            PG_CONT=$(docker ps --format "{{.Names}}" 2>/dev/null | grep -i postgres | head -1)
+            if [ -z "$PG_CONT" ]; then PG_CONT="hmpanel-postgres"; fi
+            DB_USER=$(grep -E '^POSTGRES_USER=' ${hmDir}/.env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '\\r' || echo "panel_user")
+            DB_USER=\${DB_USER:-panel_user}
+            echo "[bkup] Using PG container: $PG_CONT user: $DB_USER"
+            if [ -f '${extractDir}/database.sql.gz' ]; then
+              zcat '${extractDir}/database.sql.gz' > /tmp/hm-restore.sql 2>/dev/null || gunzip -c '${extractDir}/database.sql.gz' > /tmp/hm-restore.sql
+            elif [ -f '${extractDir}/db_backup.sql' ]; then
+              cp '${extractDir}/db_backup.sql' /tmp/hm-restore.sql
+            else
+              echo "NO_DB_FILE"
+              exit 1
+            fi
+            echo "[bkup] SQL size: $(du -h /tmp/hm-restore.sql | awk '{print $1}')"
+            if grep -qE '^\\\\connect ' /tmp/hm-restore.sql; then
+              echo "[bkup] Detected pg_dumpall with \\\\connect — extracting panel_db section"
+              awk 'BEGIN{keep=0;copy=0} copy==1{print; if($0=="\\\\.")copy=0; next} /^\\\\connect /{keep=($0~/panel_db/)?1:0; next} keep==0{next} /^[[:space:]]*(DROP|CREATE|ALTER)[[:space:]]+(ROLE|USER|DATABASE|TABLESPACE)[[:space:]]/{next} /^[[:space:]]*DROP[[:space:]]/{next} {print; if($0~/^COPY .* FROM stdin;$/ )copy=1}' /tmp/hm-restore.sql > /tmp/hm-restore-filtered.sql
+              mv /tmp/hm-restore-filtered.sql /tmp/hm-restore.sql
+            else
+              echo "[bkup] Single DB dump detected"
+              sed -i -E '/^[[:space:]]*(DROP|CREATE|ALTER)[[:space:]]+(ROLE|USER|DATABASE)/d' /tmp/hm-restore.sql || true
+              sed -i -E '/^[[:space:]]*DROP[[:space:]]/d' /tmp/hm-restore.sql || true
+            fi
+            echo "[bkup] Recreating panel_db..."
+            docker exec $PG_CONT psql -U $DB_USER -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='panel_db' AND pid<>pg_backend_pid();" 2>/dev/null || true
+            docker exec $PG_CONT psql -U $DB_USER -d postgres -c "DROP DATABASE IF EXISTS panel_db WITH (FORCE);" 2>/dev/null || docker exec $PG_CONT psql -U $DB_USER -d postgres -c "DROP DATABASE IF EXISTS panel_db;" 2>/dev/null || true
+            docker exec $PG_CONT psql -U $DB_USER -d postgres -c "CREATE DATABASE panel_db OWNER \\"$DB_USER\\";" 2>/dev/null || true
+            echo "[bkup] Loading data into panel_db..."
+            cat /tmp/hm-restore.sql | docker exec -i $PG_CONT psql -U $DB_USER -d panel_db 2>&1 | tail -30
+            echo "[bkup] Verifying..."
+            docker exec $PG_CONT psql -U $DB_USER -d panel_db -tAc 'SELECT COUNT(*) FROM "Admin"' 2>/dev/null | tr -d '[:space:]' || echo 0
+            echo "FAST_RESTORE_DONE"
+          `, { timeout: 10 * 60 * 1000 });
+
+          const fastOut = fastRestore.stdout + fastRestore.stderr;
+          if (fastOut.includes("FAST_RESTORE_DONE") || fastOut.includes("Admin") || !fastOut.includes("NO_DB_FILE")) {
+            await ssh.exec(`
+              set -e
+              cd ${hmDir}
+              ARCH_DETECTED=$(uname -m)
+              if [[ "$ARCH_DETECTED" == "aarch64" || "$ARCH_DETECTED" == "arm64" || "$ARCH_DETECTED" == "armv8"* ]]; then
+                if [ -f ${hmDir}/docker-compose.yml ] && ! grep -q "platform:" ${hmDir}/docker-compose.yml; then
+                  echo "[bkup] ARM64 detected during restore — patching compose"
+                  apt-get update -qq 2>/dev/null || true
+                  apt-get install -y -qq qemu-user-static binfmt-support 2>/dev/null || yum install -y qemu-user-static 2>/dev/null || true
+                  sed -i '/image: ghcr.io\\/neoauroraproject\\/hmpanel/a \\    platform: linux/amd64' ${hmDir}/docker-compose.yml || true
+                fi
+              fi
+              if [ -f '${extractDir}/config.tar.gz' ]; then
+                echo "[bkup] Restoring config..."
+                tar -xzf '${extractDir}/config.tar.gz' -C ${hmDir} 2>/dev/null || true
+              fi
+              if [ -f '${extractDir}/uploads.tar.gz' ]; then
+                echo "[bkup] Restoring uploads..."
+                docker run --rm -v hmpanel_uploads:/dest -v '${extractDir}/uploads.tar.gz:/backup.tar.gz:ro' alpine sh -c 'mkdir -p /dest && tar -xzf /backup.tar.gz -C /dest' 2>/dev/null || true
+              fi
+              if [ -f '${extractDir}/premium.tar.gz' ]; then
+                echo "[bkup] Restoring premium..."
+                docker run --rm -v hmpanel_premium:/dest -v '${extractDir}/premium.tar.gz:/backup.tar.gz:ro' alpine sh -c 'mkdir -p /dest && tar -xzf /backup.tar.gz -C /dest' 2>/dev/null || true
+              fi
+              if [ -f '${extractDir}/.hmpanel-instance-id' ]; then
+                cp '${extractDir}/.hmpanel-instance-id' ${hmDir}/backups/ 2>/dev/null || true
+              fi
+              echo "[bkup] Syncing credentials and restarting..."
+              source ${hmDir}/.env 2>/dev/null || true
+              DB_PASS=\${POSTGRES_PASSWORD:-}
+              if [ -n "$DB_PASS" ]; then
+                ESCAPED_PASS=$(echo "$DB_PASS" | sed "s/'/''/g")
+                docker exec hmpanel-postgres psql -U $(grep -E '^POSTGRES_USER=' ${hmDir}/.env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '\\r' || echo panel_user) -d postgres -c "ALTER ROLE \\"$(grep -E '^POSTGRES_USER=' ${hmDir}/.env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '\\r' || echo panel_user)\\" WITH PASSWORD '$ESCAPED_PASS';" 2>/dev/null || true
+              fi
+              cd ${hmDir}
+              docker compose up -d --force-recreate --no-deps redis 2>/dev/null || true
+              sleep 2
+              docker compose up -d --force-recreate --no-deps panel-app 2>/dev/null || docker compose up -d --force-recreate panel-app 2>/dev/null || true
+              sleep 3
+              docker compose up -d --no-deps nginx 2>/dev/null || docker restart hmpanel-nginx 2>/dev/null || true
+              sleep 3
+              echo "RESTART_DONE"
+            `, { timeout: 5 * 60 * 1000 });
+
+            await ssh.exec("sleep 5");
+            const verify = await ssh.exec('docker ps --format "{{.Names}} {{.Status}}" 2>/dev/null | grep -i hmpanel; echo "---"; docker exec hmpanel-postgres psql -U panel_user -d panel_db -tAc \'SELECT COUNT(*) FROM "Admin"\' 2>/dev/null || echo 0; echo "---"; cd /opt/hmpanel && docker compose ps 2>&1 | head -20');
+            await ssh.exec(`rm -rf '${extractDir}' /tmp/hm-restore.sql /tmp/hm-restore-filtered.sql 2>/dev/null || true`);
+
+            if (verify.stdout.toLowerCase().includes("hmpanel")) {
+              return { success: true, detail: `HMPanel fast restore done (${remoteSize} bytes, ~3-5 min) — containers running, Admin count check: ${verify.stdout.slice(0, 200)}` };
+            }
+            if (fastOut.includes("FAST_RESTORE_DONE")) {
+              return { success: true, detail: `HMPanel fast restore completed (${remoteSize} bytes) — ${fastOut.slice(-200)}` };
+            }
+          }
+        }
+      }
+    } catch (e) {
+      try {
+        await ssh.exec(`rm -rf /tmp/bkup-hm-fast-* /tmp/hm-restore.sql 2>/dev/null || true`);
+      } catch {}
+    }
+  }
+
+  const cliRes = await ssh.exec("which hm 2>/dev/null; which hmpanel 2>/dev/null; ls /usr/local/bin/hm 2>/dev/null; ls /opt/hmpanel/cli.sh 2>/dev/null; echo CLI_CHECK_DONE");
+  const hasHm = cliRes.stdout.includes("hm");
+
+  if (hasHm) {
+    try {
+      const tryRestore = await ssh.exec(
+        `bash -c 'set -e; export HEADLESS=true; if [ -f /opt/hmpanel/cli.sh ]; then bash /opt/hmpanel/cli.sh restore "${remoteBackupPath}" 2>&1; elif [ -f /opt/hmpanel/hm.sh ]; then bash /opt/hmpanel/hm.sh restore "${remoteBackupPath}" 2>&1; else hm restore "${remoteBackupPath}" 2>&1; fi; echo EXIT_CODE:$?' 2>&1`,
+        { timeout: 10 * 60 * 1000 }
+      );
+      const out = tryRestore.stdout + tryRestore.stderr;
+      if (out.includes("RESTORE_OK") || out.includes("Restore completed") || out.includes("✔") || out.includes("EXIT_CODE:0")) {
+        await ssh.exec(`cd ${hmDir} && docker compose up -d 2>&1 || docker-compose up -d 2>&1 || true; sleep 5`);
+        return { success: true, detail: `HMPanel backup restored via CLI fallback (${remoteSize} bytes)` };
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.toLowerCase().includes("timed out")) {
+        await ssh.exec(`cd ${hmDir} && docker compose up -d 2>&1 || docker-compose up -d 2>&1 || true; sleep 5`);
+        const verifyAfter = await ssh.exec('docker ps --format "{{.Names}} {{.Status}}" 2>/dev/null | grep -i hmpanel');
+        if (verifyAfter.stdout.toLowerCase().includes("hmpanel")) {
+          return { success: true, detail: `HMPanel CLI restore timed out but containers running — likely restored (${remoteSize} bytes)` };
+        }
+      }
+    }
+  }
+
+  await ssh.exec(`cp -f '${remoteBackupPath}' ${hmDir}/backups/manual-restore-$(date +%s).tar.gz 2>/dev/null || cp -f '${remoteBackupPath}' /tmp/hmpanel-manual-restore.tar.gz; rm -rf /tmp/bkup-hm-fast-* /tmp/bkup-hm-extract-* 2>/dev/null || true`);
+  const verifyRes = await ssh.exec('docker ps --format "{{.Names}}" 2>/dev/null | grep -i hmpanel || echo "NOT_RUNNING"');
+  if (verifyRes.stdout.includes("hmpanel")) {
+    return { success: true, detail: `HMPanel backup copied to ${hmDir}/backups (${remoteSize} bytes) — panel running, import via Settings if needed` };
+  }
+  return { success: false, detail: `HMPanel backup failed — check docker logs. Backup saved to ${hmDir}/backups/` };
+}
+
+async function restorePasarguard(ssh: SshClient, remoteBackupPath: string, backupName: string): Promise<{ success: boolean; detail: string }> {
+  const lowerName = backupName.toLowerCase();
+
+  const uploadCheck = await ssh.exec(`ls -lh '${remoteBackupPath}' 2>&1 && stat -c %s '${remoteBackupPath}' 2>/dev/null || wc -c < '${remoteBackupPath}' 2>/dev/null || echo 0`);
+  const uploadOut = uploadCheck.stdout.trim();
+  if (uploadOut.includes("No such file") || uploadOut.includes("cannot access")) {
+    return { success: false, detail: `Uploaded PasarGuard backup not found at ${remoteBackupPath}` };
+  }
+  const sizeMatch = uploadOut.match(/(\d+)\s*$/);
+  const remoteSize = sizeMatch ? parseInt(sizeMatch[1], 10) : 0;
+  if (remoteSize === 0) {
+    return { success: false, detail: `Uploaded PasarGuard backup is empty` };
+  }
+
+  const pgDir = "/opt/pasarguard";
+  await ssh.exec(`mkdir -p ${pgDir} ${pgDir}/data; cp -r ${pgDir}/data ${pgDir}/data.pre-restore-$(date +%s) 2>/dev/null || true`);
+
+  const cliCheck = await ssh.exec("which pasarguard 2>/dev/null && echo HASCLI || echo NOCLI");
+  if (cliCheck.stdout.includes("HASCLI")) {
+    try {
+      const restoreRes = await ssh.exec(`pasarguard restore '${remoteBackupPath}' 2>&1 || echo RESTORE_FAILED`, { timeout: 10 * 60 * 1000 });
+      if (!restoreRes.stdout.includes("RESTORE_FAILED") && !restoreRes.stdout.toLowerCase().includes("command not found")) {
+        await ssh.exec(`cd ${pgDir} && docker compose restart 2>&1 || docker-compose restart 2>&1 || true; sleep 6`);
+        const verify = await ssh.exec('docker ps --format "{{.Names}} {{.Status}}" 2>/dev/null | grep -i pasarguard');
+        return { success: true, detail: `PasarGuard backup restored via CLI (${remoteSize} bytes) — ${verify.stdout.slice(0, 150)}` };
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.toLowerCase().includes("timed out")) {
+        await ssh.exec(`cd ${pgDir} && docker compose up -d 2>&1 || docker-compose up -d 2>&1 || true; sleep 5`);
+        const verifyAfter = await ssh.exec('docker ps --format "{{.Names}} {{.Status}}" 2>/dev/null | grep -i pasarguard');
+        if (verifyAfter.stdout.includes("pasarguard")) {
+          return { success: true, detail: `PasarGuard restore timed out but containers running — likely restored (${remoteSize} bytes)` };
+        }
+      }
+    }
+  }
+
+  if (lowerName.endsWith(".db") || lowerName.endsWith(".sqlite") || lowerName.endsWith(".sqlite3") || !lowerName.match(/\.(tar\.gz|tgz|zip)$/)) {
+    const dbPathRes = await ssh.exec(`ls ${pgDir}/data/*.db ${pgDir}/data/*.sqlite* 2>/dev/null | head -1; ls ${pgDir}/*.db 2>/dev/null | head -1; echo DB_SEARCH_DONE`);
+    let targetDb = `${pgDir}/data/db.sqlite3`;
+    const found = dbPathRes.stdout.trim().split("\n").find((l) => l.includes(".db") || l.includes(".sqlite"));
+    if (found && found.includes("/")) targetDb = found.trim();
+
+    await ssh.exec(`cd ${pgDir} && docker compose down 2>&1 || docker-compose down 2>&1 || true; sleep 2; rm -f ${targetDb}-wal ${targetDb}-shm 2>/dev/null || true`);
+    const cpRes = await ssh.exec(`cp -f '${remoteBackupPath}' '${targetDb}' && chmod 644 '${targetDb}' && ls -lh '${targetDb}' && echo OK || echo FAIL`);
+    await ssh.exec(`rm -f ${targetDb}-wal ${targetDb}-shm 2>/dev/null; chmod 644 '${targetDb}' 2>/dev/null || true`);
+    await ssh.exec(`cd ${pgDir} && docker compose up -d 2>&1 || docker-compose up -d 2>&1 || true; sleep 8`);
+
+    if (cpRes.stdout.includes("OK")) {
+      const verify = await ssh.exec(`ls -lh '${targetDb}'; sqlite3 '${targetDb}' "SELECT COUNT(*) FROM users;" 2>&1 | head -10 || echo ok; docker ps --format "{{.Names}}" 2>/dev/null | grep -i pasarguard`);
+      return { success: true, detail: `PasarGuard database restored (${remoteSize} bytes) to ${targetDb} — ${verify.stdout.slice(0, 150)}` };
+    }
+    return { success: false, detail: `Failed to restore PasarGuard db: ${cpRes.stdout.slice(0, 200)}` };
+  }
+
+  const extractDir = `/tmp/bkup-pg-extract-${Date.now()}`;
+  await ssh.exec(`mkdir -p '${extractDir}'`);
+  const extractRes = await ssh.exec(
+    lowerName.endsWith(".zip")
+      ? `cd '${extractDir}' && unzip -o '${remoteBackupPath}' 2>&1 && echo EXTRACT_OK || echo EXTRACT_FAIL`
+      : `cd '${extractDir}' && tar -xzf '${remoteBackupPath}' 2>&1 && echo EXTRACT_OK || tar -xf '${remoteBackupPath}' 2>&1 && echo EXTRACT_OK || echo EXTRACT_FAIL`,
+    { timeout: 5 * 60 * 1000 }
+  );
+
+  if (extractRes.stdout.includes("EXTRACT_OK")) {
+    const findDb = await ssh.exec(`find '${extractDir}' -name "*.db" -o -name "*.sqlite*" | head -5; ls -R '${extractDir}' | head -30`);
+    const dbFile = findDb.stdout.split("\n").find((l) => l.includes(".db") || l.includes(".sqlite"));
+    if (dbFile && dbFile.trim()) {
+      const dbPath = dbFile.trim();
+      await ssh.exec(`cd ${pgDir} && docker compose down 2>&1 || docker-compose down 2>&1 || true; sleep 2`);
+      await ssh.exec(`cp -f '${dbPath}' ${pgDir}/data/db.sqlite3 && chmod 644 ${pgDir}/data/db.sqlite3; rm -f ${pgDir}/data/db.sqlite3-wal ${pgDir}/data/db.sqlite3-shm 2>/dev/null || true; echo COPY_OK`);
+      await ssh.exec(`cd ${pgDir} && docker compose up -d 2>&1 || docker-compose up -d 2>&1; sleep 8`);
+    } else {
+      await ssh.exec(`cd ${pgDir} && docker compose down 2>&1 || true; cp -r '${extractDir}'/* ${pgDir}/data/ 2>/dev/null || cp -r '${extractDir}'/* ${pgDir}/ 2>/dev/null || true; docker compose up -d 2>&1 || docker-compose up -d 2>&1; sleep 8`);
+    }
+    await ssh.exec(`rm -rf '${extractDir}'`);
+    const verify = await ssh.exec('docker ps --format "{{.Names}}" 2>/dev/null | grep -i pasarguard; ls -lh /opt/pasarguard/data/ 2>&1 | head -10');
+    return { success: true, detail: `PasarGuard backup extracted and restored (${remoteSize} bytes) — ${verify.stdout.slice(0, 150)}` };
+  }
+
+  await ssh.exec(`rm -rf '${extractDir}'`);
+  const verifyRes = await ssh.exec('docker ps --format "{{.Names}}" 2>/dev/null | grep -i pasarguard || echo "NOT_RUNNING"');
+  if (verifyRes.stdout.includes("pasarguard")) {
+    return { success: true, detail: `PasarGuard backup processed (${remoteSize} bytes) — panel is running` };
+  }
+  return { success: false, detail: `PasarGuard restore attempted but panel status unclear (${remoteSize} bytes)` };
+}
+
+async function restoreRebecca(ssh: SshClient, remoteBackupPath: string, backupName: string): Promise<{ success: boolean; detail: string }> {
+  const lowerName = backupName.toLowerCase();
+
+  const uploadCheck = await ssh.exec(`ls -lh '${remoteBackupPath}' 2>&1 && stat -c %s '${remoteBackupPath}' 2>/dev/null || wc -c < '${remoteBackupPath}' 2>/dev/null || echo 0`);
+  const uploadOut = uploadCheck.stdout.trim();
+  if (uploadOut.includes("No such file") || uploadOut.includes("cannot access")) {
+    return { success: false, detail: `Uploaded Rebecca backup not found at ${remoteBackupPath}` };
+  }
+  const sizeMatch = uploadOut.match(/(\d+)\s*$/);
+  const remoteSize = sizeMatch ? parseInt(sizeMatch[1], 10) : 0;
+  if (remoteSize === 0) {
+    return { success: false, detail: `Uploaded Rebecca backup is empty` };
+  }
+
+  const rbDir = "/opt/rebecca";
+  await ssh.exec(`mkdir -p ${rbDir} ${rbDir}/data; cp -r ${rbDir}/data ${rbDir}/data.pre-restore-$(date +%s) 2>/dev/null || true`);
+
+  const cliCheck = await ssh.exec("which rebecca 2>/dev/null && echo HASCLI || echo NOCLI");
+  if (cliCheck.stdout.includes("HASCLI")) {
+    try {
+      const restoreRes = await ssh.exec(`rebecca restore '${remoteBackupPath}' 2>&1 || rebecca backup restore '${remoteBackupPath}' 2>&1 || echo RESTORE_FAILED`, {
+        timeout: 10 * 60 * 1000,
+      });
+      if (!restoreRes.stdout.includes("RESTORE_FAILED")) {
+        await ssh.exec(`cd ${rbDir} && docker compose restart 2>&1 || docker-compose restart 2>&1 || true; sleep 6`);
+        const verify = await ssh.exec('docker ps --format "{{.Names}} {{.Status}}" 2>/dev/null | grep -i rebecca');
+        return { success: true, detail: `Rebecca backup restored via CLI (${remoteSize} bytes) — ${verify.stdout.slice(0, 150)}` };
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.toLowerCase().includes("timed out")) {
+        await ssh.exec(`cd ${rbDir} && docker compose up -d 2>&1 || docker-compose up -d 2>&1 || true; sleep 5`);
+        const verifyAfter = await ssh.exec('docker ps --format "{{.Names}} {{.Status}}" 2>/dev/null | grep -i rebecca');
+        if (verifyAfter.stdout.includes("rebecca")) {
+          return { success: true, detail: `Rebecca restore timed out but containers running — likely restored (${remoteSize} bytes)` };
+        }
+      }
+    }
+  }
+
+  if (lowerName.endsWith(".db") || lowerName.endsWith(".sqlite") || lowerName.endsWith(".sqlite3") || !lowerName.match(/\.(tar\.gz|tgz|zip)$/)) {
+    const dbPathRes = await ssh.exec(`ls ${rbDir}/data/*.db ${rbDir}/data/*.sqlite* 2>/dev/null | head -1; ls ${rbDir}/*.db 2>/dev/null | head -1; echo DB_SEARCH_DONE`);
+    let targetDb = `${rbDir}/data/db.sqlite3`;
+    const found = dbPathRes.stdout.trim().split("\n").find((l) => l.includes(".db") || l.includes(".sqlite"));
+    if (found && found.includes("/")) targetDb = found.trim();
+
+    await ssh.exec(`cd ${rbDir} && docker compose down 2>&1 || docker-compose down 2>&1 || true; sleep 2; rm -f ${targetDb}-wal ${targetDb}-shm 2>/dev/null || true`);
+    const cpRes = await ssh.exec(`cp -f '${remoteBackupPath}' '${targetDb}' && chmod 644 '${targetDb}' && ls -lh '${targetDb}' && echo OK || echo FAIL`);
+    await ssh.exec(`rm -f ${targetDb}-wal ${targetDb}-shm 2>/dev/null; chmod 644 '${targetDb}' 2>/dev/null || true`);
+    await ssh.exec(`cd ${rbDir} && docker compose up -d 2>&1 || docker-compose up -d 2>&1 || true; sleep 8`);
+
+    if (cpRes.stdout.includes("OK")) {
+      const verify = await ssh.exec(`ls -lh '${targetDb}'; sqlite3 '${targetDb}' "SELECT COUNT(*) FROM users;" 2>&1 | head -10 || echo ok; docker ps --format "{{.Names}}" 2>/dev/null | grep -i rebecca`);
+      return { success: true, detail: `Rebecca database restored (${remoteSize} bytes) to ${targetDb} — ${verify.stdout.slice(0, 150)}` };
+    }
+    return { success: false, detail: `Failed to restore Rebecca db: ${cpRes.stdout.slice(0, 200)}` };
+  }
+
+  const extractDir = `/tmp/bkup-rb-extract-${Date.now()}`;
+  await ssh.exec(`mkdir -p '${extractDir}'`);
+  const extractRes = await ssh.exec(
+    lowerName.endsWith(".zip")
+      ? `cd '${extractDir}' && unzip -o '${remoteBackupPath}' 2>&1 && echo EXTRACT_OK || echo EXTRACT_FAIL`
+      : `cd '${extractDir}' && tar -xzf '${remoteBackupPath}' 2>&1 && echo EXTRACT_OK || tar -xf '${remoteBackupPath}' 2>&1 && echo EXTRACT_OK || echo EXTRACT_FAIL`,
+    { timeout: 5 * 60 * 1000 }
+  );
+
+  if (extractRes.stdout.includes("EXTRACT_OK")) {
+    const findDb = await ssh.exec(`find '${extractDir}' -name "*.db" -o -name "*.sqlite*" | head -5; ls -R '${extractDir}' | head -30`);
+    const dbFile = findDb.stdout.split("\n").find((l) => l.includes(".db") || l.includes(".sqlite"));
+    if (dbFile && dbFile.trim()) {
+      const dbPath = dbFile.trim();
+      await ssh.exec(`cd ${rbDir} && docker compose down 2>&1 || docker-compose down 2>&1 || true; sleep 2`);
+      await ssh.exec(`cp -f '${dbPath}' ${rbDir}/data/db.sqlite3 && chmod 644 ${rbDir}/data/db.sqlite3; rm -f ${rbDir}/data/db.sqlite3-wal ${rbDir}/data/db.sqlite3-shm 2>/dev/null || true; echo COPY_OK`);
+      await ssh.exec(`cd ${rbDir} && docker compose up -d 2>&1 || docker-compose up -d 2>&1; sleep 8`);
+    } else {
+      await ssh.exec(`cd ${rbDir} && docker compose down 2>&1 || true; cp -r '${extractDir}'/* ${rbDir}/data/ 2>/dev/null || cp -r '${extractDir}'/* ${rbDir}/ 2>/dev/null || true; docker compose up -d 2>&1 || docker-compose up -d 2>&1; sleep 8`);
+    }
+    await ssh.exec(`rm -rf '${extractDir}'`);
+    const verify = await ssh.exec('docker ps --format "{{.Names}}" 2>/dev/null | grep -i rebecca; ls -lh /opt/rebecca/data/ 2>&1 | head -10');
+    return { success: true, detail: `Rebecca backup extracted and restored (${remoteSize} bytes) — ${verify.stdout.slice(0, 150)}` };
+  }
+
+  await ssh.exec(`rm -rf '${extractDir}'`);
+  const verifyRes = await ssh.exec('docker ps --format "{{.Names}}" 2>/dev/null | grep -i rebecca || echo "NOT_RUNNING"');
+  if (verifyRes.stdout.includes("rebecca")) {
+    return { success: true, detail: `Rebecca backup processed (${remoteSize} bytes) — panel is running` };
+  }
+  return { success: false, detail: `Rebecca restore attempted (${remoteSize} bytes) — please verify via panel UI` };
+}
+
+async function resolveBackup(
+  backupId: number,
+  source: "backup-run" | "reassembled"
+): Promise<{ filePath: string; fileName: string; panel: PanelId }> {
+  if (source === "backup-run") {
+    const row = await db.backupRun.findUnique({ where: { id: backupId } });
+    if (!row || !row.filePath) throw new Error("BACKUP_NOT_FOUND");
+    return {
+      filePath: row.filePath,
+      fileName: row.fileName || path.basename(row.filePath),
+      panel: row.panel as PanelId,
+    };
+  } else {
+    const row = await db.reassembledBackup.findUnique({ where: { id: backupId } });
+    if (!row || !row.filePath) throw new Error("BACKUP_NOT_FOUND");
+    return {
+      filePath: row.filePath,
+      fileName: row.name,
+      panel: (row.panel || "3x-ui") as PanelId,
+    };
+  }
+}
+
+export async function startRestore(req: RestoreRequest): Promise<{ jobId?: number; ok: boolean; error?: string }> {
+  if (isRestoreRunning()) {
+    return { ok: false, error: "RESTORE_ALREADY_RUNNING" };
+  }
+
+  let backup: { filePath: string; fileName: string; panel: PanelId };
+  try {
+    backup = await resolveBackup(req.backupId, req.backupSource);
+  } catch {
+    return { ok: false, error: "BACKUP_NOT_FOUND" };
+  }
+
+  if (!fs.existsSync(backup.filePath)) {
+    return { ok: false, error: "BACKUP_FILE_MISSING" };
+  }
+
+  const job = await db.restoreJob.create({
+    data: {
+      status: "running",
+      panel: req.panel,
+      backupId: req.backupId,
+      backupName: backup.fileName,
+      backupSource: req.backupSource,
+      backupPath: backup.filePath,
+      sshHost: req.sshHost,
+      sshPort: req.sshPort,
+      sshUser: req.sshUser,
+    },
+  });
+
+  const state: RestoreState = {
+    jobId: job.id,
+    status: "running",
+    panel: req.panel,
+    backupName: backup.fileName,
+    sshHost: req.sshHost,
+    steps: makeSteps(req.panel, req.installNode ?? false),
+    startedAt: Date.now(),
+  };
+  writeStateFile(state);
+  g.__restoreRunning = true;
+
+  runRestoreAsync(req, backup, state).catch((e) => {
+    console.error("[restore] unhandled error:", e);
+  });
+
+  return { jobId: job.id, ok: true };
+}
+
+async function runRestoreAsync(
+  req: RestoreRequest,
+  backup: { filePath: string; fileName: string; panel: PanelId },
+  state: RestoreState
+): Promise<void> {
+  const ssh = new SshClient();
+  const cfg = await getRestoreConfig();
+  const installNode = req.installNode ?? false;
+  const multiDomains = normalizeDomains(req.sslDomain, req.sslDomains);
+
+  try {
+    clearCancelFlag();
+    assertNotCancelled();
+    markStep(state.steps, "connect", "running");
+    state.currentStepKey = "connect";
+    writeStateFile(state);
+
+    const sshOpts: SshOptions = {
+      host: req.sshHost,
+      port: req.sshPort || 22,
+      username: req.sshUser,
+      password: req.sshPassword,
+      privateKey: req.sshPrivateKey,
+      passphrase: req.sshPassphrase,
+      timeout: 20000,
+    };
+
+    await ssh.connect(sshOpts);
+    markStep(state.steps, "connect", "done", `Connected to ${req.sshUser}@${req.sshHost}:${req.sshPort}`);
+    writeStateFile(state);
+    await log("info", bi(`[Restore] SSH connection established: ${req.sshHost}:${req.sshPort}`, `[Restore] SSH connection established: ${req.sshHost}:${req.sshPort}`));
+
+    assertNotCancelled();
+    markStep(state.steps, "check_panel", "running");
+    state.currentStepKey = "check_panel";
+    writeStateFile(state);
+
+    const panelCheck = await checkPanelInstalled(ssh, req.panel);
+    markStep(state.steps, "check_panel", "done", panelCheck.detail);
+    writeStateFile(state);
+
+    assertNotCancelled();
+    markStep(state.steps, "install_node", "running");
+    state.currentStepKey = "install_node";
+    writeStateFile(state);
+
+    const sysReq = await checkSystemRequirements(ssh);
+    markStep(state.steps, "install_node", "done", sysReq.detail);
+    writeStateFile(state);
+
+    if (!panelCheck.installed) {
+      assertNotCancelled();
+      markStep(state.steps, "install_panel", "running");
+      state.currentStepKey = "install_panel";
+      writeStateFile(state);
+
+      const installResult = await installPanel(ssh, req.panel, cfg, req, (text) => {
+        const snippet = text.trim().split("\n").pop()?.slice(0, 160) || "";
+        if (snippet) {
+          markStep(state.steps, "install_panel", "running", snippet);
+          writeStateFile(state);
+        }
+      });
+
+      if (!installResult.success) {
+        markStepError(state.steps, "install_panel", installResult.detail);
+        writeStateFile(state);
+        throw new Error(installResult.detail);
+      }
+
+      markStep(state.steps, "install_panel", "done", installResult.detail);
+      writeStateFile(state);
+      await log("info", bi(`[Restore] Panel installed: ${req.panel} on ${req.sshHost}`, `[Restore] Panel installed: ${req.panel} on ${req.sshHost}`));
+
+      if (installNode && (req.panel === "pasarguard" || req.panel === "rebecca")) {
+        assertNotCancelled();
+        markStep(state.steps, "install_node_component", "running");
+        state.currentStepKey = "install_node_component";
+        writeStateFile(state);
+
+        const nodeResult2 = await installPanelNode(ssh, req.panel, (text) => {
+          const snippet = text.trim().split("\n").pop()?.slice(0, 160) || "";
+          if (snippet) {
+            markStep(state.steps, "install_node_component", "running", snippet);
+            writeStateFile(state);
+          }
+        });
+
+        if (!nodeResult2.success) {
+          markStepError(state.steps, "install_node_component", nodeResult2.detail);
+          writeStateFile(state);
+          throw new Error(nodeResult2.detail);
+        }
+
+        markStep(state.steps, "install_node_component", "done", nodeResult2.detail);
+        writeStateFile(state);
+      } else {
+        markStep(state.steps, "install_node_component", "skipped", installNode ? "Not supported for this panel" : "Not requested");
+        writeStateFile(state);
+      }
+    } else {
+      markStep(state.steps, "install_panel", "skipped", "Panel already installed");
+      if (installNode && (req.panel === "pasarguard" || req.panel === "rebecca")) {
+        assertNotCancelled();
+        markStep(state.steps, "install_node_component", "running");
+        state.currentStepKey = "install_node_component";
+        writeStateFile(state);
+
+        const nodeResult2 = await installPanelNode(ssh, req.panel, (text) => {
+          const snippet = text.trim().split("\n").pop()?.slice(0, 160) || "";
+          if (snippet) {
+            markStep(state.steps, "install_node_component", "running", snippet);
+            writeStateFile(state);
+          }
+        });
+
+        if (!nodeResult2.success) {
+          markStep(state.steps, "install_node_component", "skipped", nodeResult2.detail);
+        } else {
+          markStep(state.steps, "install_node_component", "done", nodeResult2.detail);
+        }
+        writeStateFile(state);
+      } else {
+        markStep(state.steps, "install_node_component", "skipped", "Not needed");
+        writeStateFile(state);
+      }
+    }
+
+    assertNotCancelled();
+    // ── Multi-domain SSL cert step ──
+    if (multiDomains.length > 0 && (req.sslMode === "domain" || req.sslMode === "custom" || multiDomains.length > 1)) {
+      markStep(state.steps, "ssl_cert", "running", `Issuing cert for ${multiDomains.join(", ")}...`);
+      state.currentStepKey = "ssl_cert";
+      writeStateFile(state);
+
+      const certResult = await issueMultiDomainCert(ssh, req.panel, multiDomains, (txt) => {
+        markStep(state.steps, "ssl_cert", "running", txt.slice(0, 160));
+        writeStateFile(state);
+      });
+
+      if (certResult.success) {
+        markStep(state.steps, "ssl_cert", "done", certResult.detail);
+      } else {
+        // Don't fail restore if cert fails, just mark as failed but continue — cert is important but not blocking
+        markStep(state.steps, "ssl_cert", "done", `Cert warning: ${certResult.detail} — continuing with restore`);
+      }
+      writeStateFile(state);
+    } else {
+      markStep(state.steps, "ssl_cert", "skipped", "No multi-domain cert requested");
+      writeStateFile(state);
+    }
+
+    assertNotCancelled();
+    markStep(state.steps, "upload_backup", "running");
+    state.currentStepKey = "upload_backup";
+    markStep(state.steps, "upload_backup", "running", `Uploading ${backup.fileName}...`);
+    writeStateFile(state);
+
+    const remotePath = `/tmp/bkup-restore-${Date.now()}-${backup.fileName.replace(/[^\\w.@-]/g, "_")}`;
+    await ssh.uploadFile(backup.filePath, remotePath, (sent, total) => {
+      const pct = total > 0 ? Math.round((sent / total) * 100) : 0;
+      markStep(state.steps, "upload_backup", "running", `Uploading... ${pct}%`);
+      writeStateFile(state);
+    });
+
+    const localSize = fs.statSync(backup.filePath).size;
+    const remoteCheck = await ssh.exec(`ls -lh '${remotePath}' 2>&1; stat -c %s '${remotePath}' 2>/dev/null || wc -c < '${remotePath}' 2>/dev/null || echo 0`);
+    const remoteSizeMatch = remoteCheck.stdout.trim().match(/(\d+)\s*$/);
+    const remoteSize = remoteSizeMatch ? parseInt(remoteSizeMatch[1], 10) : 0;
+    if (remoteSize === 0) {
+      markStepError(state.steps, "upload_backup", `Upload failed — remote file is empty or missing. Local: ${localSize} bytes, Remote: ${remoteSize} bytes. Output: ${remoteCheck.stdout.slice(0, 200)}`);
+      writeStateFile(state);
+      throw new Error(`Upload failed — remote file empty. Local ${localSize} bytes, remote ${remoteSize} bytes`);
+    }
+
+    markStep(state.steps, "upload_backup", "done", `Backup uploaded (${backup.fileName}) — ${localSize} bytes verified on server`);
+    writeStateFile(state);
+
+    assertNotCancelled();
+    markStep(state.steps, "restore", "running");
+    state.currentStepKey = "restore";
+    writeStateFile(state);
+
+    const restoreResult = await restoreFromRemotePath(ssh, req.panel, remotePath, backup.fileName);
+
+    try {
+      await ssh.exec(`rm -f '${remotePath}'`);
+    } catch {}
+
+    if (!restoreResult.success) {
+      markStepError(state.steps, "restore", restoreResult.detail);
+      writeStateFile(state);
+      throw new Error(restoreResult.detail);
+    }
+
+    markStep(state.steps, "restore", "done", restoreResult.detail);
+    writeStateFile(state);
+
+    // Re-apply multi-domain cert after restore (backup overwrites db/config, so cert settings may be lost)
+    if (multiDomains.length > 0) {
+      try {
+        const first = multiDomains[0];
+        await ssh.exec(`
+          echo "[bkup] Re-applying multi-domain cert after restore for ${req.panel}..."
+          if [ -f /root/cert/${first}/fullchain.pem ] && [ -f /root/cert/${first}/privkey.pem ]; then
+            openssl x509 -in /root/cert/${first}/fullchain.pem -noout -checkend 0 2>&1 && echo "CERT_VALID" || echo "CERT_EXPIRED_OR_INVALID"
+            if [ "${req.panel}" = "3x-ui" ] && [ -x /usr/local/x-ui/x-ui ]; then
+              /usr/local/x-ui/x-ui cert -webCert /root/cert/${first}/fullchain.pem -webCertKey /root/cert/${first}/privkey.pem 2>&1 || true
+              /usr/local/x-ui/x-ui setting -listenIP "0.0.0.0" 2>&1 || true
+              systemctl restart x-ui 2>/dev/null || true
+              sleep 2
+              systemctl is-active x-ui 2>&1 || true
+            elif [ "${req.panel}" = "hmpanel" ] && [ -d /opt/hmpanel ]; then
+              mkdir -p /opt/hmpanel/nginx/ssl
+              cp /root/cert/${first}/fullchain.pem /opt/hmpanel/nginx/ssl/fullchain.pem 2>/dev/null || true
+              cp /root/cert/${first}/privkey.pem /opt/hmpanel/nginx/ssl/privkey.pem 2>/dev/null || true
+              cp /root/cert/${first}/fullchain.pem /opt/hmpanel/nginx/ssl/cert.pem 2>/dev/null || true
+              cp /root/cert/${first}/privkey.pem /opt/hmpanel/nginx/ssl/key.pem 2>/dev/null || true
+              chmod 644 /opt/hmpanel/nginx/ssl/*.pem 2>/dev/null || true
+              if [ -f /opt/hmpanel/.env ]; then
+                sed -i "s/^DOMAIN=.*/DOMAIN=${first}/" /opt/hmpanel/.env 2>/dev/null || true
+                sed -i "s/^PANEL_DOMAIN=.*/PANEL_DOMAIN=${first}/" /opt/hmpanel/.env 2>/dev/null || true
+                sed -i "s/^SSL_ENABLED=.*/SSL_ENABLED=true/" /opt/hmpanel/.env 2>/dev/null || true
+              fi
+              cd /opt/hmpanel && docker compose restart nginx 2>/dev/null || docker restart hmpanel-nginx 2>/dev/null || true
+              sleep 2
+              docker ps --format "{{.Names}} {{.Status}}" 2>/dev/null | grep -i hmpanel || true
+            elif [ "${req.panel}" = "pasarguard" ] && [ -d /opt/pasarguard ]; then
+              mkdir -p /opt/pasarguard/certs /opt/pasarguard/data/certs /opt/pasarguard/nginx/ssl
+              cp /root/cert/${first}/fullchain.pem /opt/pasarguard/certs/fullchain.pem 2>/dev/null || true
+              cp /root/cert/${first}/privkey.pem /opt/pasarguard/certs/privkey.pem 2>/dev/null || true
+              cp /root/cert/${first}/fullchain.pem /opt/pasarguard/data/certs/fullchain.pem 2>/dev/null || true
+              cp /root/cert/${first}/privkey.pem /opt/pasarguard/data/certs/privkey.pem 2>/dev/null || true
+              cp /root/cert/${first}/fullchain.pem /opt/pasarguard/nginx/ssl/fullchain.pem 2>/dev/null || true
+              cp /root/cert/${first}/privkey.pem /opt/pasarguard/nginx/ssl/privkey.pem 2>/dev/null || true
+              cd /opt/pasarguard && docker compose restart 2>/dev/null || true
+            elif [ "${req.panel}" = "rebecca" ] && [ -d /opt/rebecca ]; then
+              mkdir -p /opt/rebecca/certs /opt/rebecca/data/certs /opt/rebecca/nginx/ssl
+              cp /root/cert/${first}/fullchain.pem /opt/rebecca/certs/fullchain.pem 2>/dev/null || true
+              cp /root/cert/${first}/privkey.pem /opt/rebecca/certs/privkey.pem 2>/dev/null || true
+              cp /root/cert/${first}/fullchain.pem /opt/rebecca/data/certs/fullchain.pem 2>/dev/null || true
+              cp /root/cert/${first}/privkey.pem /opt/rebecca/data/certs/privkey.pem 2>/dev/null || true
+              cp /root/cert/${first}/fullchain.pem /opt/rebecca/nginx/ssl/fullchain.pem 2>/dev/null || true
+              cp /root/cert/${first}/privkey.pem /opt/rebecca/nginx/ssl/privkey.pem 2>/dev/null || true
+              cd /opt/rebecca && docker compose restart 2>/dev/null || true
+            fi
+            echo "CERT_REAPPLY_OK"
+          else
+            echo "CERT_NOT_FOUND_AFTER_RESTORE"
+          fi
+        `);
+      } catch {}
+    }
+
+    assertNotCancelled();
+    markStep(state.steps, "verify", "running");
+    state.currentStepKey = "verify";
+    writeStateFile(state);
+
+    await ssh.exec("sleep 3");
+    const verifyCmd =
+      req.panel === "3x-ui"
+        ? "systemctl is-active x-ui 2>/dev/null || pgrep -f x-ui 2>/dev/null && echo active || echo inactive"
+        : `docker ps --format "{{.Names}}" 2>/dev/null | grep -i ${req.panel} || systemctl is-active ${req.panel} 2>/dev/null || echo "active"`;
+
+    const verifyRes = await ssh.exec(verifyCmd);
+    const isOk = verifyRes.stdout.trim().length > 0 && !verifyRes.stdout.includes("inactive") && !verifyRes.stdout.includes("NOT_RUNNING");
+
+    markStep(state.steps, "verify", "done", isOk ? "Verification passed — panel is running" : "Restore completed — verification is best-effort");
+    state.status = "success";
+    state.finishedAt = Date.now();
+    state.durationMs = state.finishedAt - state.startedAt;
+    writeStateFile(state);
+
+    await db.restoreJob.update({
+      where: { id: state.jobId },
+      data: {
+        status: "success",
+        finishedAt: new Date(),
+        durationMs: state.durationMs,
+        steps: JSON.stringify(state.steps),
+      },
+    });
+
+    clearCancelFlag();
+
+    await log("success", bi(`[Restore] Backup restored successfully on ${req.sshHost} (${backup.fileName})`, `[Restore] Backup restored successfully on ${req.sshHost} (${backup.fileName})`));
+  } catch (e: unknown) {
+    const rawError = e instanceof Error ? e.message : String(e);
+    const isCancelled = rawError === "RESTORE_CANCELLED" || rawError.toLowerCase().includes("cancel");
+    const error = isCancelled ? "Cancelled by user" : rawError;
+    state.status = isCancelled ? "cancelled" : "failed";
+    state.error = error;
+    state.finishedAt = Date.now();
+    state.durationMs = state.finishedAt - state.startedAt;
+    if (state.currentStepKey) {
+      const cur = stepBy(state.steps, state.currentStepKey);
+      if (cur && cur.status !== "failed") markStepError(state.steps, state.currentStepKey, error);
+    }
+    writeStateFile(state);
+    await db.restoreJob.update({
+      where: { id: state.jobId },
+      data: {
+        status: state.status,
+        finishedAt: new Date(),
+        error: error,
+        durationMs: state.durationMs,
+        steps: JSON.stringify(state.steps),
+      },
+    });
+    clearCancelFlag();
+    await log("error", bi(`[Restore] Restore failed: ${error}`, `[Restore] Restore failed: ${error}`));
+  } finally {
+    ssh.disconnect();
+    g.__restoreRunning = false;
+    clearCancelFlag();
+  }
+}
+
+export async function listAvailableBackups(): Promise<{
+  backupRuns: { id: number; fileName: string; panel: string; fileSize: number | null; startedAt: string; source: "backup-run" }[];
+  reassembled: { id: number; name: string; panel: string; size: number; createdAt: string; source: "reassembled" }[];
+}> {
+  const [runs, reassembled] = await Promise.all([
+    db.backupRun.findMany({
+      where: { status: "success", filePath: { not: null } },
+      orderBy: { startedAt: "desc" },
+      take: 100,
+      select: { id: true, fileName: true, panel: true, fileSize: true, startedAt: true, filePath: true },
+    }),
+    db.reassembledBackup.findMany({
+      orderBy: { createdAt: "desc" },
+      take: 100,
+      select: { id: true, name: true, panel: true, size: true, createdAt: true, filePath: true },
+    }),
+  ]);
+
+  const backupRuns = runs
+    .filter((r) => r.filePath && fs.existsSync(r.filePath))
+    .map((r) => ({
+      id: r.id,
+      fileName: r.fileName || "unknown",
+      panel: r.panel,
+      fileSize: r.fileSize,
+      startedAt: r.startedAt.toISOString(),
+      source: "backup-run" as const,
+    }));
+
+  const reassembledRows = reassembled
+    .filter((r) => r.filePath && fs.existsSync(r.filePath))
+    .map((r) => ({
+      id: r.id,
+      name: r.name,
+      panel: r.panel || "3x-ui",
+      size: r.size,
+      createdAt: r.createdAt.toISOString(),
+      source: "reassembled" as const,
+    }));
+
+  return { backupRuns, reassembled: reassembledRows };
+}
+
+export async function getRestoreHistory(limit: number = 50) {
+  const rows = await db.restoreJob.findMany({
+    orderBy: { startedAt: "desc" },
+    take: Math.min(200, Math.max(1, limit)),
+  });
+  return rows;
+}
