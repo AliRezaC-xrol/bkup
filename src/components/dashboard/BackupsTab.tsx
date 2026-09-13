@@ -15,6 +15,7 @@ import { Download, Trash2, RefreshCw, Inbox, ShieldCheck, ShieldAlert, ShieldX, 
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { useLang } from "@/components/dashboard/lang";
+import { TimeAgo } from "@/components/dashboard/TimeAgo";
 import type { BackupRunDTO } from "@/components/dashboard/types";
 import { formatBytes, formatDuration } from "@/components/dashboard/types";
 import { resolveText } from "@/lib/messages";
@@ -83,11 +84,6 @@ export function BackupsTab({ runs, onRefresh }: { runs: BackupRunDTO[]; onRefres
 
   const methodLabel = (m: string | null) =>
     m === "db" ? t("method_db") : m === "json" ? t("method_json") : m === "local" ? t("method_local") : m === "hm-full" ? t("method_hm_full") : m === "pg-full" ? t("method_pg_full") : m === "rb-full" ? t("method_rb_full") : "—";
-
-  const fmtTime = (iso: string) =>
-    new Intl.DateTimeFormat("en-GB", {
-      timeZone: "Asia/Tehran", dateStyle: "short", timeStyle: "medium",
-    }).format(new Date(iso));
 
   const allSelected = rows.length > 0 && rows.every((r) => selected.has(r.id));
   function toggleRow(id: number, on: boolean) {
@@ -328,7 +324,7 @@ export function BackupsTab({ runs, onRefresh }: { runs: BackupRunDTO[]; onRefres
                       />
                     </TableCell>
                     <TableCell className="whitespace-nowrap text-xs tabular-nums">
-                      {fmtTime(r.startedAt)}
+                      <TimeAgo date={r.startedAt} className="text-xs" />
                       <span className="ms-1.5 rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground">
                         {r.trigger === "auto" ? t("trigger_auto") : t("trigger_manual")}
                       </span>

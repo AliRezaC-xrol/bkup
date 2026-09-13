@@ -13,6 +13,7 @@ import {
 import {
   RefreshCw, Download, ServerCog, GitBranch, Globe, Cpu, HardDrive,
   TerminalSquare, Loader2, CheckCircle2, AlertTriangle, Clock, Play, Square, RotateCcw,
+  Trash2, BrushCleaning,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useLang } from "@/components/dashboard/lang";
@@ -26,6 +27,11 @@ interface StorageDTO {
   database: { bytes: number };
   totalBytes: number;
   dir: string;
+}
+
+interface CleanupPreviewDTO {
+  orphans: { count: number; bytes: number; files: string[] };
+  retention: { keep: number; excess: { count: number; bytes: number; files: string[] } };
 }
 
 export function SystemTab({
@@ -51,15 +57,48 @@ export function SystemTab({
   const logRef = useRef<HTMLPreElement>(null);
   // local disk usage of backups + reassembled + database (System → Storage)
   const [storage, setStorage] = useState<StorageDTO | null>(null);
+  // on-demand cleanup (System → Storage → Clean now)
+  const [cleanup, setCleanup] = useState<CleanupPreviewDTO | null>(null);
+  const [cleanupBusy, setCleanupBusy] = useState(false);
+  const [cleanupOpen, setCleanupOpen] = useState(false);
 
-  useEffect(() => {
+  const loadStorage = useCallback(() => {
     let alive = true;
     fetch("/api/system/storage", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => { if (alive && d) setStorage(d); })
       .catch(() => { /* keep the card empty */ });
+    fetch("/api/system/storage/cleanup", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (alive && d && d.orphans) setCleanup(d); })
+      .catch(() => { /* preview stays empty */ });
     return () => { alive = false; };
-  }, [info?.appVersion]);
+  }, []);
+
+  useEffect(() => {
+    return loadStorage();
+  }, [info?.appVersion, loadStorage]);
+
+  const runCleanupNow = useCallback(async () => {
+    setCleanupBusy(true);
+    setCleanupOpen(false);
+    try {
+      const res = await fetch("/api/system/storage/cleanup", { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        const freed = data.orphanBytesFreed + data.retentionBytesFreed;
+        toast({
+          title: t("cleanup_done_title"),
+          description: `${formatBytes(freed)} — ${data.orphansDeleted + data.retentionDeleted} ${t("cleanup_done_files")}`,
+        });
+        loadStorage();
+      } else {
+        toast({ title: t("error"), description: data.error, variant: "destructive" });
+      }
+    } finally {
+      setCleanupBusy(false);
+    }
+  }, [t, toast, loadStorage]);
 
   useEffect(() => {
     if (info?.port) setPort(String(info.port));
@@ -218,6 +257,8 @@ export function SystemTab({
 
   const n = (v: number) => v.toLocaleString("en-US");
   const latest = info?.latest;
+
+  const cleanable = Boolean(cleanup && (cleanup.orphans.count > 0 || cleanup.retention.excess.count > 0));
 
   const storageRows = storage
     ? [
@@ -399,6 +440,60 @@ export function SystemTab({
                   </div>
                 ))}
               </div>
+
+              {/* ── on-demand cleanup ── */}
+              {cleanup && (
+                <div className="rounded-lg border border-dashed p-3">
+                  <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center">
+                    <div className="flex min-w-0 flex-1 items-start gap-3">
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+                        <BrushCleaning className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold">{t("cleanup_title")}</p>
+                        <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">{t("cleanup_desc")}</p>
+                      </div>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className={`h-8 w-full shrink-0 justify-center gap-1.5 sm:w-auto ${cleanable ? "border-amber-500/40 text-amber-600 hover:bg-amber-500/10 hover:text-amber-700 dark:text-amber-400" : ""}`}
+                      disabled={!cleanable || cleanupBusy}
+                      onClick={() => setCleanupOpen(true)}
+                    >
+                      {cleanupBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                      {t("cleanup_btn")}
+                    </Button>
+                  </div>
+                  <div className="mt-2.5 flex flex-wrap gap-1.5">
+                    {cleanup.orphans.count > 0 ? (
+                      <Badge variant="outline" className="border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400" title={cleanup.orphans.files.join("\n")}>
+                        <AlertTriangle className="me-1 h-3 w-3" />
+                        {t("cleanup_orphans").replace("{n}", String(cleanup.orphans.count)).replace("{size}", formatBytes(cleanup.orphans.bytes))}
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline" className="text-muted-foreground">
+                        <CheckCircle2 className="me-1 h-3 w-3" />
+                        {t("cleanup_no_orphans")}
+                      </Badge>
+                    )}
+                    {cleanup.retention.keep >= 1 ? (
+                      cleanup.retention.excess.count > 0 ? (
+                        <Badge variant="outline" className="border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400" title={cleanup.retention.excess.files.join("\n")}>
+                          <AlertTriangle className="me-1 h-3 w-3" />
+                          {t("cleanup_retention_over").replace("{n}", String(cleanup.retention.excess.count)).replace("{size}", formatBytes(cleanup.retention.excess.bytes)).replace("{keep}", String(cleanup.retention.keep))}
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-muted-foreground">
+                          {t("cleanup_retention_ok").replace("{keep}", String(cleanup.retention.keep))}
+                        </Badge>
+                      )
+                    ) : (
+                      <Badge variant="outline" className="text-muted-foreground">{t("cleanup_retention_off")}</Badge>
+                    )}
+                  </div>
+                </div>
+              )}
             </>
           )}
         </CardContent>
@@ -509,6 +604,43 @@ export function SystemTab({
           </div>
         </CardContent>
       </Card>
+
+      <AlertDialog open={cleanupOpen} onOpenChange={(o) => !o && setCleanupOpen(false)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("cleanup_confirm_title")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {cleanup && (
+                <span className="block space-y-1">
+                  {cleanup.orphans.count > 0 && (
+                    <span className="block" dir="ltr">
+                      • {t("cleanup_orphans").replace("{n}", String(cleanup.orphans.count)).replace("{size}", formatBytes(cleanup.orphans.bytes))}
+                    </span>
+                  )}
+                  {cleanup.retention.excess.count > 0 && (
+                    <span className="block" dir="ltr">
+                      • {t("cleanup_retention_over").replace("{n}", String(cleanup.retention.excess.count)).replace("{size}", formatBytes(cleanup.retention.excess.bytes)).replace("{keep}", String(cleanup.retention.keep))}
+                    </span>
+                  )}
+                  <span className="block mt-2">{t("cleanup_confirm_note")}</span>
+                </span>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 text-white hover:bg-red-700"
+              onClick={(e) => {
+                e.preventDefault();
+                runCleanupNow();
+              }}
+            >
+              {t("cleanup_btn")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={confirmPort != null} onOpenChange={(o) => !o && setConfirmPort(null)}>
         <AlertDialogContent>
