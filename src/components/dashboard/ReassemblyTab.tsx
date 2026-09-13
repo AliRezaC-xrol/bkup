@@ -12,11 +12,11 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Combine, Download, Trash2, UploadCloud, Inbox, Archive } from "lucide-react";
+import { Combine, Download, Trash2, UploadCloud, Inbox, Archive, Check, X } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useLang } from "@/components/dashboard/lang";
 import { formatBytes } from "@/components/dashboard/types";
-import { parsePartIndex } from "@/lib/reassembly";
+import { compareParts, parsePartIndex } from "@/lib/reassembly";
 
 export interface ReassembledDTO {
   id: number;
@@ -54,6 +54,7 @@ const BackupChoiceRow = memo(function BackupChoiceRow({
   active: boolean;
   onToggle: (id: number) => void;
 }) {
+  const part = choice.fileName ? parsePartIndex(choice.fileName) : null;
   return (
     <button
       type="button"
@@ -63,8 +64,8 @@ const BackupChoiceRow = memo(function BackupChoiceRow({
         active ? "border-primary bg-primary/5" : "hover:bg-muted/50"
       }`}
     >
-      <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${active ? "border-primary" : "border-muted-foreground/40"}`}>
-        {active && <span className="h-2 w-2 rounded-full bg-primary" />}
+      <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${active ? "border-primary bg-primary" : "border-muted-foreground/40"}`}>
+        {active && <Check className="h-3 w-3 text-primary-foreground" strokeWidth={3} />}
       </span>
       <span className="min-w-0 flex-1">
         <span className="block truncate text-xs font-medium" dir="ltr" title={choice.fileName ?? `#${choice.id}`}>
@@ -72,6 +73,11 @@ const BackupChoiceRow = memo(function BackupChoiceRow({
         </span>
         <span className="block text-[11px] tabular-nums text-muted-foreground">{fmtTime(choice.startedAt)}</span>
       </span>
+      {part && (
+        <Badge variant="outline" className="shrink-0 text-[10px] tabular-nums">
+          P{part.index}{part.total ? `/${part.total}` : ""}
+        </Badge>
+      )}
       <Badge variant="outline" className="shrink-0 text-[10px] uppercase">
         {panelShort(choice.panel)}
       </Badge>
@@ -130,11 +136,16 @@ export function ReassemblyTab() {
   const [deleting, setDeleting] = useState<ReassembledDTO | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
 
-  // source selection: upload part files, or use one of the stored backups
+  // source selection: upload part files, or merge parts stored in Backups
   const [source, setSource] = useState<"upload" | "backups">("upload");
   const [choices, setChoices] = useState<BackupChoice[]>([]);
   const [choicesLoading, setChoicesLoading] = useState(false);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const selectedSize = useMemo(
+    () => choices.reduce((n, c) => (selectedSet.has(c.id) ? n + (c.fileSize ?? 0) : n), 0),
+    [choices, selectedSet]
+  );
 
   const loadHistory = useCallback(async () => {
     try {
@@ -166,8 +177,10 @@ export function ReassemblyTab() {
   }, [source, loadChoices]);
 
   const toggleChoice = useCallback((id: number) => {
-    setSelectedId((cur) => (cur === id ? null : id));
+    setSelectedIds((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
   }, []);
+
+  const clearSelection = useCallback(() => setSelectedIds([]), []);
 
   const askDelete = useCallback((row: ReassembledDTO) => {
     setDeleting(row);
@@ -209,19 +222,24 @@ export function ReassemblyTab() {
     }
   }
 
-  // store a backup picked from the Backups section as one complete reassembled file
+  // merge the picked backup runs — parts of the same file — into one complete
+  // backup; merge order is the part number, decided server-side and shown here
   async function reassembleFromBackup() {
-    if (!selectedId) return;
+    if (!selectedIds.length) return;
     setBusy(true);
     try {
+      const ordered = choices
+        .filter((c) => selectedIds.includes(c.id))
+        .sort((a, b) => compareParts(a.fileName ?? "", b.fileName ?? ""))
+        .map((c) => c.id);
       const res = await fetch("/api/reassembly", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ backupId: selectedId }),
+        body: JSON.stringify({ backupIds: ordered }),
       });
       if (res.ok) {
         toast({ title: t("reassembled") });
-        setSelectedId(null);
+        setSelectedIds([]);
         await loadHistory();
       } else {
         const body = (await res.json().catch(() => null)) as { error?: string } | null;
@@ -309,9 +327,24 @@ export function ReassemblyTab() {
               </div>
               <div className="custom-scroll max-h-72 space-y-1.5 overflow-y-auto rounded-lg border p-2">
                 {choices.map((b) => (
-                  <BackupChoiceRow key={b.id} choice={b} active={selectedId === b.id} onToggle={toggleChoice} />
+                  <BackupChoiceRow key={b.id} choice={b} active={selectedSet.has(b.id)} onToggle={toggleChoice} />
                 ))}
               </div>
+              {selectedIds.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2 rounded-lg border p-3 text-xs text-muted-foreground">
+                  <span className="font-medium text-foreground">{t("reassembly_selected_backups")}:</span>
+                  <Badge variant="outline" className="text-[10px] tabular-nums">{selectedIds.length} × backup</Badge>
+                  <Badge variant="outline" className="text-[10px] tabular-nums">{formatBytes(selectedSize)}</Badge>
+                  <button
+                    type="button"
+                    onClick={clearSelection}
+                    className="ms-auto flex items-center gap-1 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                  >
+                    <X className="h-3 w-3" />
+                    {t("reassembly_clear")}
+                  </button>
+                </div>
+              )}
             </div>
           )}
           {source === "upload" && sorted.length > 0 && (
@@ -343,7 +376,7 @@ export function ReassemblyTab() {
           )}
           <Button
             onClick={source === "upload" ? reassemble : reassembleFromBackup}
-            disabled={busy || (source === "upload" ? sorted.length === 0 : !selectedId)}
+            disabled={busy || (source === "upload" ? sorted.length === 0 : selectedIds.length === 0)}
             className="w-full gap-1.5"
           >
             {busy ? (
