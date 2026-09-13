@@ -959,7 +959,7 @@ async function restore3xUi(ssh: SshClient, remoteBackupPath: string, backupName:
   }
 }
 
-// ── FAST HMPanel restore — manual first (2-5 min), CLI fallback only if manual fails ──
+// ── HMPanel restore — official CLI first (complete & correct), manual fallback ──
 async function restoreHmpanel(ssh: SshClient, remoteBackupPath: string, backupName: string): Promise<{ success: boolean; detail: string }> {
   const lowerName = backupName.toLowerCase();
 
@@ -976,6 +976,38 @@ async function restoreHmpanel(ssh: SshClient, remoteBackupPath: string, backupNa
 
   const hmDir = "/opt/hmpanel";
   await ssh.exec(`mkdir -p ${hmDir} ${hmDir}/backups; cp -r ${hmDir} ${hmDir}.pre-restore-$(date +%s) 2>/dev/null || true`);
+
+  // The official HMPanel CLI (installed as /opt/hmpanel/cli.sh and `hm`) is the
+  // authoritative restore engine: it recreates panel_db, reloads the pg_dumpall
+  // payload with ON_ERROR_STOP + a tolerant retry, recreates the source roles,
+  // restores config/uploads/premium/instance-id, re-syncs the Postgres
+  // credentials and waits for panel health. Driving it is the only complete
+  // restore, so it is always the primary path when present.
+  const cliCheck = await ssh.exec("ls /opt/hmpanel/cli.sh 2>/dev/null; command -v hm 2>/dev/null; command -v hmpanel 2>/dev/null; echo CLI_CHECK_DONE");
+  const hasCli = cliCheck.stdout.includes("cli.sh") || cliCheck.stdout.includes("/hm") || cliCheck.stdout.includes("hmpanel");
+
+  if (hasCli) {
+    const cliCmd = cliCheck.stdout.includes("cli.sh") ? "bash /opt/hmpanel/cli.sh restore" : "hm restore";
+    try {
+      const restoreRes = await ssh.exec(`${cliCmd} '${remoteBackupPath}' 2>&1; echo CLI_EXIT:$?`, { timeout: 15 * 60 * 1000 });
+      const out = (restoreRes.stdout || "") + (restoreRes.stderr || "");
+      if (out.includes("RESTORE_OK") && !out.includes("RESTORE_FAILED")) {
+        const verify = await ssh.exec('docker ps --format "{{.Names}} {{.Status}}" 2>/dev/null | grep -i hmpanel; echo "---"; docker exec hmpanel-panel curl -sf http://127.0.0.1:4000/health 2>/dev/null || echo HEALTH_CHECK_SKIPPED');
+        return { success: true, detail: `HMPanel backup restored completely via official CLI (${remoteSize} bytes) — ${verify.stdout.slice(0, 180)}` };
+      }
+      await ssh.exec(`cp -f '${remoteBackupPath}' ${hmDir}/backups/restore-failed-$(date +%s).tar.gz 2>/dev/null || true`);
+      const tail = out.trim().split("\n").slice(-6).join(" | ").slice(-400);
+      return { success: false, detail: `HMPanel restore via CLI failed — ${tail}` };
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      const verifyAfter = await ssh.exec('docker ps --format "{{.Names}} {{.Status}}" 2>/dev/null | grep -i hmpanel; docker exec hmpanel-panel curl -sf http://127.0.0.1:4000/health 2>/dev/null || echo HEALTH_CHECK_SKIPPED');
+      if (verifyAfter.stdout.toLowerCase().includes("hmpanel")) {
+        return { success: true, detail: `HMPanel CLI restore finished but returned an error — panel is running (${remoteSize} bytes). ${msg}` };
+      }
+      await ssh.exec(`cp -f '${remoteBackupPath}' ${hmDir}/backups/restore-failed-$(date +%s).tar.gz 2>/dev/null || true`);
+      return { success: false, detail: `HMPanel restore via CLI error: ${msg}` };
+    }
+  }
 
   if (lowerName.match(/\.(tar\.gz|tgz)$/) || lowerName.endsWith(".tar") || lowerName.endsWith(".gz")) {
     const extractDir = `/tmp/bkup-hm-fast-${Date.now()}`;
@@ -1023,12 +1055,15 @@ async function restoreHmpanel(ssh: SshClient, remoteBackupPath: string, backupNa
             echo "[bkup] Loading data into panel_db..."
             cat /tmp/hm-restore.sql | docker exec -i $PG_CONT psql -U $DB_USER -d panel_db 2>&1 | tail -30
             echo "[bkup] Verifying..."
-            docker exec $PG_CONT psql -U $DB_USER -d panel_db -tAc 'SELECT COUNT(*) FROM "Admin"' 2>/dev/null | tr -d '[:space:]' || echo 0
-            echo "FAST_RESTORE_DONE"
+            if docker exec $PG_CONT psql -U $DB_USER -d panel_db -tAc 'SELECT COUNT(*) FROM "Admin"' >/dev/null 2>&1; then
+              echo "FAST_RESTORE_DONE"
+            else
+              echo "FAST_RESTORE_FAIL"
+            fi
           `, { timeout: 10 * 60 * 1000 });
 
           const fastOut = fastRestore.stdout + fastRestore.stderr;
-          if (fastOut.includes("FAST_RESTORE_DONE") || fastOut.includes("Admin") || !fastOut.includes("NO_DB_FILE")) {
+          if (fastOut.includes("FAST_RESTORE_DONE") && !fastOut.includes("FAST_RESTORE_FAIL")) {
             await ssh.exec(`
               set -e
               cd ${hmDir}
@@ -1090,32 +1125,6 @@ async function restoreHmpanel(ssh: SshClient, remoteBackupPath: string, backupNa
       try {
         await ssh.exec(`rm -rf /tmp/bkup-hm-fast-* /tmp/hm-restore.sql 2>/dev/null || true`);
       } catch {}
-    }
-  }
-
-  const cliRes = await ssh.exec("which hm 2>/dev/null; which hmpanel 2>/dev/null; ls /usr/local/bin/hm 2>/dev/null; ls /opt/hmpanel/cli.sh 2>/dev/null; echo CLI_CHECK_DONE");
-  const hasHm = cliRes.stdout.includes("hm");
-
-  if (hasHm) {
-    try {
-      const tryRestore = await ssh.exec(
-        `bash -c 'set -e; export HEADLESS=true; if [ -f /opt/hmpanel/cli.sh ]; then bash /opt/hmpanel/cli.sh restore "${remoteBackupPath}" 2>&1; elif [ -f /opt/hmpanel/hm.sh ]; then bash /opt/hmpanel/hm.sh restore "${remoteBackupPath}" 2>&1; else hm restore "${remoteBackupPath}" 2>&1; fi; echo EXIT_CODE:$?' 2>&1`,
-        { timeout: 10 * 60 * 1000 }
-      );
-      const out = tryRestore.stdout + tryRestore.stderr;
-      if (out.includes("RESTORE_OK") || out.includes("Restore completed") || out.includes("✔") || out.includes("EXIT_CODE:0")) {
-        await ssh.exec(`cd ${hmDir} && docker compose up -d 2>&1 || docker-compose up -d 2>&1 || true; sleep 5`);
-        return { success: true, detail: `HMPanel backup restored via CLI fallback (${remoteSize} bytes)` };
-      }
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (msg.toLowerCase().includes("timed out")) {
-        await ssh.exec(`cd ${hmDir} && docker compose up -d 2>&1 || docker-compose up -d 2>&1 || true; sleep 5`);
-        const verifyAfter = await ssh.exec('docker ps --format "{{.Names}} {{.Status}}" 2>/dev/null | grep -i hmpanel');
-        if (verifyAfter.stdout.toLowerCase().includes("hmpanel")) {
-          return { success: true, detail: `HMPanel CLI restore timed out but containers running — likely restored (${remoteSize} bytes)` };
-        }
-      }
     }
   }
 

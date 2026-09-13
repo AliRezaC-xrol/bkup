@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
@@ -9,13 +9,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   Files, CheckCircle2, XCircle, Timer, Link2, Send, Activity, Boxes,
   Clock, Server, MemoryStick, GitBranch, AlertTriangle, ChevronRight, Loader2, DatabaseBackup,
-  ChartColumn, CalendarDays,
 } from "lucide-react";
 import { useLang } from "@/components/dashboard/lang";
 import { TimeAgo } from "@/components/dashboard/TimeAgo";
 import type { AppConfigDTO, BackupRunDTO, StatusDTO, SystemInfoDTO } from "@/components/dashboard/types";
 import { formatBytes } from "@/components/dashboard/types";
-import type { PanelFilter } from "@/components/dashboard/BackupsTab";
 import { firstTgMessageId, tgMessageUrl } from "@/lib/tg-link";
 
 function countdown(nextRunAt: number | null): string {
@@ -38,215 +36,9 @@ function fmtUptime(sec: number): string {
   return parts.join(" ");
 }
 
-interface DailyPoint { day: string; success: number; failed: number; bytes: number }
-
-const HEALTH_PANELS = [
-  { key: "3x-ui", tag: "3X", label: "panel_3xui" },
-  { key: "hmpanel", tag: "HM", label: "panel_hm" },
-  { key: "pasarguard", tag: "PG", label: "panel_pg" },
-  { key: "rebecca", tag: "RB", label: "panel_rb" },
-] as const;
-
-/**
- * Per-panel health tiles — last backup age, window success rate and run
- * count for each of the four panels. Clicking a tile opens Backups
- * pre-filtered to that panel (drill-down via lifted filter state).
- * Self-fetches a wider window than the 5-row recent list.
- */
-function PanelHealth({ runsHeadId, onDrill }: { runsHeadId: number; onDrill: (p: PanelFilter) => void }) {
-  const { t } = useLang();
-  const [hist, setHist] = useState<BackupRunDTO[] | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    fetch("/api/backups?limit=60", { cache: "no-store" })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (alive && Array.isArray(d)) setHist(d as BackupRunDTO[]); })
-      .catch(() => { /* keep the old data */ });
-    return () => { alive = false; };
-  }, [runsHeadId]);
-
-  const tiles = useMemo(
-    () =>
-      HEALTH_PANELS.map((p) => {
-        const rs = (hist ?? []).filter((r) => r.panel === p.key);
-        const ok = rs.filter((r) => r.status === "success").length;
-        const done = rs.filter((r) => r.status !== "running").length;
-        return {
-          ...p,
-          count: rs.length,
-          rate: done > 0 ? Math.round((ok / done) * 100) : null,
-          last: rs[0] as BackupRunDTO | undefined, // newest-first from the API
-        };
-      }),
-    [hist]
-  );
-
-  return (
-    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-      {tiles.map((p) => {
-        const dot =
-          !p.last ? "bg-muted-foreground/30" :
-          p.last.status === "success" ? "bg-primary" :
-          p.last.status === "failed" ? "bg-red-500" : "bg-stone-500 animate-pulse";
-        return (
-          <Card
-            key={p.key}
-            role="button"
-            tabIndex={0}
-            title={t("health_open_hint")}
-            onClick={() => onDrill(p.key)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                onDrill(p.key);
-              }
-            }}
-            className="cursor-pointer transition-shadow hover:ring-1 hover:ring-primary/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/60"
-          >
-            <CardContent className="flex items-center gap-3 p-4">
-              <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-muted text-[11px] font-black tracking-wide text-muted-foreground">
-                {p.tag}
-                <span className={`absolute -end-0.5 -top-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-background ${dot}`} />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-xs text-muted-foreground">{t(p.label)}</p>
-                <div className="truncate text-sm font-bold">
-                  {hist === null ? (
-                    <Skeleton className="h-4 w-16" />
-                  ) : p.last ? (
-                    <TimeAgo date={p.last.startedAt} className="text-sm" />
-                  ) : (
-                    <span className="text-muted-foreground">{t("health_no_runs")}</span>
-                  )}
-                </div>
-                <p className="mt-0.5 truncate whitespace-nowrap text-[10px] tabular-nums text-muted-foreground">
-                  {p.rate !== null ? `${p.rate}% ${t("stat_success_rate")} · ${p.count}` : "—"}
-                </p>
-              </div>
-              <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/40" />
-            </CardContent>
-          </Card>
-        );
-      })}
-    </div>
-  );
-}
-
-/** 14-day backup activity — refetched whenever a new run shows up in the poll. */
-function ActivityChart({ runsHeadId }: { runsHeadId: number }) {
-  const { t } = useLang();
-  const [days, setDays] = useState<DailyPoint[] | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    fetch("/api/stats/daily", { cache: "no-store" })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (alive && d?.days) setDays(d.days as DailyPoint[]); })
-      .catch(() => { /* keep the old chart */ });
-    return () => { alive = false; };
-  }, [runsHeadId]);
-
-  const max = useMemo(() => Math.max(1, ...(days ?? []).map((d) => d.success + d.failed)), [days]);
-  const totals = useMemo(() => {
-    const list = days ?? [];
-    return {
-      runs: list.reduce((n, d) => n + d.success + d.failed, 0),
-      bytes: list.reduce((n, d) => n + d.bytes, 0),
-    };
-  }, [days]);
-
-  const dayLabel = (day: string) => day.slice(8); // "2026-09-07" -> "07"
-  const niceDate = (day: string) =>
-    new Date(`${day}T00:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
-
-  return (
-    <Card>
-      <CardHeader className="@container/card-header flex flex-row items-center justify-between space-y-0 pb-4">
-        <CardTitle className="flex items-center gap-2 text-base">
-          <ChartColumn className="h-4 w-4" />
-          {t("activity_title")}
-          <span className="text-xs font-normal text-muted-foreground">· {t("activity_window")}</span>
-        </CardTitle>
-        {days && totals.runs > 0 && (
-          <div data-slot="card-action" className="flex items-center gap-2 text-xs text-muted-foreground tabular-nums">
-            <span className="flex items-center gap-1"><CalendarDays className="h-3.5 w-3.5" />{totals.runs} {t("activity_total")}</span>
-            <span className="hidden sm:inline">·</span>
-            <span className="hidden sm:inline">{formatBytes(totals.bytes)}</span>
-          </div>
-        )}
-      </CardHeader>
-      <CardContent>
-        {!days ? (
-          <Skeleton className="h-28 w-full rounded-lg" />
-        ) : totals.runs === 0 ? (
-          <div className="rounded-lg border border-dashed py-8 text-center">
-            <ChartColumn className="mx-auto mb-2 h-8 w-8 text-muted-foreground/40" />
-            <p className="text-sm text-muted-foreground">{t("activity_empty")}</p>
-          </div>
-        ) : (
-          <>
-            <div className="flex h-28 items-stretch gap-[3px] sm:gap-1.5">
-              {days.map((d, i) => {
-                const isToday = i === days.length - 1;
-                const okH = (d.success / max) * 100;
-                const failH = (d.failed / max) * 100;
-                const tip = `${niceDate(d.day)} — ${d.success} ok, ${d.failed} failed, ${formatBytes(d.bytes)}`;
-                return (
-                  <div
-                    key={d.day}
-                    title={tip}
-                    className={`group flex min-w-0 flex-1 cursor-default flex-col justify-end gap-px rounded pb-0 transition-colors ${
-                      isToday ? "bg-primary/[0.04] ring-1 ring-inset ring-primary/15" : "hover:bg-muted/40"
-                    }`}
-                  >
-                    {d.failed > 0 && (
-                      <div
-                        className="w-full rounded-t-[3px] bg-red-500/70 transition-colors group-hover:bg-red-500"
-                        style={{ height: `${Math.max(failH, 3)}%` }}
-                      />
-                    )}
-                    {d.success > 0 && (
-                      <div
-                        className={`w-full bg-primary/85 transition-colors group-hover:bg-primary ${
-                          d.failed === 0 ? "rounded-t-[3px]" : ""
-                        }`}
-                        style={{ height: `${Math.max(okH, 3)}%` }}
-                      />
-                    )}
-                    {d.success + d.failed === 0 && (
-                      <div className="mx-auto mb-px h-0.5 w-full rounded-full bg-muted-foreground/15" />
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-            <div className="mt-1.5 flex gap-[3px] sm:gap-1.5">
-              {days.map((d, i) => (
-                <span
-                  key={d.day}
-                  className={`min-w-0 flex-1 text-center text-[9px] tabular-nums ${
-                    i === days.length - 1 ? "font-bold text-primary" : "text-muted-foreground/60"
-                  }`}
-                >
-                  {i === days.length - 1 ? t("activity_today") : dayLabel(d.day)}
-                </span>
-              ))}
-            </div>
-            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
-              <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-sm bg-primary/85" /> success</span>
-              <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-sm bg-red-500/70" /> failed</span>
-            </div>
-          </>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
 export function DashboardHome({
   config, status, info, runs, busy,
-  onToggle, onBackupNow, onTestPanel, onTestTg, goto, onDrillPanel,
+  onToggle, onBackupNow, onTestPanel, onTestTg, goto,
 }: {
   config: AppConfigDTO | null;
   status: StatusDTO | null;
@@ -258,7 +50,6 @@ export function DashboardHome({
   onTestPanel: () => void;
   onTestTg: () => void;
   goto: (tab: "backups" | "settings" | "system") => void;
-  onDrillPanel: (p: PanelFilter) => void;
 }) {
   const { t } = useLang();
   const [, tick] = useState(0);
@@ -312,7 +103,7 @@ export function DashboardHome({
       ready: panelReadyState(status?.panels?.pg),
       onTest: onTestPanel,
     },
-{
+    {
       icon: <Boxes className="h-4 w-4" />,
       label: t("panel_rb"),
       ready: panelReadyState(status?.panels?.rebecca),
@@ -399,34 +190,10 @@ export function DashboardHome({
           label={t("success_count")}
           value={stats ? n(stats.success) : "—"}
           accent="text-foreground"
-          sub={
-            stats && stats.success + stats.failed > 0 ? (() => {
-              const rate = Math.round((stats.success / (stats.success + stats.failed)) * 100);
-              return (
-                <div className="mt-1.5 w-full">
-                  <div className="h-1 w-full overflow-hidden rounded-full bg-muted">
-                    <div
-                      className={`h-full rounded-full transition-all duration-500 ${rate >= 90 ? "bg-primary" : rate >= 60 ? "bg-amber-500" : "bg-red-500"}`}
-                      style={{ width: `${rate}%` }}
-                    />
-                  </div>
-                  <p className="mt-1 text-[10px] tabular-nums text-muted-foreground">
-                    {rate}% {t("stat_success_rate")}
-                  </p>
-                </div>
-              );
-            })() : undefined
-          }
         />
         <Stat icon={<XCircle className="h-4 w-4" />} label={t("failed_count")} value={stats ? n(stats.failed) : "—"} accent="text-red-600" />
         <Stat icon={<Clock className="h-4 w-4" />} label={t("last_24h")} value={stats ? n(stats.last24h) : "—"} accent="text-muted-foreground" />
       </div>
-
-      {/* ===== panel health (drill-down tiles) ===== */}
-      <PanelHealth runsHeadId={runs[0]?.id ?? 0} onDrill={onDrillPanel} />
-
-      {/* ===== 14-day activity chart ===== */}
-      <ActivityChart runsHeadId={runs[0]?.id ?? 0} />
 
       {/* ===== setup warning ===== */}
       {status && (!status.configReady.panel || !status.configReady.telegram) && (
@@ -548,7 +315,7 @@ export function DashboardHome({
   );
 }
 
-function Stat({ icon, label, value, accent, sub }: { icon: React.ReactNode; label: string; value: string; accent?: string; sub?: React.ReactNode }) {
+function Stat({ icon, label, value, accent }: { icon: React.ReactNode; label: string; value: string; accent?: string }) {
   return (
     <Card className="transition-shadow hover:shadow-sm">
       <CardContent className="flex items-start gap-3 p-4">
@@ -558,7 +325,6 @@ function Stat({ icon, label, value, accent, sub }: { icon: React.ReactNode; labe
         <div className="min-w-0 flex-1">
           <p className="truncate text-xs text-muted-foreground">{label}</p>
           <p className="text-lg font-bold tabular-nums">{value}</p>
-          {sub}
         </div>
       </CardContent>
     </Card>
