@@ -19,6 +19,18 @@
 #   - Merge .env.example into .env preserving existing values, adding missing keys
 #   - Copy package.json into .next/standalone for runtime version fallback
 #   - Verify standalone contains new version after build
+# Fixes in v1.2.1 (ROOT CAUSE of "update says Already latest but panel is old"):
+#   - The old check compared the LATEST release against $APP_DIR/package.json —
+#     a file the updater itself overwrites BEFORE building. A half-finished
+#     update left it claiming the new version while the panel still ran the
+#     old one, so every later update (terminal AND web panel) exited with
+#     "Already on the latest release" forever.
+#   - The installed version is now resolved from the truth chain: the RUNNING
+#     build (GET /api/system/info) → the last SUCCESSFUL build output
+#     (.next/standalone/package.json) → on-disk package.json as a last resort.
+#   - "Already latest" is only decided from the running/last-built version;
+#     if the disk claims newest while the panel runs older, the update RUNS
+#     and converges the installation instead of skipping.
 # =============================================================
 set -uo pipefail
 
@@ -125,7 +137,21 @@ merge_env() {
   fi
 }
 
-FROM_V="${ABX_FROM_VERSION:-$(python3 -c "import json;print(json.load(open('$APP_DIR/package.json'))['version'])" 2>/dev/null || echo '?')}"
+# ── what version is ACTUALLY running? (truth chain, v1.2.1) ──────────
+# The on-disk package.json is overwritten by this very script before the
+# build, so it can claim a version that was never built. Never decide
+# "already latest" from it alone.
+PORT_NOW="$(grep -E '^PORT=' "$APP_DIR/.env" 2>/dev/null | cut -d= -f2- | head -1)"
+PORT_NOW="${PORT_NOW:-3000}"
+RUNNING_V="$(curl -sf --max-time 3 "http://127.0.0.1:${PORT_NOW}/api/system/info" 2>/dev/null | grep -o '"appVersion": *"[^"]*"' | head -1 | cut -d'"' -f4)"
+STANDALONE_V="$(grep -o '"version": *"[^"]*"' "$APP_DIR/.next/standalone/package.json" 2>/dev/null | head -1 | cut -d'"' -f4)"
+PKG_V="$(grep -o '"version": *"[^"]*"' "$APP_DIR/package.json" 2>/dev/null | head -1 | cut -d'"' -f4)"
+
+FROM_V="${ABX_FROM_VERSION:-}"
+[ -z "$FROM_V" ] && FROM_V="$RUNNING_V"
+[ -z "$FROM_V" ] && FROM_V="$STANDALONE_V"
+[ -z "$FROM_V" ] && FROM_V="$PKG_V"
+[ -z "$FROM_V" ] && FROM_V="?"
 
 mkdir -p "$STATE_DIR"
 cd "$APP_DIR" || exit 1
@@ -146,11 +172,19 @@ if [ -z "$TAG" ]; then
   exit 1
 fi
 
-if [ "v$FROM_V" = "$TAG" ]; then
+# ── "already latest" is decided from what is RUNNING (or, if the service
+#    is unreachable, from the last SUCCESSFUL build) — never from the
+#    on-disk package.json alone.
+UP_TO_DATE_V="$RUNNING_V"
+[ -z "$UP_TO_DATE_V" ] && UP_TO_DATE_V="$STANDALONE_V"
+if [ "$UP_TO_DATE_V" = "${TAG#v}" ]; then
   write_state done "$FROM_V" "$FROM_V"
   say "[OK] Already on the latest release ($TAG)"
   rm -f /tmp/.bkup-update-notice
   exit 0
+fi
+if [ "v$PKG_V" = "$TAG" ] && [ "$UP_TO_DATE_V" != "${TAG#v}" ]; then
+  say "    ⚠ disk says v$PKG_V but the running panel is ${RUNNING_V:+v}${RUNNING_V:-unknown} — a previous update never finished; converging now"
 fi
 
 say "    installed: v$FROM_V   latest release: $TAG   → updating"
@@ -191,12 +225,40 @@ fi
 PKG_BACKUP="/tmp/bkup-package-backup-${FROM_V}.json"
 cp -a "$APP_DIR/package.json" "$PKG_BACKUP" 2>/dev/null || true
 
-# copy code over the install, never touching runtime data
+# copy code over the install, never touching runtime data.
+# v1.2.1 CRITICAL: bash reads this very script (and cli.sh) incrementally
+# WHILE it runs. An in-place `cp` over a running script rewrites the bytes
+# under the interpreter, the parser's read offset lands in different code
+# and the update aborts with a random "syntax error near unexpected token"
+# AFTER the copy but BEFORE the build — leaving package.json new while the
+# panel still runs the old build. That was the real root cause of the
+# "update says done / Already latest but the panel never changes" bug.
+# Anything that may currently be executing is therefore swapped in with an
+# atomic rename(2): the running shell keeps reading the old inode until it
+# exits; the NEXT run picks up the new files. build-native.sh must be fresh
+# for this run's build, so `scripts` is swapped as a whole directory.
 for item in src prisma public scripts docs docker .github \
             package.json bun.lock package-lock.json tsconfig.json next.config.ts \
             tailwind.config.ts postcss.config.mjs eslint.config.mjs components.json \
             cli.sh install.sh README.md README.fa.md CHANGELOG.md .env.example .gitignore .dockerignore Dockerfile docker-compose.yml; do
-  if [ -e "$SRC/$item" ]; then cp -a "$SRC/$item" "$APP_DIR/" 2>/dev/null; fi
+  [ -e "$SRC/$item" ] || continue
+  case "$item" in
+    scripts)
+      rm -rf "$APP_DIR/.scripts-new"
+      if cp -a "$SRC/scripts" "$APP_DIR/.scripts-new" 2>/dev/null; then
+        rm -rf "$APP_DIR/scripts"
+        mv "$APP_DIR/.scripts-new" "$APP_DIR/scripts" 2>/dev/null \
+          || { rm -rf "$APP_DIR/scripts"; cp -a "$SRC/scripts" "$APP_DIR/scripts" 2>/dev/null || true; }
+      fi
+      ;;
+    cli.sh|install.sh)
+      cp -a "$SRC/$item" "$APP_DIR/.${item}.new" 2>/dev/null || true
+      mv -f "$APP_DIR/.${item}.new" "$APP_DIR/$item" 2>/dev/null || true
+      ;;
+    *)
+      cp -a "$SRC/$item" "$APP_DIR/" 2>/dev/null || true
+      ;;
+  esac
 done
 rm -rf /tmp/abx-update /tmp/abx-update.tar.gz
 

@@ -13,7 +13,7 @@ function resolveAppVersion(): string {
     const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8")) as { version?: string };
     if (pkg.version) return String(pkg.version);
   } catch { /* fall through */ }
-  return "1.2.0";
+  return "1.2.1";
 }
 
 export const APP_VERSION = resolveAppVersion();
