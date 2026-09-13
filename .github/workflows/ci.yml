@@ -24,6 +24,17 @@ jobs:
       - name: Generate Prisma client
         run: bunx prisma generate
 
+      - name: Shell script syntax check
+        run: |
+          FAIL=0
+          while IFS= read -r -d '' f; do
+            if ! bash -n "$f"; then
+              echo "::error::syntax error in $f"
+              FAIL=1
+            fi
+          done < <(git ls-files -z '*.sh')
+          exit $FAIL
+
       - name: Type check
         run: bunx tsc --noEmit
 
