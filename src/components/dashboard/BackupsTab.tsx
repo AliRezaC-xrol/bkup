@@ -11,13 +11,18 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Download, Trash2, RefreshCw, Inbox } from "lucide-react";
+import { Download, Trash2, RefreshCw, Inbox, ShieldCheck, ShieldAlert, ShieldX } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { useLang } from "@/components/dashboard/lang";
 import type { BackupRunDTO } from "@/components/dashboard/types";
 import { formatBytes, formatDuration } from "@/components/dashboard/types";
 import { resolveText } from "@/lib/messages";
+
+interface VerifyResult {
+  state: "ok" | "missing" | "mismatch";
+  sha8: string;
+}
 
 export function BackupsTab({ runs, onRefresh }: { runs: BackupRunDTO[]; onRefresh: () => void }) {
   const { t } = useLang();
@@ -28,6 +33,8 @@ export function BackupsTab({ runs, onRefresh }: { runs: BackupRunDTO[]; onRefres
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [verifyingId, setVerifyingId] = useState<number | null>(null);
+  const [verified, setVerified] = useState<Map<number, VerifyResult>>(new Map());
 
   // drop ids that no longer exist so the selection never goes stale
   useEffect(() => {
@@ -81,6 +88,43 @@ export function BackupsTab({ runs, onRefresh }: { runs: BackupRunDTO[]; onRefres
     }
   }
 
+  // drop verify results of rows that no longer exist
+  useEffect(() => {
+    setVerified((prev) => {
+      const alive = new Set(runs.map((r) => r.id));
+      const next = new Map([...prev].filter(([id]) => alive.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [runs]);
+
+  async function doVerify(run: BackupRunDTO) {
+    setVerifyingId(run.id);
+    try {
+      const res = await fetch(`/api/backups/${run.id}/verify`);
+      if (!res.ok) {
+        toast({ title: t("error"), variant: "destructive" });
+        return;
+      }
+      const data = await res.json();
+      let result: VerifyResult;
+      if (!data.exists) {
+        result = { state: "missing", sha8: "" };
+        toast({ title: t("verify_missing"), description: t("verify_missing_hint"), variant: "destructive" });
+      } else if (!data.sizeMatch) {
+        result = { state: "mismatch", sha8: String(data.sha256 ?? "").slice(0, 8) };
+        toast({ title: t("verify_size_mismatch"), description: t("verify_size_mismatch_hint"), variant: "destructive" });
+      } else {
+        result = { state: "ok", sha8: String(data.sha256 ?? "").slice(0, 8) };
+        toast({ title: t("verify_ok"), description: `SHA-256 ${result.sha8}… · ${t("verify_ok_hint")}` });
+      }
+      setVerified((prev) => new Map(prev).set(run.id, result));
+    } catch {
+      toast({ title: t("network_error"), variant: "destructive" });
+    } finally {
+      setVerifyingId(null);
+    }
+  }
+
   async function doDelete(run: BackupRunDTO) {
     setBusyId(run.id);
     try {
@@ -128,9 +172,10 @@ export function BackupsTab({ runs, onRefresh }: { runs: BackupRunDTO[]; onRefres
       </CardHeader>
       <CardContent>
         {rows.length === 0 ? (
-          <div className="py-14 text-center text-muted-foreground">
-            <Inbox className="mx-auto mb-2 h-10 w-10 opacity-40" />
-            <p className="text-sm">{t("no_backups_yet")}</p>
+          <div className="flex flex-col items-center justify-center rounded-lg border border-dashed py-14 text-center text-muted-foreground">
+            <Inbox className="mb-2 h-10 w-10 opacity-40" />
+            <p className="text-sm font-medium">{t("no_backups_yet")}</p>
+            <p className="mt-0.5 text-xs opacity-80">{t("no_backups_hint")}</p>
           </div>
         ) : (
           <div className="custom-scroll max-h-[62vh] overflow-auto rounded-lg border">
@@ -173,7 +218,27 @@ export function BackupsTab({ runs, onRefresh }: { runs: BackupRunDTO[]; onRefres
                       <span className="block truncate text-xs font-medium" dir="ltr" title={r.fileName ?? ""}>
                         {r.fileName ?? `#${r.id}`}
                       </span>
-                      {r.error && (
+                      {verified.has(r.id) ? (
+                        (() => {
+                          const v = verified.get(r.id)!;
+                          return v.state === "ok" ? (
+                            <span className="mt-0.5 inline-flex items-center gap-1 rounded bg-emerald-500/10 px-1 py-0.5 text-[10px] font-medium text-emerald-700" title={`${t("verify_ok")} — ${t("verify_ok_hint")}`}>
+                              <ShieldCheck className="h-3 w-3" />
+                              {t("verify_chip")} · {v.sha8}
+                            </span>
+                          ) : v.state === "mismatch" ? (
+                            <span className="mt-0.5 inline-flex items-center gap-1 rounded bg-amber-500/10 px-1 py-0.5 text-[10px] font-medium text-amber-700" title={t("verify_size_mismatch_hint")}>
+                              <ShieldAlert className="h-3 w-3" />
+                              {t("verify_size_mismatch")} · {v.sha8}
+                            </span>
+                          ) : (
+                            <span className="mt-0.5 inline-flex items-center gap-1 rounded bg-red-500/10 px-1 py-0.5 text-[10px] font-medium text-red-700" title={t("verify_missing_hint")}>
+                              <ShieldX className="h-3 w-3" />
+                              {t("verify_missing")}
+                            </span>
+                          );
+                        })()
+                      ) : r.error && (
                         <span className="block truncate text-[11px] text-red-600" title={resolveText(r.error, "en")}>
                           {t("error_msg")}: {resolveText(r.error, "en")}
                         </span>
@@ -198,6 +263,19 @@ export function BackupsTab({ runs, onRefresh }: { runs: BackupRunDTO[]; onRefres
                     </TableCell>
                     <TableCell className="text-end">
                       <div className="flex items-center justify-end gap-1 opacity-60 transition-opacity group-hover:opacity-100">
+                        {r.filePath && r.status === "success" && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7"
+                            onClick={() => doVerify(r)}
+                            disabled={verifyingId === r.id}
+                            title={verifyingId === r.id ? t("verifying") : t("verify")}
+                            aria-label={t("verify")}
+                          >
+                            <ShieldCheck className={`h-3.5 w-3.5 ${verifyingId === r.id ? "animate-pulse" : ""}`} />
+                          </Button>
+                        )}
                         {r.filePath && (
                           <Button variant="ghost" size="icon" className="h-7 w-7" asChild>
                             <a href={`/api/backups/${r.id}/download`} download title={t("download")}>
