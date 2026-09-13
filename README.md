@@ -91,6 +91,16 @@ same history. A filter box narrows the list — type part of a name, press
 **Select all shown** and every matching part is ticked; if two selected parts
 claim the same part number, you get a warning before merging.
 
+The picker also watches out for holes. A set like `part1of3` + `part3of3`
+without its middle part is flagged before anything is merged — the missing
+numbers are listed, a dashed placeholder marks exactly where each one falls
+in the merge order, and if the missing parts are sitting in the list a
+single **Add missing parts** click ticks them. An incomplete set is never
+merged: the server refuses it, so a corrupt "complete" backup can never
+quietly appear in your history (and from there, in a restore). Part files
+can be dragged straight onto the upload box instead of picked through the
+file dialog.
+
 Every panel is covered — 3x-ui, HM Panel, PasarGuard and Rebecca — because
 the parts are exact slices of the panel's own backup file.
 
