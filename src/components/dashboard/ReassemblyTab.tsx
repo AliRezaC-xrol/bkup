@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -27,10 +27,12 @@ export interface ReassembledDTO {
   createdAt: string;
 }
 
-const fmtTime = (iso: string) =>
-  new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Asia/Tehran", dateStyle: "short", timeStyle: "medium",
-  }).format(new Date(iso));
+// One shared formatter for the whole tab — constructing Intl.DateTimeFormat
+// per cell is expensive and made long lists feel sluggish.
+const timeFormatter = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "Asia/Tehran", dateStyle: "short", timeStyle: "medium",
+});
+const fmtTime = (iso: string) => timeFormatter.format(new Date(iso));
 
 interface BackupChoice {
   id: number;
@@ -39,6 +41,84 @@ interface BackupChoice {
   startedAt: string;
   panel: string;
 }
+
+const panelShort = (panel: string) =>
+  panel === "hmpanel" ? "HM" : panel === "pasarguard" ? "PG" : panel === "rebecca" ? "RB" : "3X";
+
+// Memoized row: picking one backup only re-renders the two rows whose
+// selection changed — not the whole list.
+const BackupChoiceRow = memo(function BackupChoiceRow({
+  choice, active, onToggle,
+}: {
+  choice: BackupChoice;
+  active: boolean;
+  onToggle: (id: number) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onToggle(choice.id)}
+      aria-pressed={active}
+      className={`flex w-full items-center gap-3 rounded-md border p-2.5 text-start transition-colors ${
+        active ? "border-primary bg-primary/5" : "hover:bg-muted/50"
+      }`}
+    >
+      <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${active ? "border-primary" : "border-muted-foreground/40"}`}>
+        {active && <span className="h-2 w-2 rounded-full bg-primary" />}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-xs font-medium" dir="ltr" title={choice.fileName ?? `#${choice.id}`}>
+          {choice.fileName ?? `#${choice.id}`}
+        </span>
+        <span className="block text-[11px] tabular-nums text-muted-foreground">{fmtTime(choice.startedAt)}</span>
+      </span>
+      <Badge variant="outline" className="shrink-0 text-[10px] uppercase">
+        {panelShort(choice.panel)}
+      </Badge>
+      <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{formatBytes(choice.fileSize ?? 0)}</span>
+    </button>
+  );
+});
+
+// Memoized history row: idles while unrelated parts of the tab re-render.
+const HistoryRow = memo(function HistoryRow({
+  row, busy, onDelete,
+}: {
+  row: ReassembledDTO;
+  busy: boolean;
+  onDelete: (row: ReassembledDTO) => void;
+}) {
+  const { t } = useLang();
+  return (
+    <TableRow className="group">
+      <TableCell className="whitespace-nowrap text-xs tabular-nums">{fmtTime(row.createdAt)}</TableCell>
+      <TableCell className="max-w-56">
+        <span className="block truncate text-xs font-medium" dir="ltr" title={row.name}>{row.name}</span>
+      </TableCell>
+      <TableCell><Badge variant="outline" className="text-[10px]">{row.parts}</Badge></TableCell>
+      <TableCell className="text-xs tabular-nums">{formatBytes(row.size)}</TableCell>
+      <TableCell className="text-end">
+        <div className="flex items-center justify-end gap-1 opacity-60 transition-opacity group-hover:opacity-100">
+          <Button variant="ghost" size="icon" className="h-7 w-7" asChild>
+            <a href={`/api/reassembly/${row.id}/download`} download title={t("download")}>
+              <Download className="h-3.5 w-3.5" />
+            </a>
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 text-red-600 hover:text-red-700"
+            onClick={() => onDelete(row)}
+            disabled={busy}
+            title={t("delete")}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+      </TableCell>
+    </TableRow>
+  );
+});
 
 export function ReassemblyTab() {
   const { t } = useLang();
@@ -65,13 +145,17 @@ export function ReassemblyTab() {
 
   useEffect(() => { loadHistory(); }, [loadHistory]);
 
-  const loadChoices = useCallback(async () => {
+  const choicesLoadedAt = useRef(0);
+  const loadChoices = useCallback(async (force = false) => {
+    // fresh results are reused — switching between the two sources stays instant
+    if (!force && Date.now() - choicesLoadedAt.current < 30_000) return;
     setChoicesLoading(true);
     try {
       const res = await fetch("/api/backups?limit=200");
       if (res.ok) {
         const rows = (await res.json()) as (BackupChoice & { status: string; filePath: string | null })[];
         setChoices(rows.filter((r) => r.status === "success" && r.filePath));
+        choicesLoadedAt.current = Date.now();
       }
     } catch { /* keep the old list */ }
     setChoicesLoading(false);
@@ -80,6 +164,14 @@ export function ReassemblyTab() {
   useEffect(() => {
     if (source === "backups") loadChoices();
   }, [source, loadChoices]);
+
+  const toggleChoice = useCallback((id: number) => {
+    setSelectedId((cur) => (cur === id ? null : id));
+  }, []);
+
+  const askDelete = useCallback((row: ReassembledDTO) => {
+    setDeleting(row);
+  }, []);
 
   const sorted = useMemo(
     () => [...files].sort((a, b) => {
@@ -170,14 +262,14 @@ export function ReassemblyTab() {
           <CardDescription>{source === "upload" ? t("reassembly_desc") : t("reassembly_backup_desc")}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex w-fit rounded-lg border p-0.5">
+          <div className="flex w-full rounded-lg border p-0.5">
             {(["upload", "backups"] as const).map((s) => (
               <button
                 key={s}
                 type="button"
                 onClick={() => setSource(s)}
                 aria-pressed={source === s}
-                className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                className={`flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
                   source === s ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
                 }`}
               >
@@ -208,7 +300,7 @@ export function ReassemblyTab() {
                 ) : (
                   <button
                     type="button"
-                    onClick={loadChoices}
+                    onClick={() => loadChoices(true)}
                     className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
                   >
                     {t("refresh")}
@@ -216,34 +308,9 @@ export function ReassemblyTab() {
                 )}
               </div>
               <div className="custom-scroll max-h-72 space-y-1.5 overflow-y-auto rounded-lg border p-2">
-                {choices.map((b) => {
-                  const active = selectedId === b.id;
-                  return (
-                    <button
-                      key={b.id}
-                      type="button"
-                      onClick={() => setSelectedId(active ? null : b.id)}
-                      aria-pressed={active}
-                      className={`flex w-full items-center gap-3 rounded-md border p-2.5 text-start transition-colors ${
-                        active ? "border-primary bg-primary/5" : "hover:bg-muted/50"
-                      }`}
-                    >
-                      <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${active ? "border-primary" : "border-muted-foreground/40"}`}>
-                        {active && <span className="h-2 w-2 rounded-full bg-primary" />}
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-xs font-medium" dir="ltr" title={b.fileName ?? `#${b.id}`}>
-                          {b.fileName ?? `#${b.id}`}
-                        </span>
-                        <span className="block text-[11px] tabular-nums text-muted-foreground">{fmtTime(b.startedAt)}</span>
-                      </span>
-                      <Badge variant="outline" className="shrink-0 text-[10px] uppercase">
-                        {b.panel === "hmpanel" ? "HM" : b.panel === "pasarguard" ? "PG" : b.panel === "rebecca" ? "RB" : "3X"}
-                      </Badge>
-                      <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{formatBytes(b.fileSize ?? 0)}</span>
-                    </button>
-                  );
-                })}
+                {choices.map((b) => (
+                  <BackupChoiceRow key={b.id} choice={b} active={selectedId === b.id} onToggle={toggleChoice} />
+                ))}
               </div>
             </div>
           )}
@@ -315,33 +382,7 @@ export function ReassemblyTab() {
                 </TableHeader>
                 <TableBody>
                   {history.map((r) => (
-                    <TableRow key={r.id} className="group">
-                      <TableCell className="whitespace-nowrap text-xs tabular-nums">{fmtTime(r.createdAt)}</TableCell>
-                      <TableCell className="max-w-56">
-                        <span className="block truncate text-xs font-medium" dir="ltr" title={r.name}>{r.name}</span>
-                      </TableCell>
-                      <TableCell><Badge variant="outline" className="text-[10px]">{r.parts}</Badge></TableCell>
-                      <TableCell className="text-xs tabular-nums">{formatBytes(r.size)}</TableCell>
-                      <TableCell className="text-end">
-                        <div className="flex items-center justify-end gap-1 opacity-60 transition-opacity group-hover:opacity-100">
-                          <Button variant="ghost" size="icon" className="h-7 w-7" asChild>
-                            <a href={`/api/reassembly/${r.id}/download`} download title={t("download")}>
-                              <Download className="h-3.5 w-3.5" />
-                            </a>
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7 text-red-600 hover:text-red-700"
-                            onClick={() => setDeleting(r)}
-                            disabled={busyId === r.id}
-                            title={t("delete")}
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
+                    <HistoryRow key={r.id} row={r} busy={busyId === r.id} onDelete={askDelete} />
                   ))}
                 </TableBody>
               </Table>
