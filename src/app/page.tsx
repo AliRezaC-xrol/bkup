@@ -7,7 +7,7 @@ import { LangProvider, useLang } from "@/components/dashboard/lang";
 import { LoginScreen } from "@/components/dashboard/LoginScreen";
 import { Shell, type TabKey } from "@/components/dashboard/Shell";
 import { DashboardHome } from "@/components/dashboard/DashboardHome";
-import { BackupsTab, type PanelFilter } from "@/components/dashboard/BackupsTab";
+import { BackupsTab } from "@/components/dashboard/BackupsTab";
 import { ReassemblyTab } from "@/components/dashboard/ReassemblyTab";
 import { RestoreTab } from "@/components/dashboard/RestoreTab";
 import { SettingsTab } from "@/components/dashboard/SettingsTab";
@@ -58,9 +58,6 @@ function App() {
     if (ts) configStamp.current = ts;
     setConfig(c);
   }, []);
-
-  // lifted Backups panel filter — the Dashboard panel-health tiles drill into it
-  const [backupsPanel, setBackupsPanel] = useState<PanelFilter>("all");
 
   // ── auth probe ────────────────────────────────────────────────
   const checkAuth = useCallback(async () => {
@@ -373,18 +370,12 @@ function App() {
           onTestPanel={testPanel}
           onTestTg={testTg}
           goto={(k) => setTab(k)}
-          onDrillPanel={(p) => {
-            setBackupsPanel(p);
-            setTab("backups");
-          }}
         />
       )}
       {tab === "backups" && (
         <BackupsTab
           runs={runs}
           onRefresh={loadRuns}
-          panelFilter={backupsPanel}
-          onPanelFilterChange={setBackupsPanel}
           tgChatId={config?.telegramChatId ?? ""}
           tgThreadId={config?.telegramThreadId ?? ""}
         />

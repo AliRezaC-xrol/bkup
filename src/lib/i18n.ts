@@ -125,13 +125,7 @@ export const dict = {
   verify_size_mismatch: "Size mismatch",
   verify_size_mismatch_hint: "The file on disk no longer matches the size recorded at backup time",
   verify_chip: "verified",
-  activity_title: "Backup activity",
-  activity_window: "last 14 days",
-  activity_empty: "No backups in this window yet",
-  activity_today: "Today",
   activity_total: "runs",
-  activity_volume: "volume",
-  stat_success_rate: "success rate",
   export_csv: "Export CSV",
   csv_exported: "History exported as CSV",
   backups_filter_hint: "No runs match this combination of filters.",
@@ -533,10 +527,6 @@ export const dict = {
   notify_denied: "Notification permission was blocked — allow it in the browser settings",
   notify_on: "Desktop notifications for failed backups are on",
   notify_fail_title: "Backup failed",
-
-  // dashboard panel health strip
-  health_no_runs: "No backups yet",
-  health_open_hint: "Show in Backups",
 
   // backups time-range filter
   range_aria: "Filter by time range",
