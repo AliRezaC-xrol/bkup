@@ -94,7 +94,7 @@ If the selected panel is not installed on the target server, **bkup** installs t
 
 ## Donate
 
-If `**bkup**` has been useful to you, even a single **STAR** on **GitHub** can be the greatest support for continuing the development of the project.
+If `bkup` has been useful to you, even a single **STAR** on **GitHub** can be the greatest support for continuing the development of the project.
 
 | Network | Address |
 |---|---|
