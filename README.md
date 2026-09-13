@@ -39,6 +39,8 @@ same install covers anything from a few backups a day to one every few minutes.
 - **Web panel** — dashboard, live logs, backup history with per-backup download and delete
 - **Reassemble split backups** — parts delivered to Telegram are merged back into the one complete file right in the web panel, with a downloadable history; you can also pick the parts straight from your stored backups instead of uploading them
 - **Restore to any server** — push a backup (a normal run or a reassembled file) back onto a server over SSH; the panel is installed automatically if it is missing, every step streams live, and the run can be cancelled
+- **Disk cleanup on demand** — System → Storage previews orphan files left by crashed runs and backups beyond the retention limit, then removes them with one click
+- **Settings file** — export every panel, Telegram and schedule setting as JSON and import it on another server; hidden credentials keep their current values, a full export moves them too
 - **Terminal menu** — `bkup` handles status, panel URL, password, port, logs, update and uninstall without opening the web panel
 
 ## Install
@@ -103,6 +105,28 @@ If `bkup` has been useful to you, even a single **STAR** on **GitHub** can be th
 | **Tron (TRC20)** | `TQwEkXiBiFiQikD97iCk38eJJkQrirnwFS` |
 | **TON (Toncoin)** | `UQDPCYKMhkA9hERfhLYNXIvl1dbV0ZKf4k7quu61iehEeMb1` |
 | **Tether USD (TRC20)** | `TQwEkXiBiFiQikD97iCk38eJJkQrirnwFS` |
+
+## Disk Cleanup
+
+Crashed runs and old backups can silently eat disk space. **System → Storage**
+now shows what can be reclaimed before anything is touched: files on disk that
+carry no history row (orphans from a cycle that died mid-write) and backups
+beyond the retention limit you set in Settings. A fresh file written by a
+running cycle is left alone for one hour, so cleanup never races a live backup.
+One click on **Clean now** removes exactly what the preview listed — the file
+and its history row go together, and copies already delivered to Telegram are
+not affected.
+
+## Settings File
+
+Moving bkup to a new server no longer means retyping every connection. In
+**Settings**, **Export settings** downloads all four panel connections, the
+Telegram destination and the schedule as one JSON file. By default credentials
+are hidden in the file, so it is safe to keep or share; choosing **Include
+credentials** writes the real values for a full migration. **Import settings**
+on another install applies the file through the exact same validation the
+settings form uses — masked credentials simply keep the values already on that
+server.
 
 ## Terminal menu
 

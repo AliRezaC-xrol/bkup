@@ -7,9 +7,14 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
+  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import {
-  Server, Send, Timer, Save, Loader2, ShieldCheck, Info, KeyRound, Eye, Boxes, Shield,
+  Server, Send, Timer, Save, Loader2, ShieldCheck, Info, KeyRound, Eye, Boxes, Shield, FileDown, FileUp, AlertTriangle,
 } from "lucide-react";
 import { useLang } from "@/components/dashboard/lang";
 import type { AppConfigDTO } from "./types";
@@ -47,6 +52,13 @@ export function SettingsTab({ config, onSaved, onPasswordChanged }: Props) {
   const [confPass, setConfPass] = useState("");
   const [changingPw, setChangingPw] = useState(false);
 
+  // ── settings file export / import ──
+  const importInputRef = useRef<HTMLInputElement>(null);
+  const [pendingImport, setPendingImport] = useState<{
+    name: string; payload: Record<string, unknown>; hasSecrets: boolean; fieldCount: number;
+  } | null>(null);
+  const [importing, setImporting] = useState(false);
+
   useEffect(() => {
     if (!config) return;
     setForm((prev) => {
@@ -66,6 +78,76 @@ export function SettingsTab({ config, onSaved, onPasswordChanged }: Props) {
     dirtyKeys.current.add(key as string);
     setForm((f) => (f ? { ...f, [key]: value } : f));
   };
+
+  /** Download the full settings as a JSON file (masked or with credentials). */
+  async function exportConfig(full: boolean) {
+    try {
+      const res = await fetch(`/api/config/export${full ? "?full=1" : ""}`, { cache: "no-store" });
+      if (!res.ok) throw new Error("export failed");
+      const data = await res.json();
+      const stamp = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `bkup-settings-${stamp}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast({ title: t("settings_exported") });
+    } catch {
+      toast({ title: t("settings_import_bad"), variant: "destructive" });
+    }
+  }
+
+  /** Parse the chosen file client-side, then ask for confirmation. */
+  function onImportFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // re-choosing the SAME file must re-trigger onChange
+    if (!file) return;
+    void file.text().then((text) => {
+      try {
+        const payload = JSON.parse(text) as Record<string, unknown>;
+        const cfgObj = (payload.config ?? payload) as Record<string, unknown>;
+        const SECRET_KEYS = ["panelPassword", "hmPassword", "pgPassword", "rebeccaPassword", "apiToken", "telegramBotToken"];
+        const hasSecrets = SECRET_KEYS.some(
+          (k) => typeof cfgObj[k] === "string" && (cfgObj[k] as string) !== "" && !/^•+$/.test(cfgObj[k] as string)
+        );
+        const fieldCount = Object.keys(cfgObj).filter((k) => k !== "id" && k !== "createdAt" && k !== "updatedAt").length;
+        setPendingImport({ name: file.name, payload, hasSecrets, fieldCount });
+      } catch {
+        toast({ title: t("settings_import_bad"), description: t("settings_import_empty"), variant: "destructive" });
+      }
+    });
+  }
+
+  /** POST the chosen file — same validation as the settings form. */
+  async function applyImport() {
+    if (!pendingImport) return;
+    setImporting(true);
+    try {
+      const res = await fetch("/api/config/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(pendingImport.payload),
+      });
+      const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      if (res.ok) {
+        const { importedFields, credentialsInFile, ...cfg } = data;
+        void credentialsInFile; // informational only — the masked cfg goes to the form
+        onSaved(cfg as unknown as AppConfigDTO);
+        toast({ title: t("settings_import_done").replace("{n}", String(importedFields ?? 0)) });
+        setPendingImport(null);
+      } else {
+        toast({
+          title: t("settings_import_bad"),
+          description: resolveText(data.errorBi ?? data.error, "en"),
+          variant: "destructive",
+        });
+      }
+    } finally {
+      setImporting(false);
+    }
+  }
 
   /** Flip a boolean setting NOW (optimistic) and persist it immediately. */
   async function setNow(key: "enabled" | "xuiEnabled" | "hmEnabled" | "pgEnabled" | "rebeccaEnabled" | "skipTlsVerify", value: boolean) {
@@ -232,6 +314,81 @@ export function SettingsTab({ config, onSaved, onPasswordChanged }: Props) {
           </div>
         </CardContent>
       </Card>
+
+      {/* ===== Settings file — export / import (server migration) ===== */}
+      <Card>
+        <CardContent className="flex flex-wrap items-center gap-3 p-4">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+            <FileDown className="h-4 w-4" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-semibold">{t("settings_file_title")}</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">{t("settings_export_hint")}</p>
+          </div>
+          <div className="flex w-full gap-2 sm:w-auto">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" className="flex-1 gap-1.5 sm:flex-none">
+                  <FileDown className="h-3.5 w-3.5" />
+                  {t("settings_export")}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuItem onClick={() => void exportConfig(false)}>
+                  <ShieldCheck className="h-4 w-4" />
+                  {t("settings_export_masked")}
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => void exportConfig(true)}>
+                  <KeyRound className="h-4 w-4" />
+                  {t("settings_export_full")}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Button variant="outline" size="sm" className="flex-1 gap-1.5 sm:flex-none" onClick={() => importInputRef.current?.click()}>
+              <FileUp className="h-3.5 w-3.5" />
+              {t("settings_import")}
+            </Button>
+          </div>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={onImportFile}
+            aria-label={t("settings_pick_file")}
+          />
+        </CardContent>
+      </Card>
+
+      {/* ===== import confirmation ===== */}
+      <AlertDialog open={pendingImport !== null} onOpenChange={(o) => !o && setPendingImport(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("settings_import_confirm_title")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              <span className="block">{t("settings_import_confirm_body").replace("{file}", pendingImport?.name ?? "")}</span>
+              {pendingImport?.hasSecrets && (
+                <span className="mt-2 flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-2 text-amber-700 dark:text-amber-400">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                  {t("settings_import_warn_secrets")}
+                </span>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={importing}
+              onClick={(e) => {
+                e.preventDefault();
+                void applyImport();
+              }}
+            >
+              {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : t("confirm")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* ===== Dual panels intro ===== */}
       <div className="flex items-start gap-2 rounded-lg border bg-muted/40 p-3 text-sm">

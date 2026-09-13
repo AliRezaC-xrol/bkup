@@ -12,6 +12,7 @@ import {
   ChartColumn, CalendarDays,
 } from "lucide-react";
 import { useLang } from "@/components/dashboard/lang";
+import { TimeAgo } from "@/components/dashboard/TimeAgo";
 import type { AppConfigDTO, BackupRunDTO, StatusDTO, SystemInfoDTO } from "@/components/dashboard/types";
 import { formatBytes } from "@/components/dashboard/types";
 
@@ -415,11 +416,7 @@ export function DashboardHome({
                   <span className="min-w-0 flex-1 truncate font-medium" dir="ltr">
                     {r.fileName ?? `#${r.id}`}
                   </span>
-                  <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-                    {new Intl.DateTimeFormat("en-GB", {
-                      timeZone: "Asia/Tehran", dateStyle: "short", timeStyle: "short",
-                    }).format(new Date(r.startedAt))}
-                  </span>
+                  <TimeAgo date={r.startedAt} className="shrink-0 text-xs text-muted-foreground" />
                   <Badge variant="outline" className="shrink-0 text-[10px] tabular-nums">
                     {formatBytes(r.fileSize)}
                   </Badge>

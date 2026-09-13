@@ -15,6 +15,7 @@ import {
 import { Combine, Download, Trash2, UploadCloud, Inbox, Archive, Check, X, Search, ChevronRight, AlertTriangle, Plus, ShieldCheck } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useLang } from "@/components/dashboard/lang";
+import { TimeAgo } from "@/components/dashboard/TimeAgo";
 import { formatBytes } from "@/components/dashboard/types";
 import { compareParts, findPartGaps, parsePartIndex, stripPartFromName } from "@/lib/reassembly";
 
@@ -26,13 +27,6 @@ export interface ReassembledDTO {
   size: number;
   createdAt: string;
 }
-
-// One shared formatter for the whole tab — constructing Intl.DateTimeFormat
-// per cell is expensive and made long lists feel sluggish.
-const timeFormatter = new Intl.DateTimeFormat("en-GB", {
-  timeZone: "Asia/Tehran", dateStyle: "short", timeStyle: "medium",
-});
-const fmtTime = (iso: string) => timeFormatter.format(new Date(iso));
 
 interface BackupChoice {
   id: number;
@@ -87,7 +81,7 @@ const BackupChoiceRow = memo(function BackupChoiceRow({
         <span className="block truncate text-xs font-medium" dir="ltr" title={choice.fileName ?? `#${choice.id}`}>
           {choice.fileName ?? `#${choice.id}`}
         </span>
-        <span className="block text-[11px] tabular-nums text-muted-foreground">{fmtTime(choice.startedAt)}</span>
+        <TimeAgo date={choice.startedAt} className="block text-[11px] text-muted-foreground" />
       </span>
       {part && (
         <Badge variant="outline" className="shrink-0 text-[10px] tabular-nums">
@@ -116,7 +110,7 @@ const HistoryRow = memo(function HistoryRow({
   const { t } = useLang();
   return (
     <TableRow className="group">
-      <TableCell className="whitespace-nowrap text-xs tabular-nums">{fmtTime(row.createdAt)}</TableCell>
+      <TableCell className="whitespace-nowrap text-xs tabular-nums"><TimeAgo date={row.createdAt} className="text-xs" /></TableCell>
       <TableCell className="max-w-64">
         <div className="flex items-center gap-1.5">
           <span className="block truncate text-xs font-medium" dir="ltr" title={row.name}>{row.name}</span>

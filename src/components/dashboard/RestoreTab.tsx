@@ -23,6 +23,7 @@ import {
 import { resolveText } from "@/lib/messages";
 import { useToast } from "@/hooks/use-toast";
 import { useLang } from "@/components/dashboard/lang";
+import { TimeAgo } from "@/components/dashboard/TimeAgo";
 import { formatBytes } from "@/components/dashboard/types";
 import type { DictKey } from "@/lib/i18n";
 
@@ -1341,10 +1342,6 @@ function SelectBackupStep({
 }) {
   const { t } = useLang();
   useEffect(() => { if (allBackups.length === 0) onLoad(); }, []);
-  const fmtTime = (iso?: string) => {
-    if (!iso) return "—";
-    return new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Tehran", dateStyle: "short", timeStyle: "short" }).format(new Date(iso));
-  };
   const panelBadge = (panel: string) => panel === "hmpanel" ? "HM" : panel === "pasarguard" ? "PG" : panel === "rebecca" ? "RB" : "3X";
   const selectedTag = selectedPanel ? PANEL_OPTIONS.find(p => p.value === selectedPanel)?.tag : null;
 
@@ -1403,7 +1400,7 @@ function SelectBackupStep({
                             {t("restore_badge_reassembled")}
                           </Badge>
                         )}
-                        <span className="shrink-0 tabular-nums">{fmtTime(time)}</span>
+                        {time != null && <TimeAgo date={time} className="shrink-0" />}
                         {size != null && <><span className="shrink-0">·</span><span className="shrink-0 tabular-nums">{formatBytes(size)}</span></>}
                       </div>
                     </div>
@@ -1680,7 +1677,6 @@ function RestoreHistoryCard({ history, onRefresh, onRetry }: { history: any[]; o
     toast({ title: t("csv_exported"), description: `${rows.length} ${t("activity_total")}` });
   }
 
-  const fmtTime = (iso: string) => new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Tehran", dateStyle: "short", timeStyle: "short" }).format(new Date(iso));
   const fmtDuration = (ms: number | null) => {
     if (!ms) return "—";
     if (ms < 1000) return `${ms}ms`;
@@ -1900,7 +1896,7 @@ function RestoreHistoryCard({ history, onRefresh, onRetry }: { history: any[]; o
                           <TableCell>
                             <Checkbox checked={selected.has(job.id)} onCheckedChange={() => toggleOne(job.id)} aria-label={`Select ${job.id}`} />
                           </TableCell>
-                          <TableCell className="whitespace-nowrap text-[10px] tabular-nums sm:text-xs">{fmtTime(job.startedAt)}</TableCell>
+                          <TableCell className="whitespace-nowrap text-[10px] tabular-nums sm:text-xs"><TimeAgo date={job.startedAt} className="text-[10px] sm:text-xs" /></TableCell>
                           <TableCell className="max-w-[140px] sm:max-w-[220px] lg:max-w-[280px]"><span className="block truncate text-[10px] font-medium sm:text-xs" dir="ltr" title={job.backupName || `#${job.id}`}>{job.backupName || `#${job.id}`}</span></TableCell>
                           <TableCell className="hidden text-[10px] lg:table-cell sm:text-xs"><span className="block max-w-[140px] truncate font-mono" dir="ltr" title={`${job.sshUser}@${job.sshHost}:${job.sshPort}`}>{job.sshHost}</span></TableCell>
                           <TableCell><Badge variant="outline" className="text-[9px] uppercase sm:text-[10px]">{panelBadge(job.panel)}</Badge></TableCell>

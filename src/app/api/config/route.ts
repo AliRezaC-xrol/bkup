@@ -1,63 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getConfig, saveConfig, maskConfig, SECRET_FIELDS } from "@/lib/config-service";
+import { getConfig, maskConfig } from "@/lib/config-service";
 import { requireAuthOrCli } from "@/lib/auth";
-import { restartScheduler } from "@/lib/scheduler";
-import { invalidateSession } from "@/lib/panel-client";
-import { hmInvalidateSession } from "@/lib/hmpanel-client";
-import { log } from "@/lib/logger";
+import { applyConfigPatch } from "@/lib/config-apply";
 import { bi } from "@/lib/messages";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const SECRET_MASKABLE: readonly string[] = SECRET_FIELDS;
-
-const ALLOWED = new Set([
-  "panelType", // legacy v3.0 — accepted but ignored by v3.1 logic
-  "xuiEnabled",
-  "panelUrl",
-  "panelBasePath",
-  "panelUsername",
-  "panelPassword",
-  "authMode",
-  "apiToken",
-  "skipTlsVerify",
-  "hmEnabled",
-  "hmUrl",
-  "hmUsername",
-  "hmPassword",
-  "pgEnabled",
-  "pgUrl",
-  "pgUsername",
-  "pgPassword",
-  "hmPremium",
-  "rebeccaEnabled",
-  "rebeccaUrl",
-  "rebeccaUsername",
-  "rebeccaPassword",
-  "telegramApiBase",
-  "telegramBotToken",
-  "telegramChatId",
-  "telegramThreadId",
-  "intervalSeconds",
-  "enabled",
-  "backupMode",
-  "localDbPath",
-  "localRetention",
-  "tgAutoDeleteKeep",
-]);
-
-function isMasked(v: unknown): boolean {
-  return typeof v === "string" && /^•+$/.test(v);
-}
-
-function validateUrl(v: unknown, label: string): { fa: string; en: string } | null {
-  const url = String(v ?? "").trim();
-  if (url && !/^https?:\/\//i.test(url)) {
-    return bi(`The ${label} URL must start with http:// or https://`, `The ${label} URL must start with http:// or https://`);
-  }
-  return null;
-}
 
 export async function GET(req: NextRequest) {
   const denied = await requireAuthOrCli(req);
@@ -71,73 +19,19 @@ export async function PUT(req: NextRequest) {
   if (denied) return denied;
   try {
     const body = (await req.json()) as Record<string, unknown>;
-    const patch: Record<string, unknown> = {};
-
-    for (const [k, v] of Object.entries(body)) {
-      if (!ALLOWED.has(k)) continue;
-      // Client sends masked secrets (•••) to mean "unchanged"
-      if (SECRET_MASKABLE.includes(k) && isMasked(v)) continue;
-      patch[k] = v;
+    const res = await applyConfigPatch(body, { source: "ui" });
+    if (!res.ok) {
+      return NextResponse.json({ error: res.error.fa, errorBi: res.error }, { status: res.status });
     }
-
-    // coerce & validate
-    if (patch.intervalSeconds !== undefined) {
-      const n = Number(patch.intervalSeconds);
-      if (!Number.isFinite(n) || n < 10 || n > 86400) {
-        return NextResponse.json(
-          {
-            ...failMsg(bi("The backup interval must be between 10 seconds and 24 hours", "The backup interval must be between 10 seconds and 24 hours")),
-          },
-          { status: 400 }
-        );
-      }
-      patch.intervalSeconds = Math.floor(n);
-    }
-    if (patch.localRetention !== undefined) {
-      patch.localRetention = Math.max(0, Math.floor(Number(patch.localRetention) || 0));
-    }
-    if (patch.tgAutoDeleteKeep !== undefined) {
-      patch.tgAutoDeleteKeep = Math.max(0, Math.floor(Number(patch.tgAutoDeleteKeep) || 0));
-    }
-    if (patch.authMode !== undefined && !["session", "bearer"].includes(String(patch.authMode))) {
-      return NextResponse.json({ ...failMsg(bi("Invalid authentication mode", "Invalid authentication mode")) }, { status: 400 });
-    }
-    if (patch.backupMode !== undefined && !["auto", "db", "json", "local"].includes(String(patch.backupMode))) {
-      return NextResponse.json({ ...failMsg(bi("Invalid backup mode", "Invalid backup mode")) }, { status: 400 });
-    }
-    if (patch.panelUrl !== undefined) {
-      const err = validateUrl(patch.panelUrl, "3x-ui panel");
-      if (err) return NextResponse.json({ ...failMsg(err) }, { status: 400 });
-      patch.panelUrl = String(patch.panelUrl).trim().replace(/\/+$/, "");
-    }
-    if (patch.hmUrl !== undefined) {
-      const err = validateUrl(patch.hmUrl, "HMPanel");
-      if (err) return NextResponse.json({ ...failMsg(err) }, { status: 400 });
-      patch.hmUrl = String(patch.hmUrl).trim().replace(/\/+$/, "");
-    }
-    if (patch.pgUrl !== undefined) {
-      const err = validateUrl(patch.pgUrl, "PasarGuard");
-      if (err) return NextResponse.json({ ...failMsg(err) }, { status: 400 });
-      patch.pgUrl = String(patch.pgUrl).trim().replace(/\/+$/, "");
-    }
-    if (patch.rebeccaUrl !== undefined) {
-      const err = validateUrl(patch.rebeccaUrl, "Rebecca");
-      if (err) return NextResponse.json({ ...failMsg(err) }, { status: 400 });
-      patch.rebeccaUrl = String(patch.rebeccaUrl).trim().replace(/\/+$/, "");
-    }
-
-    const updated = await saveConfig(patch);
-    invalidateSession();
-    hmInvalidateSession();
-    restartScheduler();
-    await log("info", bi("Settings were updated", "Settings were updated"));
-    return NextResponse.json(maskConfig(updated));
+    return NextResponse.json(maskConfig(res.updated));
   } catch (e: unknown) {
     return NextResponse.json(
-      { ...failMsg(bi(
-        e instanceof Error ? e.message : "Unknown error while saving settings",
-        e instanceof Error ? e.message : "Unknown error while saving settings"
-      )) },
+      {
+        ...failMsg(bi(
+          e instanceof Error ? e.message : "Unknown error while saving settings",
+          e instanceof Error ? e.message : "خطای ناشناخته هنگام ذخیره تنظیمات"
+        )),
+      },
       { status: 500 }
     );
   }
