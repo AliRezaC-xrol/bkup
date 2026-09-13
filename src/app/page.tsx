@@ -270,10 +270,11 @@ function App() {
   const testPanel = useCallback(async () => {
     // tests whichever panels are enabled — each with its own credentials
     try {
-      const targets: ("3x-ui" | "hmpanel" | "pasarguard")[] = [];
+      const targets: ("3x-ui" | "hmpanel" | "pasarguard" | "rebecca")[] = [];
       if (config?.xuiEnabled) targets.push("3x-ui");
       if (config?.hmEnabled) targets.push("hmpanel");
       if (config?.pgEnabled) targets.push("pasarguard");
+      if (config?.rebeccaEnabled) targets.push("rebecca");
       if (targets.length === 0) {
         toast({ title: t("no_panels_enabled"), description: t("no_panels_enabled_desc"), variant: "destructive" });
         return;
@@ -285,7 +286,7 @@ function App() {
           body: JSON.stringify({ config, panel }),
         });
         const data = await res.json();
-        const name = panel === "hmpanel" ? "HMPanel" : panel === "pasarguard" ? "PasarGuard" : "3x-ui";
+        const name = panel === "hmpanel" ? "HMPanel" : panel === "pasarguard" ? "PasarGuard" : panel === "rebecca" ? "Rebecca" : "3x-ui";
         if (data.ok) {
           toast({ title: tr(t("panel_conn_ok"), { name }), description: resolveText(data.messageBi ?? data.message, "en") });
         } else {

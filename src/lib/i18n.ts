@@ -537,6 +537,20 @@ export const dict = {
   // dashboard panel health strip
   health_no_runs: "No backups yet",
   health_open_hint: "Show in Backups",
+
+  // backups time-range filter
+  range_aria: "Filter by time range",
+
+  // reassemble history bulk delete
+  bulk_partial: "{ok} deleted, {fail} failed — see the history for what remains",
+  reassembly_bulk_confirm_title: "Delete the selected reassembled files?",
+  reassembly_bulk_confirm_desc: "The selected files and their records are permanently deleted from the server. Copies already delivered to Telegram are kept.",
+
+  // log out everywhere
+  revoke_all: "Log out everywhere",
+  revoke_confirm_title: "Sign out on all devices?",
+  revoke_confirm_desc: "Every browser and device signed into this panel — including this one — is logged out immediately. You will need the panel password to sign back in.",
+  revoke_done: "All sessions signed out",
 } as const;
 
 export type DictKey = keyof typeof dict;
