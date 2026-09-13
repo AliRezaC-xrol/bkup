@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -16,10 +16,11 @@ import {
 } from "@/components/ui/table";
 import {
   Server, DatabaseBackup, Boxes, ShieldCheck, CheckCircle2, XCircle,
-  Loader2, ChevronRight, ChevronLeft, Wifi, History, AlertTriangle,
+  Loader2, ChevronRight, ChevronLeft, ChevronDown, ChevronUp, Wifi, History, AlertTriangle,
   RefreshCw, Key, Lock, RotateCcw, Rocket, Inbox, Network, Globe, Eye, EyeOff,
-  Cloud, Plus, Trash2, Copy, ExternalLink, Shield, Link2, Combine,
+  Cloud, Plus, Trash2, Copy, ExternalLink, Shield, Link2, Combine, FileDown,
 } from "lucide-react";
+import { resolveText } from "@/lib/messages";
 import { useToast } from "@/hooks/use-toast";
 import { useLang } from "@/components/dashboard/lang";
 import { formatBytes } from "@/components/dashboard/types";
@@ -458,6 +459,21 @@ export function RestoreTab() {
     }
   }
 
+  // Prefill the wizard from a past (failed/cancelled) job — only connection
+  // details are restored; credentials are never stored, so the user re-enters
+  // the password/key and re-tests before the wizard can move on.
+  function retryJob(job: any) {
+    resetWizard();
+    setSelectedPanel((job.panel as PanelId) ?? null);
+    setSshHost(job.sshHost ?? "");
+    setSshPort(String(job.sshPort ?? 22));
+    setSshUser(job.sshUser || "root");
+    setAuthMethod("password");
+    setShowHistory(false);
+    toast({ title: t("restore_retry_loaded"), description: t("restore_retry_hint") });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
   function resetWizard() {
     setStep("connection");
     setRestoring(false);
@@ -516,7 +532,7 @@ export function RestoreTab() {
         </CardHeader>
       </Card>
 
-      {showHistory && <RestoreHistoryCard history={history} onRefresh={loadHistory} />}
+      {showHistory && <RestoreHistoryCard history={history} onRefresh={loadHistory} onRetry={retryJob} />}
 
       {step === "progress" && status ? (
         <ProgressView status={status} onReset={resetWizard} />
@@ -1577,12 +1593,92 @@ function StepRow({ step, isLast }: { step: RestoreStepState; index: number; isLa
 }
 
 // ── History ──
-function RestoreHistoryCard({ history, onRefresh }: { history: any[]; onRefresh?: () => void }) {
+type RestoreEffStatus = "success" | "failed" | "cancelled" | "running";
+
+/** Failed jobs whose error mentions cancel were user-aborted → "cancelled". */
+function effStatus(job: any): RestoreEffStatus {
+  if (job.status === "cancelled") return "cancelled";
+  if (job.status === "failed")
+    return String(job.error ?? "").toLowerCase().includes("cancel") ? "cancelled" : "failed";
+  return job.status; // success | running
+}
+
+const RESTORE_PANELS = [
+  { key: "3x-ui", tag: "3X" },
+  { key: "hmpanel", tag: "HM" },
+  { key: "pasarguard", tag: "PG" },
+  { key: "rebecca", tag: "RB" },
+] as const;
+
+type RestorePanelFilter = "all" | (typeof RESTORE_PANELS)[number]["key"];
+
+function RestoreHistoryCard({ history, onRefresh, onRetry }: { history: any[]; onRefresh?: () => void; onRetry?: (job: any) => void }) {
   const { t } = useLang();
   const { toast } = useToast();
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [deleting, setDeleting] = useState<number | null>(null);
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<"all" | RestoreEffStatus>("all");
+  const [panelFilter, setPanelFilter] = useState<RestorePanelFilter>("all");
+  const [expanded, setExpanded] = useState<number | null>(null);
+
+  const rows = useMemo(
+    () =>
+      history.filter(
+        (j) =>
+          (statusFilter === "all" || effStatus(j) === statusFilter) &&
+          (panelFilter === "all" || j.panel === panelFilter)
+      ),
+    [history, statusFilter, panelFilter]
+  );
+
+  // chip counts reflect the loaded history window (same policy as Backups)
+  const statusCounts = useMemo(
+    () => ({
+      all: history.length,
+      success: history.filter((j) => effStatus(j) === "success").length,
+      failed: history.filter((j) => effStatus(j) === "failed").length,
+      cancelled: history.filter((j) => effStatus(j) === "cancelled").length,
+    }),
+    [history]
+  );
+  const panelCounts = useMemo(() => {
+    const base: Record<RestorePanelFilter, number> = { all: history.length, "3x-ui": 0, hmpanel: 0, pasarguard: 0, rebecca: 0 };
+    for (const j of history) if (j.panel in base) base[j.panel as RestorePanelFilter] += 1;
+    return base;
+  }, [history]);
+
+  // export the rows currently shown (both filters applied) as CSV — BOM first
+  // so Excel opens UTF-8 names correctly
+  function exportCsv() {
+    const esc = (v: string | number | null) => {
+      const s = v == null ? "" : String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const head = "id,time,panel,backup,source,server,duration_sec,status,error";
+    const lines = rows.map((j) =>
+      [
+        j.id,
+        j.startedAt,
+        j.panel,
+        j.backupName ?? `#${j.id}`,
+        j.backupSource ?? "",
+        `${j.sshUser}@${j.sshHost}:${j.sshPort}`,
+        j.durationMs != null ? (j.durationMs / 1000).toFixed(1) : "",
+        effStatus(j),
+        j.error ? resolveText(j.error, "en").replace(/\r?\n/g, " ") : "",
+      ].map(esc).join(",")
+    );
+    const blob = new Blob(["\uFEFF" + [head, ...lines].join("\n")], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "");
+    a.href = url;
+    a.download = `bkup-restore-history-${stamp}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast({ title: t("csv_exported"), description: `${rows.length} ${t("activity_total")}` });
+  }
 
   const fmtTime = (iso: string) => new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Tehran", dateStyle: "short", timeStyle: "short" }).format(new Date(iso));
   const fmtDuration = (ms: number | null) => {
@@ -1594,18 +1690,16 @@ function RestoreHistoryCard({ history, onRefresh }: { history: any[]; onRefresh?
     return `${m}m ${s}s`;
   };
   const statusBadge = (status: string, error?: string) => {
-    if (status === "success") return <Badge className="bg-green-500/15 text-green-600 text-[9px] hover:bg-green-500/25 sm:text-[10px]">{t("success")}</Badge>;
-    if (status === "cancelled") return <Badge className="bg-amber-500/15 text-amber-600 text-[9px] hover:bg-amber-500/25 sm:text-[10px]">Cancelled</Badge>;
-    if (status === "failed") {
-      const isCancelled = error && error.toLowerCase().includes("cancel");
-      if (isCancelled) return <Badge className="bg-amber-500/15 text-amber-600 text-[9px] hover:bg-amber-500/25 sm:text-[10px]">Cancelled</Badge>;
-      return <Badge variant="destructive" className="text-[9px] sm:text-[10px]">{t("failed")}</Badge>;
-    }
+    const eff = effStatus({ status, error });
+    if (eff === "success") return <Badge className="bg-green-500/15 text-green-600 text-[9px] hover:bg-green-500/25 sm:text-[10px]">{t("success")}</Badge>;
+    if (eff === "cancelled") return <Badge className="bg-amber-500/15 text-amber-600 text-[9px] hover:bg-amber-500/25 sm:text-[10px]">{t("status_cancelled")}</Badge>;
+    if (eff === "failed") return <Badge variant="destructive" className="text-[9px] sm:text-[10px]">{t("failed")}</Badge>;
     return <Badge variant="outline" className="text-[9px] sm:text-[10px]">{t("running_now")}</Badge>;
   };
   const panelBadge = (panel: string) => panel === "hmpanel" ? "HM" : panel === "pasarguard" ? "PG" : panel === "rebecca" ? "RB" : "3X";
 
-  const allIds = history.map((j: any) => j.id);
+  // "select all" only ticks the rows currently shown (both filters applied)
+  const allIds = rows.map((j: any) => j.id);
   const allSelected = allIds.length > 0 && allIds.every((id: number) => selected.has(id));
 
   function toggleOne(id: number) {
@@ -1628,7 +1722,7 @@ function RestoreHistoryCard({ history, onRefresh }: { history: any[]; onRefresh?
       const res = await fetch(`/api/restore/history?id=${id}`, { method: "DELETE" });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.ok) {
-        toast({ title: "Deleted" });
+        toast({ title: t("deleted") });
         setSelected((prev) => {
           const n = new Set(prev);
           n.delete(id);
@@ -1636,10 +1730,10 @@ function RestoreHistoryCard({ history, onRefresh }: { history: any[]; onRefresh?
         });
         onRefresh?.();
       } else {
-        toast({ title: data.error || "Delete failed", variant: "destructive" });
+        toast({ title: data.error || t("error"), variant: "destructive" });
       }
     } catch (e: any) {
-      toast({ title: e.message || "Delete failed", variant: "destructive" });
+      toast({ title: e.message || t("error"), variant: "destructive" });
     } finally {
       setDeleting(null);
     }
@@ -1656,34 +1750,34 @@ function RestoreHistoryCard({ history, onRefresh }: { history: any[]; onRefresh?
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.ok) {
-        toast({ title: `Deleted ${data.deleted} items` });
+        toast({ title: `${t("deleted")} · ${data.deleted}` });
         setSelected(new Set());
         onRefresh?.();
       } else {
-        toast({ title: data.error || "Delete failed", variant: "destructive" });
+        toast({ title: data.error || t("error"), variant: "destructive" });
       }
     } catch (e: any) {
-      toast({ title: e.message || "Delete failed", variant: "destructive" });
+      toast({ title: e.message || t("error"), variant: "destructive" });
     } finally {
       setBulkDeleting(false);
     }
   }
 
   async function deleteAll() {
-    if (!confirm("Delete all restore history? This cannot be undone.")) return;
+    if (!confirm(t("restore_history_delete_all"))) return;
     setBulkDeleting(true);
     try {
       const res = await fetch(`/api/restore/history?all=true`, { method: "DELETE" });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.ok) {
-        toast({ title: `Deleted ${data.deleted} items` });
+        toast({ title: `${t("deleted")} · ${data.deleted}` });
         setSelected(new Set());
         onRefresh?.();
       } else {
-        toast({ title: data.error || "Delete failed", variant: "destructive" });
+        toast({ title: data.error || t("error"), variant: "destructive" });
       }
     } catch (e: any) {
-      toast({ title: e.message || "Delete failed", variant: "destructive" });
+      toast({ title: e.message || t("error"), variant: "destructive" });
     } finally {
       setBulkDeleting(false);
     }
@@ -1691,62 +1785,183 @@ function RestoreHistoryCard({ history, onRefresh }: { history: any[]; onRefresh?
 
   return (
     <Card className="w-full">
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
+      <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 space-y-0 pb-3">
         <div>
           <CardTitle className="flex items-center gap-2 text-base sm:text-lg"><History className="h-4 w-4 shrink-0" />{t("restore_history")}</CardTitle>
-          <CardDescription className="mt-1 text-xs sm:text-sm">Past restore operations — newest first.</CardDescription>
+          <CardDescription className="mt-1 text-xs sm:text-sm">{t("restore_history_desc")}</CardDescription>
         </div>
         <div className="flex items-center gap-1.5">
           {selected.size > 0 && (
-            <Button variant="destructive" size="sm" className="h-8 gap-1 text-[11px] px-2.5" onClick={deleteSelected} disabled={bulkDeleting}>
+            <Button variant="destructive" size="sm" className="h-8 gap-1 px-2.5 text-[11px]" onClick={deleteSelected} disabled={bulkDeleting}>
               {bulkDeleting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
-              Delete ({selected.size})
+              {t("delete_selected")} ({selected.size})
             </Button>
           )}
-
-          {onRefresh && <Button variant="outline" size="icon" className="h-8 w-8 shrink-0" onClick={onRefresh}><RefreshCw className="h-3.5 w-3.5" /></Button>}
+          <Button variant="outline" size="sm" className="h-8 gap-1.5" onClick={exportCsv} disabled={rows.length === 0} title={t("export_csv")}>
+            <FileDown className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">{t("export_csv")}</span>
+          </Button>
+          {onRefresh && <Button variant="outline" size="icon" className="h-8 w-8 shrink-0" onClick={onRefresh} aria-label={t("refresh")}><RefreshCw className="h-3.5 w-3.5" /></Button>}
         </div>
       </CardHeader>
       <CardContent className="w-full">
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <div className="flex rounded-lg border p-0.5">
+            {(["all", "success", "failed", "cancelled"] as const).map((f) => (
+              <button
+                key={f}
+                onClick={() => setStatusFilter(f)}
+                className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors sm:px-3 ${
+                  statusFilter === f ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {f === "all" ? t("filter_all") : f === "success" ? t("success") : f === "failed" ? t("failed") : t("status_cancelled")}
+                <span
+                  className={`rounded px-1 text-[10px] tabular-nums ${
+                    statusFilter === f ? "bg-primary-foreground/20 text-primary-foreground" : "bg-muted text-muted-foreground"
+                  }`}
+                >
+                  {statusCounts[f]}
+                </span>
+              </button>
+            ))}
+          </div>
+          <div className="flex rounded-lg border p-0.5">
+            <button
+              onClick={() => setPanelFilter("all")}
+              className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                panelFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {t("filter_all")}
+              <span
+                className={`rounded px-1 text-[10px] tabular-nums ${
+                  panelFilter === "all" ? "bg-primary-foreground/20 text-primary-foreground" : "bg-muted text-muted-foreground"
+                }`}
+              >
+                {panelCounts.all}
+              </span>
+            </button>
+            {RESTORE_PANELS.map((p) => (
+              <button
+                key={p.key}
+                onClick={() => setPanelFilter(p.key)}
+                className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                  panelFilter === p.key ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {p.tag}
+                <span
+                  className={`rounded px-1 text-[10px] tabular-nums ${
+                    panelFilter === p.key ? "bg-primary-foreground/20 text-primary-foreground" : "bg-muted text-muted-foreground"
+                  }`}
+                >
+                  {panelCounts[p.key]}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
         {history.length === 0 ? (
-          <div className="py-10 text-center text-muted-foreground"><Inbox className="mx-auto mb-2 h-8 w-8 opacity-40" /><p className="text-xs sm:text-sm">{t("restore_history_empty")}</p></div>
+          <div className="flex flex-col items-center justify-center rounded-lg border border-dashed py-14 text-center text-muted-foreground">
+            <Inbox className="mb-2 h-10 w-10 opacity-40" />
+            <p className="text-sm font-medium">{t("restore_history_empty")}</p>
+          </div>
+        ) : rows.length === 0 ? (
+          <div className="flex flex-col items-center justify-center rounded-lg border border-dashed py-14 text-center text-muted-foreground">
+            <Inbox className="mb-2 h-10 w-10 opacity-40" />
+            <p className="text-sm font-medium">{t("restore_filter_hint")}</p>
+          </div>
         ) : (
           <div className="w-full overflow-hidden rounded-lg border">
-            <div className="max-h-[60vh] w-full overflow-auto sm:max-h-[65vh] lg:max-h-[70vh]">
+            <div className="custom-scroll max-h-[60vh] w-full overflow-auto sm:max-h-[65vh] lg:max-h-[70vh]">
               <Table className="w-full">
-                <TableHeader className="sticky top-0 z-10 bg-card">
+                <TableHeader className="sticky top-0 z-10 bg-card/95 backdrop-blur">
                   <TableRow>
                     <TableHead className="w-8">
-                      <Checkbox checked={allSelected} onCheckedChange={toggleAll} aria-label="Select all" />
+                      <Checkbox checked={allSelected} onCheckedChange={toggleAll} aria-label={t("select_all")} />
                     </TableHead>
                     <TableHead className="min-w-[90px] text-[10px] sm:min-w-[110px] sm:text-xs">{t("col_time")}</TableHead>
                     <TableHead className="min-w-[140px] text-[10px] sm:min-w-[180px] sm:text-xs">{t("col_file")}</TableHead>
-                    <TableHead className="hidden min-w-[120px] text-[10px] lg:table-cell sm:text-xs">Server</TableHead>
+                    <TableHead className="hidden min-w-[120px] text-[10px] lg:table-cell sm:text-xs">{t("restore_col_server")}</TableHead>
                     <TableHead className="min-w-[60px] text-[10px] sm:text-xs">{t("restore_col_panel")}</TableHead>
                     <TableHead className="hidden min-w-[80px] text-[10px] sm:table-cell sm:text-xs">{t("col_duration")}</TableHead>
                     <TableHead className="min-w-[80px] text-[10px] sm:text-xs">{t("col_status")}</TableHead>
-                    <TableHead className="w-10 text-[10px]">Del</TableHead>
+                    <TableHead className="w-14 text-end text-[10px] sm:w-20">{t("restore_col_actions")}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {history.map((job) => (
-                    <TableRow key={job.id} className={selected.has(job.id) ? "bg-muted/50" : ""}>
-                      <TableCell>
-                        <Checkbox checked={selected.has(job.id)} onCheckedChange={() => toggleOne(job.id)} aria-label={`Select ${job.id}`} />
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap text-[10px] tabular-nums sm:text-xs">{fmtTime(job.startedAt)}</TableCell>
-                      <TableCell className="max-w-[140px] sm:max-w-[220px] lg:max-w-[280px]"><span className="block truncate text-[10px] font-medium sm:text-xs" dir="ltr" title={job.backupName || `#${job.id}`}>{job.backupName || `#${job.id}`}</span></TableCell>
-                      <TableCell className="hidden text-[10px] lg:table-cell sm:text-xs"><span className="block max-w-[140px] truncate font-mono" dir="ltr" title={`${job.sshUser}@${job.sshHost}:${job.sshPort}`}>{job.sshHost}</span></TableCell>
-                      <TableCell><Badge variant="outline" className="text-[9px] uppercase sm:text-[10px]">{panelBadge(job.panel)}</Badge></TableCell>
-                      <TableCell className="hidden whitespace-nowrap text-[10px] tabular-nums sm:table-cell sm:text-xs">{fmtDuration(job.durationMs)}</TableCell>
-                      <TableCell>{statusBadge(job.status, job.error)}</TableCell>
-                      <TableCell>
-                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => deleteOne(job.id)} disabled={deleting === job.id}>
-                          {deleting === job.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3 text-red-500" />}
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                  {rows.map((job) => {
+                    const eff = effStatus(job);
+                    const retryable = Boolean(onRetry) && (eff === "failed" || eff === "cancelled");
+                    return (
+                      <Fragment key={job.id}>
+                        <TableRow className={`transition-colors ${selected.has(job.id) ? "bg-muted/50" : ""}`}>
+                          <TableCell>
+                            <Checkbox checked={selected.has(job.id)} onCheckedChange={() => toggleOne(job.id)} aria-label={`Select ${job.id}`} />
+                          </TableCell>
+                          <TableCell className="whitespace-nowrap text-[10px] tabular-nums sm:text-xs">{fmtTime(job.startedAt)}</TableCell>
+                          <TableCell className="max-w-[140px] sm:max-w-[220px] lg:max-w-[280px]"><span className="block truncate text-[10px] font-medium sm:text-xs" dir="ltr" title={job.backupName || `#${job.id}`}>{job.backupName || `#${job.id}`}</span></TableCell>
+                          <TableCell className="hidden text-[10px] lg:table-cell sm:text-xs"><span className="block max-w-[140px] truncate font-mono" dir="ltr" title={`${job.sshUser}@${job.sshHost}:${job.sshPort}`}>{job.sshHost}</span></TableCell>
+                          <TableCell><Badge variant="outline" className="text-[9px] uppercase sm:text-[10px]">{panelBadge(job.panel)}</Badge></TableCell>
+                          <TableCell className="hidden whitespace-nowrap text-[10px] tabular-nums sm:table-cell sm:text-xs">{fmtDuration(job.durationMs)}</TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-0.5">
+                              {statusBadge(job.status, job.error)}
+                              {job.error && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-6 w-6 shrink-0"
+                                  title={t("restore_error_title")}
+                                  aria-label={t("restore_error_title")}
+                                  aria-expanded={expanded === job.id}
+                                  onClick={() => setExpanded(expanded === job.id ? null : job.id)}
+                                >
+                                  {expanded === job.id ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                                </Button>
+                              )}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center justify-end gap-0.5">
+                              {retryable && (
+                                <Button variant="ghost" size="icon" className="h-7 w-7" title={t("restore_retry")} aria-label={t("restore_retry")} onClick={() => onRetry?.(job)} disabled={deleting === job.id}>
+                                  <RotateCcw className="h-3.5 w-3.5 text-amber-600" />
+                                </Button>
+                              )}
+                              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => deleteOne(job.id)} disabled={deleting === job.id}>
+                                {deleting === job.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3 text-red-500" />}
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                        {expanded === job.id && job.error && (
+                          <TableRow className="bg-muted/30 hover:bg-muted/30">
+                            <TableCell colSpan={8}>
+                              <div className="flex items-start justify-between gap-3 py-1">
+                                <div className="min-w-0">
+                                  <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{t("restore_error_title")}</p>
+                                  <p className="mt-0.5 break-words font-mono text-[11px] leading-relaxed text-red-600" dir="ltr">{resolveText(job.error, "en")}</p>
+                                </div>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-7 shrink-0 gap-1 text-[11px]"
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(resolveText(job.error, "en"));
+                                    toast({ title: t("copied") });
+                                  }}
+                                >
+                                  <Copy className="h-3 w-3" /> {t("copy")}
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </Fragment>
+                    );
+                  })}
                 </TableBody>
               </Table>
             </div>

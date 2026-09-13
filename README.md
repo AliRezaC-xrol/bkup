@@ -92,6 +92,8 @@ During the restore, every step is displayed in real time. You can cancel the res
 
 If the selected panel is not installed on the target server, **bkup** installs the panel first and then restores the selected backup.
 
+Every past run is kept in **Restore History** — filter it by **panel** or **status** (success, failed, cancelled), expand the exact error behind a failed run and copy it, or export the filtered rows as **CSV**. A failed or cancelled run can be retried with one click: the server address, port, username, and panel are pre-filled, and since passwords and keys are never stored, you only re-enter the credential before connecting.
+
 ## Donate
 
 If `bkup` has been useful to you, even a single **STAR** on **GitHub** can be the greatest support for continuing the development of the project.
