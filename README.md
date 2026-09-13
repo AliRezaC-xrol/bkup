@@ -42,6 +42,9 @@ same install covers anything from a few backups a day to one every few minutes.
 - **Disk cleanup on demand** — System → Storage previews orphan files left by crashed runs and backups beyond the retention limit, then removes them with one click
 - **Settings file** — export every panel, Telegram and schedule setting as JSON and import it on another server; hidden credentials keep their current values, a full export moves them too
 - **Dark mode and installable app** — the panel follows the system theme (or the switch in the header) and can be added to the phone's home screen like a native app
+- **Jump to the Telegram message** — every successful row in the history (and on the dashboard) carries a link that opens the exact Telegram message the backup was delivered to, topic included
+- **Desktop notifications** — turn on the bell in the header and a failed backup raises a system notification even when the panel tab is in the background
+- **Panel health at a glance** — the dashboard shows one tile per panel with the last backup age, success rate and run count; tapping it opens the history pre-filtered to that panel
 - **Terminal menu** — `bkup` handles status, panel URL, password, port, logs, update and uninstall without opening the web panel
 
 ## Install
@@ -136,6 +139,16 @@ server.
 The header carries a light/dark switch next to the live indicator. Out of the box bkup follows the operating system's appearance — dark at night, light in the morning — and the switch overrides that per device, with the choice remembered across visits. Every screen is themed, including the log console, the activity chart and the restore wizard, so nothing turns into a white flash after sunset.
 
 The panel is also a **PWA**: open the browser menu and choose **Add to Home Screen** (or **Install** on desktop Chrome). bkup then launches in its own window with its own icon — no address bar, no tab hunting — which makes checking backups from a phone feel like opening a regular app.
+
+## Panel Health & Telegram Links
+
+The dashboard now answers "which panel needs attention?" before you ask. Under the stat cards sits one tile per panel showing how recent its last backup is, its success rate over the loaded history and how many runs it has — a small dot mirrors the newest run: the accent colour for success, red for failed, pulsing grey while still running. Tapping a tile jumps into the backup history with that panel's filter already applied.
+
+Rows whose backup reached Telegram also carry a **paper-plane button** that opens the exact message the file was delivered to — private chats get the `t.me/c/…` form, public chats the plain one, and the forum topic is part of the link. If the Telegram copy was deleted by auto-cleanup, the button disappears with it.
+
+## Failure Notifications
+
+A backup that fails at 3 am should tap you on the shoulder. The bell in the header opts the current browser in: from then on, any backup cycle that fails raises a native desktop notification — panel, file name and the error text — even when the panel tab sits in the background. The check keeps a quiet baseline, so reopening the panel never replays old failures, and notifications older than ten minutes are not dragged up either. Nothing leaves the server: this is the browser's own notification channel, not a cloud service.
 
 ## Terminal menu
 
