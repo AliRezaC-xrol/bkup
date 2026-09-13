@@ -12,7 +12,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Combine, Download, Trash2, UploadCloud, Inbox, Archive, Check, X } from "lucide-react";
+import { Combine, Download, Trash2, UploadCloud, Inbox, Archive, Check, X, Search, ChevronRight } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useLang } from "@/components/dashboard/lang";
 import { formatBytes } from "@/components/dashboard/types";
@@ -60,8 +60,8 @@ const BackupChoiceRow = memo(function BackupChoiceRow({
       type="button"
       onClick={() => onToggle(choice.id)}
       aria-pressed={active}
-      className={`flex w-full items-center gap-3 rounded-md border p-2.5 text-start transition-colors ${
-        active ? "border-primary bg-primary/5" : "hover:bg-muted/50"
+      className={`flex w-full items-center gap-3 rounded-md border p-2.5 text-start transition-all ${
+        active ? "border-primary bg-primary/5 shadow-sm ring-1 ring-primary/25" : "hover:bg-muted/50"
       }`}
     >
       <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${active ? "border-primary bg-primary" : "border-muted-foreground/40"}`}>
@@ -146,6 +146,30 @@ export function ReassemblyTab() {
     () => choices.reduce((n, c) => (selectedSet.has(c.id) ? n + (c.fileSize ?? 0) : n), 0),
     [choices, selectedSet]
   );
+  // picker filter: matches the file name or the panel tag, case-insensitive
+  const [query, setQuery] = useState("");
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return choices;
+    return choices.filter(
+      (c) => (c.fileName ?? `#${c.id}`).toLowerCase().includes(q) || c.panel.toLowerCase().includes(q)
+    );
+  }, [choices, query]);
+  // the exact order the parts will be merged in — decided by the part number
+  const orderedSelected = useMemo(
+    () =>
+      choices
+        .filter((c) => selectedSet.has(c.id))
+        .sort((a, b) => compareParts(a.fileName ?? "", b.fileName ?? "")),
+    [choices, selectedSet]
+  );
+  // two selected files claiming the same part number is almost always a mistake
+  const dupParts = useMemo(() => {
+    const idx = orderedSelected
+      .map((c) => (c.fileName ? parsePartIndex(c.fileName)?.index : undefined))
+      .filter((n): n is number => typeof n === "number");
+    return new Set(idx).size !== idx.length;
+  }, [orderedSelected]);
 
   const loadHistory = useCallback(async () => {
     try {
@@ -181,6 +205,11 @@ export function ReassemblyTab() {
   }, []);
 
   const clearSelection = useCallback(() => setSelectedIds([]), []);
+
+  // ticks every row that passes the current filter — existing picks are kept
+  const selectShown = useCallback(() => {
+    setSelectedIds((cur) => Array.from(new Set([...cur, ...filtered.map((c) => c.id)])));
+  }, [filtered]);
 
   const askDelete = useCallback((row: ReassembledDTO) => {
     setDeleting(row);
@@ -228,14 +257,10 @@ export function ReassemblyTab() {
     if (!selectedIds.length) return;
     setBusy(true);
     try {
-      const ordered = choices
-        .filter((c) => selectedIds.includes(c.id))
-        .sort((a, b) => compareParts(a.fileName ?? "", b.fileName ?? ""))
-        .map((c) => c.id);
       const res = await fetch("/api/reassembly", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ backupIds: ordered }),
+        body: JSON.stringify({ backupIds: orderedSelected.map((c) => c.id) }),
       });
       if (res.ok) {
         toast({ title: t("reassembled") });
@@ -287,7 +312,7 @@ export function ReassemblyTab() {
                 type="button"
                 onClick={() => setSource(s)}
                 aria-pressed={source === s}
-                className={`flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                className={`flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-2 py-1.5 text-xs font-medium transition-colors sm:px-3 ${
                   source === s ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
                 }`}
               >
@@ -325,24 +350,69 @@ export function ReassemblyTab() {
                   </button>
                 )}
               </div>
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1">
+                  <Search className="pointer-events-none absolute start-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder={t("reassembly_search_ph")}
+                    aria-label={t("reassembly_search_ph")}
+                    className="h-8 ps-8 text-xs"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={selectShown}
+                  disabled={filtered.length === 0}
+                  className="shrink-0 whitespace-nowrap rounded-md border px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {t("reassembly_select_all_shown")}
+                </button>
+              </div>
               <div className="custom-scroll max-h-72 space-y-1.5 overflow-y-auto rounded-lg border p-2">
-                {choices.map((b) => (
-                  <BackupChoiceRow key={b.id} choice={b} active={selectedSet.has(b.id)} onToggle={toggleChoice} />
-                ))}
+                {filtered.length === 0 && choices.length > 0 ? (
+                  <div className="py-6 text-center text-xs text-muted-foreground">{t("reassembly_no_match")}</div>
+                ) : (
+                  filtered.map((b) => (
+                    <BackupChoiceRow key={b.id} choice={b} active={selectedSet.has(b.id)} onToggle={toggleChoice} />
+                  ))
+                )}
               </div>
               {selectedIds.length > 0 && (
-                <div className="flex flex-wrap items-center gap-2 rounded-lg border p-3 text-xs text-muted-foreground">
-                  <span className="font-medium text-foreground">{t("reassembly_selected_backups")}:</span>
-                  <Badge variant="outline" className="text-[10px] tabular-nums">{selectedIds.length} × backup</Badge>
-                  <Badge variant="outline" className="text-[10px] tabular-nums">{formatBytes(selectedSize)}</Badge>
-                  <button
-                    type="button"
-                    onClick={clearSelection}
-                    className="ms-auto flex items-center gap-1 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-                  >
-                    <X className="h-3 w-3" />
-                    {t("reassembly_clear")}
-                  </button>
+                <div className="space-y-2 rounded-lg border p-3 text-xs text-muted-foreground">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-medium text-foreground">{t("reassembly_selected_backups")}:</span>
+                    <Badge variant="outline" className="text-[10px] tabular-nums">{selectedIds.length} × backup</Badge>
+                    <Badge variant="outline" className="text-[10px] tabular-nums">{formatBytes(selectedSize)}</Badge>
+                    {dupParts && (
+                      <Badge variant="destructive" className="text-[10px]">{t("reassembly_dup_parts")}</Badge>
+                    )}
+                    <button
+                      type="button"
+                      onClick={clearSelection}
+                      className="ms-auto flex items-center gap-1 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                    >
+                      <X className="h-3 w-3" />
+                      {t("reassembly_clear")}
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1" title={orderedSelected.map((c) => c.fileName ?? `#${c.id}`).join(" → ")}>
+                    {orderedSelected.slice(0, 10).map((c, i) => {
+                      const p = c.fileName ? parsePartIndex(c.fileName) : null;
+                      return (
+                        <span key={c.id} className="inline-flex items-center gap-1">
+                          {i > 0 && <ChevronRight className="h-3 w-3 text-muted-foreground/50" />}
+                          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-foreground/80">
+                            {p ? `P${p.index}` : (c.fileName ?? `#${c.id}`).slice(0, 12)}
+                          </span>
+                        </span>
+                      );
+                    })}
+                    {orderedSelected.length > 10 && (
+                      <span className="text-[10px] tabular-nums text-muted-foreground">+{orderedSelected.length - 10}</span>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
