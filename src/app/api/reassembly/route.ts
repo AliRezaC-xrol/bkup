@@ -6,7 +6,7 @@ import { requireAuthOrCli } from "@/lib/auth";
 import { log } from "@/lib/logger";
 import { bi } from "@/lib/messages";
 import { backupDir } from "@/lib/backup-service";
-import { compareParts, detectPanel, stripPartFromName } from "@/lib/reassembly";
+import { compareParts, detectPanel, parsePartIndex, stripPartFromName } from "@/lib/reassembly";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -20,42 +20,80 @@ export async function GET(req: NextRequest) {
 }
 
 /** Upload part files and merge them back into the one complete original backup.
- *  Also accepts JSON { backupId } to store one of the existing Backups-section
- *  files as a complete reassembled backup (the original stays untouched). */
+ *  Also accepts JSON { backupId } or { backupIds: [...] } to merge one or more
+ *  of the existing Backups-section files (the parts of the same file) into a
+ *  complete reassembled backup (the originals stay untouched). */
 export async function POST(req: NextRequest) {
   const denied = await requireAuthOrCli(req);
   if (denied) return denied;
 
-  // ── JSON mode: register an existing backup run as a reassembled file ──
+  // ── JSON mode: merge existing backup runs into one reassembled file ──
   if ((req.headers.get("content-type") || "").includes("application/json")) {
-    const body = (await req.json().catch(() => ({}))) as { backupId?: number | string };
-    const backupId = Number(body.backupId);
-    if (!backupId || backupId < 1) {
+    const body = (await req.json().catch(() => ({}))) as {
+      backupId?: number | string;
+      backupIds?: (number | string)[];
+    };
+    // { backupId } (single) and { backupIds } (parts) both accepted, ids deduped
+    const ids: number[] = [];
+    for (const raw of body.backupIds ?? [body.backupId]) {
+      const id = Number(raw);
+      if (id && id >= 1 && !ids.includes(id)) ids.push(id);
+    }
+    if (ids.length === 0) {
       return NextResponse.json({ error: "BACKUP_ID_REQUIRED" }, { status: 400 });
     }
-    const run = await db.backupRun.findUnique({ where: { id: backupId } });
-    if (!run) return NextResponse.json({ error: "BACKUP_NOT_FOUND" }, { status: 404 });
-    if (run.status !== "success" || !run.filePath) {
-      return NextResponse.json({ error: "BACKUP_NOT_COMPLETE" }, { status: 409 });
+    if (ids.length > 64) {
+      return NextResponse.json({ error: "TOO_MANY_PARTS" }, { status: 400 });
     }
-    let st: fs.Stats;
-    try {
-      st = fs.statSync(run.filePath);
-    } catch {
-      return NextResponse.json({ error: "BACKUP_FILE_GONE" }, { status: 409 });
+
+    const runs = await db.backupRun.findMany({ where: { id: { in: ids } } });
+    // verify every selected run: exists, complete, file still on disk —
+    // `usable` keeps only the verified (non-null) fields for the merge below
+    const usable: { id: number; fileName: string; filePath: string }[] = [];
+    for (const id of ids) {
+      const run = runs.find((r) => r.id === id);
+      if (!run) return NextResponse.json({ error: "BACKUP_NOT_FOUND" }, { status: 404 });
+      if (run.status !== "success" || !run.filePath) {
+        return NextResponse.json({ error: "BACKUP_NOT_COMPLETE" }, { status: 409 });
+      }
+      try {
+        fs.statSync(run.filePath);
+      } catch {
+        return NextResponse.json({ error: "BACKUP_FILE_GONE" }, { status: 409 });
+      }
+      usable.push({ id: run.id, fileName: run.fileName ?? "", filePath: run.filePath });
     }
 
     const dir = path.join(backupDir(), "reassembled");
     fs.mkdirSync(dir, { recursive: true });
-    const rawName = run.fileName || `backup-${run.id}`;
-    const base = (rawName.split(/[\\/]/).pop() || rawName).replace(/[^\w.@ -]/g, "_");
+
+    // merge order: by parsed part number when EVERY selected file carries one —
+    // never by selection order; otherwise keep the order the picker sent
+    const withParts = usable.map((r) => ({ run: r, part: parsePartIndex(r.fileName) }));
+    const ordered = withParts.every((x) => x.part)
+      ? [...withParts].sort((a, b) => compareParts(a.run.fileName, b.run.fileName))
+      : withParts;
+
+    // name: the stripped base all parts share, else the first part's own name
+    const bases = ordered.map((x) => stripPartFromName(x.run.fileName.split(/[\\/]/).pop() || ""));
+    const shared = bases[0] && bases.every((b) => b === bases[0]);
+    const rawName = (shared ? bases[0] : ordered[0].run.fileName || `backup-${ordered[0].run.id}`);
+    const base = (rawName.split(/[\\/]/).pop() || rawName).replace(/[^\w.@ -]/g, "_") || "backup";
     const outPath = path.join(dir, `${Date.now()}-${base}`);
+
+    // byte-exact merge: read every part in order and append — nothing else
+    // touches the bytes, so the result is identical to `cat` over the parts
+    let size = 0;
     try {
-      fs.copyFileSync(run.filePath, outPath);
+      for (const { run: part } of ordered) {
+        const buf = fs.readFileSync(part.filePath);
+        fs.appendFileSync(outPath, buf);
+        size += buf.length;
+      }
     } catch (e: unknown) {
       try { fs.unlinkSync(outPath); } catch { /* best-effort */ }
       return NextResponse.json(
-        { error: e instanceof Error ? e.message : "COPY_FAILED" },
+        { error: e instanceof Error ? e.message : "MERGE_FAILED" },
         { status: 500 }
       );
     }
@@ -64,14 +102,18 @@ export async function POST(req: NextRequest) {
       data: {
         name: base,
         panel: detectPanel(base),
-        parts: 1,
-        size: st.size,
+        parts: ordered.length,
+        size,
         filePath: outPath,
       },
     });
     await log("info", bi(
-      `The stored backup "${base}" was picked in the web panel and stored as one complete reassembled file`,
-      `The stored backup "${base}" was picked in the web panel and stored as one complete reassembled file`
+      ordered.length > 1
+        ? `${ordered.length} stored backup parts were picked in the web panel and merged into one complete file: ${base} (${size} bytes)`
+        : `The stored backup "${base}" was picked in the web panel and stored as one complete reassembled file (${size} bytes)`,
+      ordered.length > 1
+        ? `${ordered.length} پارت از بکاپ‌های ذخیره‌شده در پنل وب انتخاب و به یک فایل کامل چسبانده شد: ${base} (${size} بایت)`
+        : `بکاپ ذخیره‌شدهٔ "${base}" در پنل وب انتخاب و به‌صورت یک فایل کامل ذخیره شد (${size} بایت)`
     ));
     return NextResponse.json(row, { status: 201 });
   }

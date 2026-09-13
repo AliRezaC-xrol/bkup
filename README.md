@@ -10,7 +10,7 @@
 
 <img src="docs/panel-8.png" alt="bkup web panel" width="820">
 
-[Install](#install) · [First run](#first-run) · [Features](#features) · [Reassemble](#reassemble-backup-parts) · [Update](#update) · [Terminal menu](#terminal-menu) · [مستندات فارسی](README.fa.md)
+[Install](#install) · [First run](#first-run) · [Features](#features) · [Reassemble](#reassemble-backup-parts) · [Restore](#restore-to-a-remote-server) · [Update](#update) · [Terminal menu](#terminal-menu) · [Donate](#donate) · [مستندات فارسی](README.fa.md)
 
 </div>
 
@@ -37,7 +37,8 @@ same install covers anything from a few backups a day to one every few minutes.
 - **Telegram delivery** — every backup arrives as a file in your chat or channel; nothing to download by hand
 - **Your schedule** — interval in seconds, kept across reboots by the systemd service
 - **Web panel** — dashboard, live logs, backup history with per-backup download and delete
-- **Reassemble split backups** — parts delivered to Telegram are merged back into the one complete file right in the web panel, with a downloadable history
+- **Reassemble split backups** — parts delivered to Telegram are merged back into the one complete file right in the web panel, with a downloadable history; you can also pick the parts straight from your stored backups instead of uploading them
+- **Restore to any server** — push a backup (a normal run or a reassembled file) back onto a server over SSH; the panel is installed automatically if it is missing, every step streams live, and the run can be cancelled
 - **Terminal menu** — `bkup` handles status, panel URL, password, port, logs, update and uninstall without opening the web panel
 
 ## Install
@@ -81,8 +82,51 @@ Backups above 50 MB arrive in Telegram as numbered parts. Open the
 merged byte-for-byte into the original backup file. Every merge is kept in a
 history with a download and a delete button for each entry.
 
+If the parts are already sitting in the **Backups** section — for example a
+run that delivered each part as its own backup — switch the source to
+**Pick from Backups** instead, tick the parts and merge those. The picker
+marks each part with its number, shows what you have selected, and merges in
+part order no matter what order you ticked. Same byte-for-byte result,
+same history.
+
 Every panel is covered — 3x-ui, HM Panel, PasarGuard and Rebecca — because
 the parts are exact slices of the panel's own backup file.
+
+## Restore to a remote server
+
+Backups are only half the job — **Restore** is the other half. The Restore tab
+takes a file from your backup pool — a normal backup run or a file you merged
+in the Reassemble tab — and puts a panel back on its feet on any server you
+can reach over SSH.
+
+The wizard asks for the decisions in order: the target server (IP, SSH port,
+user, password or private key — tested before anything else happens), the
+panel type, optional Cloudflare DNS automation for certificate issuance, and
+the backup itself. Both sources sit in one list — files produced by backup
+runs next to files merged in Reassemble, the latter carrying a **Reassembled**
+badge so there is no guessing which is which.
+
+Before anything is written, the review screen shows the exact target, the
+exact file and the panel that will be installed. Once started, every step
+streams into the panel in real time — connecting, checking for an existing
+installation, installing the panel if it is missing, restoring the data and
+restarting the service — and you can cancel while it runs. Each attempt lands
+in a history, so you can always see what ran, when, and how it ended.
+
+All four panels are supported, and each is restored the way it actually
+stores data: 3x-ui by replacing its SQLite database, HM Panel by unpacking
+its full archive over the panel directory, and PasarGuard and Rebecca by
+replaying a complete snapshot through the panel's own API.
+
+## Donate
+
+If bkup is useful to you, a small donation helps keep it going:
+
+| Network | Address |
+|---|---|
+| **Tron (TRC20)** | `TQwEkXiBiFiQikD97iCk38eJJkQrirnwFS` |
+| **TON (Toncoin)** | `UQDPCYKMhkA9hERfhLYNXIvl1dbV0ZKf4k7quu61iehEeMb1` |
+| **Tether USD (TRC20)** | `TQwEkXiBiFiQikD97iCk38eJJkQrirnwFS` |
 
 ## Terminal menu
 
