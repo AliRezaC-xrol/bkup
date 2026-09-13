@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/banner.svg" alt="bkup — automatic panel backups to Telegram" width="640">
+<img src="docs/banner.svg" alt="bkup" width="640">
 
 **Auto backup & restore 3x-ui, HM Panel, PasarGuard, Rebecca.**
 
