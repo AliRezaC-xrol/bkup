@@ -68,7 +68,8 @@ export async function getRestoreConfig(): Promise<RestoreConfig> {
 export async function saveRestoreConfig(
   patch: Partial<Omit<RestoreConfig, "id" | "createdAt" | "updatedAt">>
 ): Promise<RestoreConfig> {
-  await getRestoreConfig();
+  const cfg = await getRestoreConfig();
+  if (Object.keys(patch).length === 0) return cfg;
   return db.restoreConfig.update({ where: { id: 1 }, data: patch });
 }
 
