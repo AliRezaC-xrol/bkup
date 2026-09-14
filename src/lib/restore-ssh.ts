@@ -18,6 +18,8 @@ export interface SshOptions {
   privateKey?: string; // PEM-encoded private key content
   passphrase?: string; // private key passphrase
   timeout?: number;     // connect timeout ms (default 20s)
+  /** Directory that holds restore-cancel.flag. Falls back to cwd()/data. */
+  cancelFlagDir?: string;
 }
 
 export interface ExecResult {
@@ -50,13 +52,22 @@ export class SshError extends Error {
 export class SshClient extends EventEmitter {
   private conn: Client | null = null;
   private connected = false;
+  private lastOpts: SshOptions | null = null;
+  private cancelFlagDir: string;
 
   get isConnected(): boolean {
     return this.connected;
   }
 
+  constructor(cancelFlagDir?: string) {
+    super();
+    this.cancelFlagDir = cancelFlagDir ?? `${process.cwd()}/data`;
+  }
+
   /** Establish an SSH connection. Throws SshError on failure. */
   async connect(opts: SshOptions): Promise<void> {
+    this.lastOpts = opts;
+    if (opts.cancelFlagDir) this.cancelFlagDir = opts.cancelFlagDir;
     const cfg: ConnectConfig = {
       host: opts.host.trim(),
       port: opts.port || 22,
@@ -186,7 +197,7 @@ export class SshClient extends EventEmitter {
       // Check for restore-cancel.flag every second to abort immediately on cancel
       const cancelCheck = setInterval(() => {
         try {
-          const flagPath = `${process.cwd()}/data/restore-cancel.flag`;
+          const flagPath = `${this.cancelFlagDir}/restore-cancel.flag`;
           if (fs.existsSync(flagPath)) {
             clearInterval(cancelCheck);
             clearTimeout(timer);
@@ -284,7 +295,7 @@ export class SshClient extends EventEmitter {
         let sent = 0;
         const cancelCheck = setInterval(() => {
           try {
-            const flagPath = `${process.cwd()}/data/restore-cancel.flag`;
+            const flagPath = `${this.cancelFlagDir}/restore-cancel.flag`;
             if (fs.existsSync(flagPath)) {
               clearInterval(cancelCheck);
               try { rs.destroy(); } catch {}
@@ -375,6 +386,15 @@ export class SshClient extends EventEmitter {
         ws.end(content);
       });
     });
+  }
+
+  /** Reconnect using the last connection options. Throws if no prior connect(). */
+  async reconnect(): Promise<void> {
+    if (!this.lastOpts) {
+      throw new SshError("Cannot reconnect — no previous connection options", "NO_OPTS");
+    }
+    this.disconnect();
+    await this.connect(this.lastOpts);
   }
 
   /** Close the SSH connection. */

@@ -235,7 +235,7 @@ export async function hmLogin(
 /** Create a full backup archive on the HMPanel host and download it. */
 export async function hmFullBackup(
   cfg: AppConfig
-): Promise<HmResult<{ buf: Buffer; fileName: string; size: number }>> {
+): Promise<HmResult<{ buf: Buffer; fileName: string; size: number; premium: boolean }>> {
   let sess = await hmLogin(cfg);
   if (!sess.ok || !sess.data) return { ok: false, error: sess.error, errorBi: sess.errorBi };
 
@@ -303,7 +303,7 @@ export async function hmFullBackup(
     const buf = Buffer.from(dl.data);
     if (buf.length === 0) return fail("The backup file was empty", "The backup file was empty");
     const fileName = id.endsWith(".tar.gz") ? id : `${id}.tar.gz`;
-    return { ok: true, data: { buf, fileName, size: buf.length } };
+    return { ok: true, data: { buf, fileName, size: buf.length, premium: Boolean(sess.data.premium) } };
   } catch (e: unknown) {
     const m = hmErrMsg(e);
     return fail(`Backup download error: ${m.en}`, `Backup download error: ${m.en}`);
