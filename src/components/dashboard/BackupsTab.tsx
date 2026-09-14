@@ -11,8 +11,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Download, Trash2, RefreshCw, Inbox, ShieldCheck, ShieldAlert, ShieldX, FileDown, Search, X, Send } from "lucide-react";
-import { firstTgMessageId, tgMessageUrl } from "@/lib/tg-link";
+import { Download, Trash2, RefreshCw, Inbox, ShieldCheck, ShieldAlert, ShieldX, FileDown, Search, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
@@ -36,32 +35,19 @@ const PANELS = [
 
 export type PanelFilter = "all" | (typeof PANELS)[number]["key"];
 
-/** Time-range filter windows. */
-type RangeKey = "all" | "24h" | "7d" | "30d";
-const RANGE_MS: Record<Exclude<RangeKey, "all">, number> = {
-  "24h": 24 * 3600_000,
-  "7d": 7 * 24 * 3600_000,
-  "30d": 30 * 24 * 3600_000,
-};
-
 export function BackupsTab({
   runs, onRefresh,
   // lifted state — lets the Dashboard panel-health tiles drill into a panel
   panelFilter: panelFilterProp, onPanelFilterChange,
-  // telegram routing info — powers the "Open in Telegram" row action
-  tgChatId = "", tgThreadId = "",
 }: {
   runs: BackupRunDTO[];
   onRefresh: () => void;
   panelFilter?: PanelFilter;
   onPanelFilterChange?: (p: PanelFilter) => void;
-  tgChatId?: string;
-  tgThreadId?: string;
 }) {
   const { t } = useLang();
   const { toast } = useToast();
   const [filter, setFilter] = useState<"all" | "success" | "failed">("all");
-  const [range, setRange] = useState<RangeKey>("all");
   // works with EITHER the lifted state (dashboard drill-down) or local state
   const [panelFilterLocal, setPanelFilterLocal] = useState<PanelFilter>("all");
   const panelFilter = panelFilterProp ?? panelFilterLocal;
@@ -90,15 +76,13 @@ export function BackupsTab({
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const cutoff = range === "all" ? 0 : Date.now() - RANGE_MS[range];
     return runs.filter(
       (r) =>
         (filter === "all" || r.status === filter) &&
         (panelFilter === "all" || r.panel === panelFilter) &&
-        (range === "all" || new Date(r.startedAt).getTime() >= cutoff) &&
         (!q || (r.fileName ?? `#${r.id}`).toLowerCase().includes(q))
     );
-  }, [runs, filter, panelFilter, query, range]);
+  }, [runs, filter, panelFilter, query]);
 
   // chip counts — reflect the loaded history window, so the numbers always
   // agree with what the table can actually show
@@ -115,30 +99,6 @@ export function BackupsTab({
     for (const r of runs) if (r.panel in base) base[r.panel as PanelFilter] += 1;
     return base;
   }, [runs]);
-
-  // time-range chips — count of runs inside each window (independent of the
-  // other chips, same convention as the status/panel counts)
-  const rangeCounts = useMemo(() => {
-    const now = Date.now();
-    const c: Record<RangeKey, number> = { all: runs.length, "24h": 0, "7d": 0, "30d": 0 };
-    for (const r of runs) {
-      const age = now - new Date(r.startedAt).getTime();
-      if (age <= RANGE_MS["24h"]) c["24h"] += 1;
-      if (age <= RANGE_MS["7d"]) c["7d"] += 1;
-      if (age <= RANGE_MS["30d"]) c["30d"] += 1;
-    }
-    return c;
-  }, [runs]);
-
-  // per-row Telegram deep link — built once per (chatId, run) pair
-  const tgUrl = useMemo(() => {
-    const m = new Map<number, string>();
-    for (const r of runs) {
-      const u = tgMessageUrl(tgChatId, tgThreadId, firstTgMessageId(r.tgMessageId, r.tgMessageIds));
-      if (u) m.set(r.id, u);
-    }
-    return m;
-  }, [runs, tgChatId, tgThreadId]);
 
   const methodLabel = (m: string | null) =>
     m === "db" ? t("method_db") : m === "json" ? t("method_json") : m === "local" ? t("method_local") : m === "hm-full" ? t("method_hm_full") : m === "pg-full" ? t("method_pg_full") : m === "rb-full" ? t("method_rb_full") : "—";
@@ -343,26 +303,6 @@ export function BackupsTab({
               </button>
             ))}
           </div>
-          <div className="flex rounded-lg border p-0.5" role="group" aria-label={t("range_aria")}>
-            {(["all", "24h", "7d", "30d"] as const).map((r) => (
-              <button
-                key={r}
-                onClick={() => setRange(r)}
-                className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
-                  range === r ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {r === "all" ? t("filter_all") : r}
-                <span
-                  className={`rounded px-1 text-[10px] tabular-nums ${
-                    range === r ? "bg-primary-foreground/20 text-primary-foreground" : "bg-muted text-muted-foreground"
-                  }`}
-                >
-                  {rangeCounts[r]}
-                </span>
-              </button>
-            ))}
-          </div>
           <div className="relative ms-auto w-full sm:w-56">
             <Search className="pointer-events-none absolute start-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -497,19 +437,6 @@ export function BackupsTab({
                           <Button variant="ghost" size="icon" className="h-7 w-7" asChild>
                             <a href={`/api/backups/${r.id}/download`} download title={t("download")}>
                               <Download className="h-3.5 w-3.5" />
-                            </a>
-                          </Button>
-                        )}
-                        {!r.tgDeleted && tgUrl.has(r.id) && (
-                          <Button variant="ghost" size="icon" className="h-7 w-7" asChild>
-                            <a
-                              href={tgUrl.get(r.id)}
-                              target="_blank"
-                              rel="noreferrer noopener"
-                              title={t("open_in_tg")}
-                              aria-label={t("open_in_tg")}
-                            >
-                              <Send className="h-3.5 w-3.5" />
                             </a>
                           </Button>
                         )}

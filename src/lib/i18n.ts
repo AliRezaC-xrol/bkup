@@ -136,20 +136,6 @@ export const dict = {
   storage_database: "Settings database",
   storage_files: "files",
 
-  // System → Storage → on-demand cleanup
-  cleanup_title: "Disk cleanup",
-  cleanup_desc: "Reclaim space now: remove orphan files left by crashed runs and enforce the retention limit without waiting for the next cycle.",
-  cleanup_btn: "Clean now",
-  cleanup_orphans: "{n} orphan file(s) · {size}",
-  cleanup_no_orphans: "No orphan files",
-  cleanup_retention_over: "{n} over retention (keep {keep}) · {size}",
-  cleanup_retention_ok: "Retention OK — keeping last {keep} per panel",
-  cleanup_retention_off: "Retention unlimited (0)",
-  cleanup_confirm_title: "Clean up disk now?",
-  cleanup_confirm_note: "Deleted files cannot be recovered. Backups already delivered to Telegram are not affected.",
-  cleanup_done_title: "Cleanup complete",
-  cleanup_done_files: "file(s) removed",
-
   // Settings → config export / import
   settings_file_title: "Settings file",
   settings_export: "Export settings",
@@ -516,20 +502,6 @@ export const dict = {
   backups_search_clear: "Clear search",
   theme_to_dark: "Switch to dark mode",
   theme_to_light: "Switch to light mode",
-
-  // telegram deep links
-  open_in_tg: "Open in Telegram",
-  tg_link_unavailable: "Telegram chat is not configured",
-
-  // browser failure notifications
-  notify_enable: "Notify on failures",
-  notify_disable: "Failure notifications are on",
-  notify_denied: "Notification permission was blocked — allow it in the browser settings",
-  notify_on: "Desktop notifications for failed backups are on",
-  notify_fail_title: "Backup failed",
-
-  // backups time-range filter
-  range_aria: "Filter by time range",
 
   // reassemble history bulk delete
   bulk_partial: "{ok} deleted, {fail} failed — see the history for what remains",

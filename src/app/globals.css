@@ -108,39 +108,42 @@ body::after {
   background: radial-gradient(circle, rgba(10, 10, 10, 0.035), transparent 65%);
 }
 
-/* Inverted variant (kept for completeness; the app boots light) */
+/* Inverted variant — soft "graphite" dark theme.
+ * Never pure black, never pure white: backgrounds sit at ~9% lightness so
+ * AMOLED halation and text glare stay low; text tops out at ~89% so contrast
+ * is comfortable for long sessions. */
 .dark {
-  --background: #0a0a0a;
-  --foreground: #fafafa;
-  --card: #141414;
-  --card-foreground: #fafafa;
-  --popover: #141414;
-  --popover-foreground: #fafafa;
-  --primary: #fafafa;
-  --primary-foreground: #0a0a0a;
-  --secondary: #1f1f1f;
-  --secondary-foreground: #fafafa;
-  --muted: #1f1f1f;
-  --muted-foreground: #a3a3a3;
-  --accent: #262626;
-  --accent-foreground: #fafafa;
-  --destructive: #ef4444;
-  --border: #262626;
-  --input: #262626;
-  --ring: #fafafa;
-  --chart-1: #fafafa;
-  --chart-2: #a3a3a3;
-  --chart-3: #737373;
-  --chart-4: #404040;
-  --chart-5: #ef4444;
-  --sidebar: #0f0f0f;
-  --sidebar-foreground: #fafafa;
-  --sidebar-primary: #fafafa;
-  --sidebar-primary-foreground: #0a0a0a;
-  --sidebar-accent: #262626;
-  --sidebar-accent-foreground: #fafafa;
-  --sidebar-border: #262626;
-  --sidebar-ring: #fafafa;
+  --background: #161619;
+  --foreground: #e2e2e6;
+  --card: #1d1d21;
+  --card-foreground: #e2e2e6;
+  --popover: #212126;
+  --popover-foreground: #e2e2e6;
+  --primary: #dcdce1;
+  --primary-foreground: #1a1a1e;
+  --secondary: #26262b;
+  --secondary-foreground: #dcdce1;
+  --muted: #26262b;
+  --muted-foreground: #a5a5af;
+  --accent: #2b2b31;
+  --accent-foreground: #e2e2e6;
+  --destructive: #e5484d;
+  --border: #2a2a30;
+  --input: #2a2a30;
+  --ring: #8e8e98;
+  --chart-1: #e2e2e6;
+  --chart-2: #a5a5af;
+  --chart-3: #74747e;
+  --chart-4: #4a4a52;
+  --chart-5: #e5484d;
+  --sidebar: #131316;
+  --sidebar-foreground: #e2e2e6;
+  --sidebar-primary: #dcdce1;
+  --sidebar-primary-foreground: #1a1a1e;
+  --sidebar-accent: #2b2b31;
+  --sidebar-accent-foreground: #e2e2e6;
+  --sidebar-border: #2a2a30;
+  --sidebar-ring: #8e8e98;
 }
 
 /* UI font — English-only panel */
@@ -171,6 +174,22 @@ body {
 }
 .custom-scroll::-webkit-scrollbar-thumb:hover {
   background: #0a0a0a;
+}
+
+/* Dark-mode corner washes — faint light glow instead of black-on-black */
+.dark body::before {
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.045), transparent 65%);
+}
+.dark body::after {
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.03), transparent 65%);
+}
+
+/* Dark scrollbar — visible but gentle */
+.dark .custom-scroll::-webkit-scrollbar-thumb {
+  background: #3a3a41;
+}
+.dark .custom-scroll::-webkit-scrollbar-thumb:hover {
+  background: #5a5a63;
 }
 
 @keyframes pulse-dot {
