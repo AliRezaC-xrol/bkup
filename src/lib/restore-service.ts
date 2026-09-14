@@ -3,7 +3,7 @@ import path from "node:path";
 import { db } from "@/lib/db";
 import { log } from "@/lib/logger";
 import { bi } from "@/lib/messages";
-import { SshClient, type SshOptions } from "@/lib/restore-ssh";
+import { SshClient, SshError, type SshOptions } from "@/lib/restore-ssh";
 import {
   getRestoreConfig,
   getInstallScript,
@@ -1766,7 +1766,7 @@ async function runRestoreAsync(
   backup: { filePath: string; fileName: string; panel: PanelId },
   state: RestoreState
 ): Promise<void> {
-  const ssh = new SshClient();
+  const ssh = new SshClient(dataDir());
   const cfg = await getRestoreConfig();
   const installNode = req.installNode ?? false;
   const multiDomains = normalizeDomains(req.sslDomain, req.sslDomains);
@@ -1920,11 +1920,49 @@ async function runRestoreAsync(
     writeStateFile(state);
 
     const remotePath = `/tmp/bkup-restore-${Date.now()}-${backup.fileName.replace(/[^\w.@-]/g, "_")}`;
-    await ssh.uploadFile(backup.filePath, remotePath, (sent, total) => {
-      const pct = total > 0 ? Math.round((sent / total) * 100) : 0;
-      markStep(state.steps, "upload_backup", "running", `Uploading... ${pct}%`);
-      writeStateFile(state);
-    });
+
+    // Upload with one automatic reconnect on transient SSH errors
+    let uploadAttempts = 0;
+    const maxUploadAttempts = 2;
+    let uploadSucceeded = false;
+    let lastProgressReport = 0;
+    while (uploadAttempts < maxUploadAttempts && !uploadSucceeded) {
+      uploadAttempts++;
+      try {
+        await ssh.uploadFile(backup.filePath, remotePath, (sent, total) => {
+          const pct = total > 0 ? Math.round((sent / total) * 100) : 0;
+          const now = Date.now();
+          // Throttle progress writes to at most once per 2 seconds
+          if (now - lastProgressReport >= 2000 || pct === 100) {
+            lastProgressReport = now;
+            markStep(state.steps, "upload_backup", "running", `Uploading... ${pct}%`);
+            writeStateFile(state);
+          }
+        });
+        uploadSucceeded = true;
+      } catch (uploadErr) {
+        const errMsg = uploadErr instanceof Error ? uploadErr.message : String(uploadErr);
+        const isTransient = uploadErr instanceof SshError && (
+          uploadErr.code === "NOT_CONNECTED" ||
+          uploadErr.code === "EUPLOAD" ||
+          uploadErr.code === "ESFTP"
+        );
+        if (isTransient && uploadAttempts < maxUploadAttempts) {
+          markStep(state.steps, "upload_backup", "running", `Connection lost, reconnecting... (attempt ${uploadAttempts}/${maxUploadAttempts})`);
+          writeStateFile(state);
+          await log("warn", bi(`[Restore] SSH disconnect during upload, reconnecting (attempt ${uploadAttempts})...`, `[Restore] SSH disconnect during upload, reconnecting...`));
+          try {
+            await ssh.reconnect();
+            // Remove partial file before retry
+            try { await ssh.exec(`rm -f '${remotePath}'`); } catch {}
+          } catch (reconnErr) {
+            throw new Error(`Upload failed — could not reconnect: ${reconnErr instanceof Error ? reconnErr.message : String(reconnErr)}`);
+          }
+        } else {
+          throw uploadErr;
+        }
+      }
+    }
 
     const localSize = fs.statSync(backup.filePath).size;
     const remoteCheck = await ssh.exec(`ls -lh '${remotePath}' 2>&1; stat -c %s '${remotePath}' 2>/dev/null || wc -c < '${remotePath}' 2>/dev/null || echo 0`);
@@ -1944,7 +1982,24 @@ async function runRestoreAsync(
     state.currentStepKey = "restore";
     writeStateFile(state);
 
-    const restoreResult = await restoreFromRemotePath(ssh, req.panel, remotePath, backup.fileName, backup.filePath);
+    // Wrap the restore command with reconnect on transient SSH failure
+    let restoreResult: { success: boolean; detail: string };
+    try {
+      restoreResult = await restoreFromRemotePath(ssh, req.panel, remotePath, backup.fileName, backup.filePath);
+    } catch (restoreErr) {
+      const isTransient = restoreErr instanceof SshError && (
+        restoreErr.code === "NOT_CONNECTED" || restoreErr.code === "EEXEC" || restoreErr.code === "ESTREAM"
+      );
+      if (isTransient) {
+        markStep(state.steps, "restore", "running", "Connection lost, reconnecting...");
+        writeStateFile(state);
+        await log("warn", bi(`[Restore] SSH disconnect during restore, reconnecting...`, `[Restore] SSH disconnect during restore, reconnecting...`));
+        await ssh.reconnect();
+        restoreResult = await restoreFromRemotePath(ssh, req.panel, remotePath, backup.fileName, backup.filePath);
+      } else {
+        throw restoreErr;
+      }
+    }
 
     try {
       await ssh.exec(`rm -f '${remotePath}'`);
@@ -2020,14 +2075,46 @@ async function runRestoreAsync(
     state.currentStepKey = "verify";
     writeStateFile(state);
 
-    await ssh.exec("sleep 3");
-    const verifyCmd =
-      req.panel === "3x-ui"
-        ? "systemctl is-active x-ui 2>/dev/null || pgrep -f x-ui 2>/dev/null && echo active || echo inactive"
-        : `docker ps --format "{{.Names}}" 2>/dev/null | grep -i ${req.panel} || systemctl is-active ${req.panel} 2>/dev/null || echo "active"`;
+    await ssh.exec("sleep 5");
+
+    // Robust verification for all 4 panel types
+    // Uses multiple fallback checks: docker, systemctl, process, and port check
+    const verifyCmd = `check_panel_running() {
+  local panel="$1"
+  # Docker container running?
+  if docker ps --format "{{.Names}}" 2>/dev/null | grep -qi "$panel"; then
+    echo "docker_running"
+    return 0
+  fi
+  # Systemd service active?
+  if systemctl is-active "$panel" 2>/dev/null | grep -q "^active$"; then
+    echo "systemd_active"
+    return 0
+  fi
+  # Process running by name?
+  if pgrep -f "$panel" >/dev/null 2>&1; then
+    echo "process_running"
+    return 0
+  fi
+  # Panel-specific port checks
+  if [ "$panel" = "3x-ui" ]; then
+    if ss -tlnp 2>/dev/null | grep -q ":2053\b" || ss -tlnp 2>/dev/null | grep -q ":54321\b" || ss -tlnp 2>/dev/null | grep -q "x-ui"; then
+      echo "port_active"
+      return 0
+    fi
+  fi
+  echo "not_running"
+  return 1
+}
+check_panel_running "${req.panel}"`;
 
     const verifyRes = await ssh.exec(verifyCmd);
-    const isOk = verifyRes.stdout.trim().length > 0 && !verifyRes.stdout.includes("inactive") && !verifyRes.stdout.includes("NOT_RUNNING");
+    const verifyOutput = verifyRes.stdout.trim();
+    const isOk = verifyRes.exitCode === 0 ||
+      verifyOutput.includes("docker_running") ||
+      verifyOutput.includes("systemd_active") ||
+      verifyOutput.includes("process_running") ||
+      verifyOutput.includes("port_active");
 
     markStep(state.steps, "verify", "done", isOk ? "Verification passed — panel is running" : "Restore completed — verification is best-effort");
     state.status = "success";

@@ -13,7 +13,7 @@ export function parsePartIndex(name: string): { index: number; total: number } |
 
 /** Strip the ".partNNofMM" segment from a part name -> the original file name. */
 export function stripPartFromName(name: string): string {
-  const stripped = name.replace(/\.part\d+(?:of\d+)?(?=\.[^.]+$|$)/i, "");
+  const stripped = name.replace(/\.part\d+(?:of\d+)?(?=\.[^.]+$|\.[^.]+\.[^.]+$|$)/i, "");
   return stripped || name;
 }
 
