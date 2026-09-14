@@ -1012,7 +1012,6 @@ async function restore3xUiJson(ssh: SshClient, localPath: string): Promise<{ suc
   const apply = await ssh.exec(`sqlite3 '${dbPath}' < '${remoteSql}' 2>&1; echo APPLY_EXIT:$?`);
   try { await ssh.exec(`rm -f '${remoteSql}'`); } catch { /* ignore */ }
 
-  await ssh.exec('/usr/local/x-ui/x-ui setting -listenIP "0.0.0.0" 2>/dev/null || true; chmod +x /usr/local/x-ui/x-ui /usr/local/x-ui/bin/xray* 2>/dev/null || true; chmod +x /usr/bin/x-ui 2>/dev/null || true');
   await ssh.exec("systemctl enable x-ui 2>/dev/null || true; systemctl daemon-reload 2>/dev/null || true");
   await ssh.exec("systemctl restart x-ui 2>/dev/null || systemctl start x-ui 2>/dev/null || /usr/local/x-ui/x-ui restart 2>&1 || true; sleep 6");
 
@@ -1140,21 +1139,9 @@ async function restore3xUi(ssh: SshClient, remoteBackupPath: string, backupName:
     "rm -f /etc/x-ui/x-ui.db-wal /etc/x-ui/x-ui.db-shm /etc/x-ui/x-ui.db-journal 2>/dev/null; chmod 644 /etc/x-ui/x-ui.db; chown root:root /etc/x-ui/x-ui.db 2>/dev/null || true"
   );
 
-  await ssh.exec("/usr/local/x-ui/x-ui migrate 2>&1 || true; sleep 1");
-
-  await ssh.exec(`
-    set -e
-    echo "Checking cert settings..."
-    /usr/local/x-ui/x-ui setting -show 2>&1 | head -20 || true
-    WEB_CERT=$(/usr/local/x-ui/x-ui setting -show 2>/dev/null | grep -E "webCert|cert:" | awk -F': ' '{print $2}' | tr -d '[:space:]' | head -1 || true)
-    if [ -n "$WEB_CERT" ] && [ "$WEB_CERT" != '""' ] && [ ! -f "$WEB_CERT" ]; then
-      echo "Cert $WEB_CERT missing — resetting to HTTP"
-      /usr/local/x-ui/x-ui cert -webCert "" -webCertKey "" 2>&1 || true
-    fi
-    /usr/local/x-ui/x-ui setting -listenIP "0.0.0.0" 2>&1 || true
-    chmod +x /usr/local/x-ui/x-ui /usr/local/x-ui/bin/xray* 2>/dev/null || true
-    chmod +x /usr/bin/x-ui 2>/dev/null || true
-  `);
+  // DO NOT run x-ui migrate — it modifies the backup database schema
+  // and corrupts inbounds. The backup must be restored exactly as-is.
+  // DO NOT change cert settings or listenIP — those belong to the backup.
 
   await ssh.exec("systemctl enable x-ui 2>/dev/null || true; systemctl daemon-reload 2>/dev/null || true");
   await ssh.exec("systemctl restart x-ui 2>/dev/null || systemctl start x-ui 2>/dev/null || /usr/local/x-ui/x-ui restart 2>&1 || true");
