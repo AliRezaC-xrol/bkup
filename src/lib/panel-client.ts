@@ -195,7 +195,16 @@ export async function getJsonExport(
   const ax = axiosFor(cfg);
   const headers = authHeaders(cfg, session);
   try {
-    const inb = await ax.get(`${base}/panel/api/inbounds/list`, { headers });
+    let inb = await ax.get(`${base}/panel/api/inbounds/list`, { headers });
+    // Retry once on auth failure — session may have expired
+    if (inb.status === 401 || inb.status === 404) {
+      invalidateSession();
+      const relogin = await login(cfg, true);
+      if (relogin.ok) {
+        const newHeaders = authHeaders(cfg, relogin.data!);
+        inb = await ax.get(`${base}/panel/api/inbounds/list`, { headers: newHeaders });
+      }
+    }
     if (inb.status !== 200 || inb.data?.success !== true) {
       return fail(`Fetching inbounds failed (HTTP ${inb.status})`, `Fetching inbounds failed (HTTP ${inb.status})`);
     }
