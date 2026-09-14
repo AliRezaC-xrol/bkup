@@ -14,7 +14,6 @@ import { useLang } from "@/components/dashboard/lang";
 import { TimeAgo } from "@/components/dashboard/TimeAgo";
 import type { AppConfigDTO, BackupRunDTO, StatusDTO, SystemInfoDTO } from "@/components/dashboard/types";
 import { formatBytes } from "@/components/dashboard/types";
-import { firstTgMessageId, tgMessageUrl } from "@/lib/tg-link";
 
 function countdown(nextRunAt: number | null): string {
   if (!nextRunAt) return "—";
@@ -270,11 +269,6 @@ export function DashboardHome({
           ) : (
             <div className="divide-y">
               {runs.slice(0, 5).map((r) => {
-                const tg = tgMessageUrl(
-                  config?.telegramChatId ?? "",
-                  config?.telegramThreadId ?? "",
-                  firstTgMessageId(r.tgMessageId, r.tgMessageIds)
-                );
                 return (
                   <div key={r.id} className="flex items-center gap-3 py-2.5 text-sm">
                     <span
@@ -292,18 +286,6 @@ export function DashboardHome({
                     <Badge variant="outline" className="shrink-0 text-[10px] tabular-nums">
                       {formatBytes(r.fileSize)}
                     </Badge>
-                    {!r.tgDeleted && tg && (
-                      <a
-                        href={tg}
-                        target="_blank"
-                        rel="noreferrer noopener"
-                        title={t("open_in_tg")}
-                        aria-label={t("open_in_tg")}
-                        className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                      >
-                        <Send className="h-3.5 w-3.5" />
-                      </a>
-                    )}
                   </div>
                 );
               })}

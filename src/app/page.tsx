@@ -17,7 +17,6 @@ import type {
   AppConfigDTO, AppLogDTO, BackupRunDTO, StatusDTO, SystemInfoDTO,
 } from "@/components/dashboard/types";
 import { resolveText } from "@/lib/messages";
-import { notifyEnabled } from "@/components/dashboard/NotifyBell";
 
 /** Fill {placeholders} in a dict template. */
 function tr(tpl: string, params: Record<string, string | number>): string {
@@ -149,52 +148,6 @@ function App() {
     const id = setInterval(load, 2000);
     return () => { alive = false; clearInterval(id); };
   }, [phase, tab, logCursor]);
-
-  // ── desktop notifications: watch for NEW failed runs (8s, all tabs) ──
-  // The first load only records a BASELINE (max failed id) so reopening the
-  // panel never replays old failures; afterwards every unseen failed run
-  // from the last 10 minutes raises a system notification — no catch-up
-  // storm after a long-closed tab.
-  const lastSeenFail = useRef<number | null>(null);
-  const watchFailures = useCallback(async () => {
-    try {
-      const d = await fetch("/api/backups?limit=10", { cache: "no-store" })
-        .then((r) => (r.ok ? r.json() : null));
-      if (!Array.isArray(d)) return;
-      const fails = (d as BackupRunDTO[]).filter((r) => r.status === "failed");
-      const maxId = fails.reduce((m, r) => Math.max(m, r.id), 0);
-      if (lastSeenFail.current === null) {
-        lastSeenFail.current = maxId; // baseline — stay quiet
-        return;
-      }
-      const fresh = fails.filter((r) => r.id > lastSeenFail.current!);
-      if (maxId > lastSeenFail.current) lastSeenFail.current = maxId;
-      if (fresh.length === 0 || !notifyEnabled()) return;
-      if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
-      for (const r of fresh.slice(0, 3)) {
-        if (Date.now() - new Date(r.startedAt).getTime() > 10 * 60_000) continue;
-        const detail = r.error ? ` — ${resolveText(r.error, "en").slice(0, 140)}` : "";
-        try {
-          const note = new Notification(t("notify_fail_title"), {
-            body: `${r.panel} · ${r.fileName ?? `#${r.id}`}${detail}`,
-            icon: "/icons/icon-192.png",
-            tag: `bkup-fail-${r.id}`, // one notification per run, replaces dupes
-          });
-          note.onclick = () => {
-            window.focus();
-            note.close();
-          };
-        } catch { /* engines that require a service worker — silently skip */ }
-      }
-    } catch { /* transient */ }
-  }, [t]);
-
-  useEffect(() => {
-    if (phase !== "app") return;
-    watchFailures();
-    const id = setInterval(watchFailures, 8000);
-    return () => clearInterval(id);
-  }, [phase, watchFailures]);
 
   // ── actions ───────────────────────────────────────────────────
   const persistEnabled = useCallback(
@@ -376,8 +329,6 @@ function App() {
         <BackupsTab
           runs={runs}
           onRefresh={loadRuns}
-          tgChatId={config?.telegramChatId ?? ""}
-          tgThreadId={config?.telegramThreadId ?? ""}
         />
       )}
       {tab === "reassembly" && <ReassemblyTab />}
