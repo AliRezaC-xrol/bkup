@@ -61,7 +61,7 @@ export async function runBackup(trigger: "auto" | "manual"): Promise<CycleResult
     const skipMsg = bi("The previous run is still in progress — this cycle was skipped", "The previous run is still in progress — this cycle was skipped");
     const skip: BackupOutcome = {
       runId: -1,
-      panel: "3x-ui",
+      panel: "all",
       status: "skipped",
       error: skipMsg.fa,
       errorBi: skipMsg,

@@ -284,6 +284,7 @@ function buildAcmeMultiDomainSnippet(panelType: PanelId, domains: string[]): str
   const restArgs = domains.slice(1).map((d) => `-d ${d}`).join(" ");
   return `
 echo "[bkup] Multi-domain SSL requested: ${domains.join(", ")}"
+set -o pipefail
 if [ ! -f ~/.acme.sh/acme.sh ]; then
   echo "[bkup] Installing acme.sh..."
   curl -s https://get.acme.sh | sh || wget -O - https://get.acme.sh | sh || true
@@ -598,7 +599,9 @@ echo "[bkup] Rebecca installer done"
       },
     });
     exitCode = res.exitCode;
-    installOutput = res.stdout + res.stderr + installOutput;
+    // res.stdout/res.stderr are the same data streamed via onStdout/onStderr
+    // callbacks above, so just use installOutput (already accumulated)
+    installOutput = installOutput || res.stdout + res.stderr;
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     try {
@@ -802,7 +805,9 @@ bash /tmp/rebecca-node-install.sh install
         if (snippet) onProgress?.(snippet);
       },
     });
-    output = res.stdout + res.stderr + output;
+    // res.stdout/res.stderr are the same data streamed via onStdout/onStderr
+    // callbacks above, so just use output (already accumulated)
+    output = output || res.stdout + res.stderr;
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     try {
@@ -816,6 +821,31 @@ bash /tmp/rebecca-node-install.sh install
   } catch {}
 
   await ssh.exec("sleep 5");
+
+  // Verify the node was actually installed (service running or binary exists)
+  let nodeOk = false;
+  if (panel === "pasarguard") {
+    const probe = await ssh.exec(
+      'docker ps --format "{{.Names}}" 2>/dev/null | grep -qi "pasarguard.*node\\|pg-node\\|pasarguard-node" && echo NODE_OK || ' +
+      '(systemctl is-active pg-node 2>/dev/null | grep -q active && echo NODE_OK) || ' +
+      '(test -x /usr/local/bin/pg-node 2>/dev/null && echo NODE_OK) || echo NODE_MISSING'
+    );
+    nodeOk = probe.stdout.includes("NODE_OK");
+  } else if (panel === "rebecca") {
+    const probe = await ssh.exec(
+      'docker ps --format "{{.Names}}" 2>/dev/null | grep -qi "rebecca.*node\\|rebecca-node" && echo NODE_OK || ' +
+      '(systemctl is-active rebecca-node 2>/dev/null | grep -q active && echo NODE_OK) || ' +
+      '(test -x /usr/local/bin/rebecca-node 2>/dev/null && echo NODE_OK) || echo NODE_MISSING'
+    );
+    nodeOk = probe.stdout.includes("NODE_OK");
+  }
+
+  if (!nodeOk) {
+    return {
+      success: false,
+      detail: `${panelName} node installer ran but the node service/binary was not detected after install. Output: ${output.slice(-500)}`,
+    };
+  }
 
   return { success: true, detail: `${panelName} node installed successfully` };
 }
@@ -1236,6 +1266,7 @@ async function restoreHmpanel(ssh: SshClient, remoteBackupPath: string, backupNa
         if (hasDbFile) {
           const fastRestore = await ssh.exec(`
             set -e
+            set -o pipefail
             cd ${hmDir}
             SQL_FILE='${sqlFile}'
             echo "[bkup] Fast restore: stopping panel-app..."
@@ -1270,7 +1301,12 @@ async function restoreHmpanel(ssh: SshClient, remoteBackupPath: string, backupNa
             docker exec $PG_CONT psql -U $DB_USER -d postgres -c "DROP DATABASE IF EXISTS panel_db WITH (FORCE);" 2>/dev/null || docker exec $PG_CONT psql -U $DB_USER -d postgres -c "DROP DATABASE IF EXISTS panel_db;" 2>/dev/null || true
             docker exec $PG_CONT psql -U $DB_USER -d postgres -c "CREATE DATABASE panel_db OWNER \\"$DB_USER\\";" 2>/dev/null || true
             echo "[bkup] Loading data into panel_db..."
-            cat /tmp/hm-restore.sql | docker exec -i $PG_CONT psql -U $DB_USER -d panel_db 2>&1 | tail -30
+            PSQL_OUTPUT=$(cat /tmp/hm-restore.sql | docker exec -i $PG_CONT psql -U $DB_USER -d panel_db 2>&1)
+            PSQL_EXIT=$?
+            echo "$PSQL_OUTPUT" | tail -30
+            if [ $PSQL_EXIT -ne 0 ]; then
+              echo "[bkup] WARNING: psql exited with code $PSQL_EXIT — restore may be incomplete"
+            fi
             echo "[bkup] Verifying..."
             if docker exec $PG_CONT psql -U $DB_USER -d panel_db -tAc 'SELECT COUNT(*) FROM "Admin"' >/dev/null 2>&1; then
               echo "FAST_RESTORE_DONE"
@@ -1767,7 +1803,12 @@ async function runRestoreAsync(
   state: RestoreState
 ): Promise<void> {
   const ssh = new SshClient(dataDir());
-  const cfg = await getRestoreConfig();
+  let cfg: RestoreConfig | null = null;
+  try {
+    cfg = await getRestoreConfig();
+  } catch (cfgErr) {
+    console.error("[restore] failed to load restore config, using defaults:", cfgErr);
+  }
   const installNode = req.installNode ?? false;
   const multiDomains = normalizeDomains(req.sslDomain, req.sslDomains);
 
