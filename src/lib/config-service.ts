@@ -84,7 +84,11 @@ export async function getConfig(): Promise<AppConfig> {
 export async function saveConfig(
   patch: Partial<Omit<BackupConfig, "id" | "createdAt" | "updatedAt">>
 ): Promise<AppConfig> {
-  await getConfig();
+  const cfg = await getConfig();
+  // Skip the DB write when there is nothing to update — Prisma's @updatedAt
+  // bumps on every update() call, even with an empty data object, which makes
+  // the "last updated" timestamp in the UI always show "now".
+  if (Object.keys(patch).length === 0) return cfg;
   return db.backupConfig.update({ where: { id: 1 }, data: patch });
 }
 
