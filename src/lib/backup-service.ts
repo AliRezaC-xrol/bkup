@@ -159,7 +159,12 @@ async function runPanelBackup(
       fileName = hm.data.fileName;
       method = "hm-full";
       // Persist the freshly-detected premium status so the UI stays current
-      try { await db.backupConfig.update({ where: { id: 1 }, data: { hmPremium: hm.data.premium } }); } catch { /* best-effort */ }
+      // Only write when the value actually changed — Prisma @updatedAt bumps on every update()
+      try {
+        if (cfg.hmPremium !== hm.data.premium) {
+          await db.backupConfig.update({ where: { id: 1 }, data: { hmPremium: hm.data.premium } });
+        }
+      } catch { /* best-effort */ }
     } else if (panel === "pasarguard") {
       // ── PasarGuard: FULL logical snapshot via official API (users + hosts +
       //    nodes + cores + groups + settings + templates) packed as tar.gz ──

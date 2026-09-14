@@ -47,13 +47,14 @@ const DEFAULTS: Omit<BackupConfig, "id" | "createdAt" | "updatedAt"> = {
  * Idempotent: only fires while hmUrl is still empty.
  */
 async function migrateLegacy(cfg: BackupConfig): Promise<BackupConfig> {
-  if (cfg.panelType !== "hmpanel" || cfg.hmUrl.trim() !== "" || !cfg.panelUrl.trim()) {
+  if (cfg.hmUrl.trim() !== "" || !cfg.panelUrl.trim()) {
     return cfg;
   }
   try {
     const migrated = await db.backupConfig.update({
       where: { id: cfg.id },
       data: {
+        panelType: "3x-ui",
         hmUrl: cfg.panelUrl,
         hmUsername: cfg.panelUsername,
         hmPassword: cfg.panelPassword,
@@ -64,7 +65,7 @@ async function migrateLegacy(cfg: BackupConfig): Promise<BackupConfig> {
     await log("info", bi("HMPanel settings were migrated from the previous version to the dedicated panel card", "HMPanel settings were migrated from the previous version to the dedicated panel card"));
     return migrated;
   } catch {
-    return cfg; // non-fatal — next call retries
+    return cfg;
   }
 }
 
