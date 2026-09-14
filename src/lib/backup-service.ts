@@ -298,7 +298,12 @@ function verifyArchive(fileName: string, buf: Buffer): { ok: true } | { ok: fals
   // a JSON error body or an HTML error page must never be stored/sent as a backup
   const looksJson = head[0] === 0x7b || head[0] === 0x5b;
   const looksHtml = head[0] === 0x3c;
-  const isPlaintextFormat = lower.endsWith(".json") || lower.endsWith(".db");
+  // .db files must be real SQLite — check the magic header "SQLite format 3\000"
+  const isSqlite = buf.length >= 16 && buf.subarray(0, 15).toString("ascii") === "SQLite format 3";
+  if (lower.endsWith(".db") && !isSqlite) {
+    return fail("The backup file claims to be a database but is not a valid SQLite file", "The backup file claims to be a database but is not a valid SQLite file");
+  }
+  const isPlaintextFormat = lower.endsWith(".json") || (lower.endsWith(".db") && isSqlite);
   if (!isGzip && !isZip && !isPlaintextFormat && (looksJson || looksHtml)) {
     return fail("The panel answered with an error message instead of the backup file", "The panel answered with an error message instead of the backup file");
   }

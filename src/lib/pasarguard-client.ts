@@ -149,10 +149,10 @@ interface PgSection {
 
 const SECTIONS: PgSection[] = [
   { name: "system", path: "/api/system", required: false },
-  { name: "settings", path: "/api/settings", required: false },
+  { name: "settings", path: "/api/settings", required: true },
   { name: "hosts", path: "/api/hosts", required: true },
-  { name: "nodes", path: "/api/nodes", required: false },
-  { name: "cores", path: "/api/cores", required: false },
+  { name: "nodes", path: "/api/nodes", required: true },
+  { name: "cores", path: "/api/cores", required: true },
   { name: "groups", path: "/api/groups", required: true },
   { name: "client_templates", path: "/api/client_templates", required: false },
   { name: "admins", path: "/api/admins", required: false }, // superadmin-only on some installs
