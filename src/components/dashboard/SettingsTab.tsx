@@ -250,6 +250,10 @@ export function SettingsTab({ config, onSaved, onPasswordChanged }: Props) {
       const data = await res.json();
       if (data.ok) {
         toast({ title: t("test_panel"), description: resolveText(data.messageBi ?? data.message, "en") });
+        // Update hmPremium badge immediately from the detected edition
+        if (panel === "hmpanel" && typeof data.hmPremium === "boolean") {
+          setForm((f) => f ? { ...f, hmPremium: data.hmPremium } : f);
+        }
         // test+save persisted values — refresh parent state
         const cfgRes = await fetch("/api/config");
         if (cfgRes.ok) onSaved(await cfgRes.json());

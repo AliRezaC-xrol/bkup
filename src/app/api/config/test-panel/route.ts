@@ -85,6 +85,7 @@ export async function POST(req: NextRequest) {
       const prem = (res.data!.premium ? " — Premium edition" : " — Free edition");
       return NextResponse.json({
         ok: true,
+        hmPremium: Boolean(res.data!.premium),
         ...okMsg(bi(`Connected to HMPanel successfully (${res.data!.username} @ ${res.data!.base}${v})${prem} — a full archive (database + config + uploads) will be pulled on the next cycle`, `Connected to HMPanel successfully (${res.data!.username} @ ${res.data!.base}${v})${prem} — a full archive (database + config + uploads) will be pulled on the next cycle`)),
       });
     }
