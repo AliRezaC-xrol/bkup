@@ -295,7 +295,26 @@ export async function hmFullBackup(
       responseType: "arraybuffer",
     });
     if (dl.status === 401 || dl.status === 403) {
-      return fail("Backup download was not allowed (SUPER_ADMIN access required)", "Backup download was not allowed (SUPER_ADMIN access required)");
+      // Token may have expired between creation and download — re-login once
+      hmInvalidateSession();
+      sess = await hmLogin(cfg, true);
+      if (!sess.ok || !sess.data) return { ok: false, error: sess.error, errorBi: sess.errorBi };
+      try {
+        const dl2 = await dax.get(`${sess.data.base}/backups/${encodeURIComponent(id)}/download`, {
+          params: { token: sess.data.token },
+          responseType: "arraybuffer",
+        });
+        if (dl2.status >= 300) {
+          return fail(`Downloading the backup file failed (HTTP ${dl2.status})`, `Downloading the backup file failed (HTTP ${dl2.status})`);
+        }
+        const buf = Buffer.from(dl2.data);
+        if (buf.length === 0) return fail("The backup file was empty", "The backup file was empty");
+        const fileName = id.endsWith(".tar.gz") ? id : `${id}.tar.gz`;
+        return { ok: true, data: { buf, fileName, size: buf.length, premium: Boolean(sess.data.premium) } };
+      } catch (e2: unknown) {
+        const m2 = hmErrMsg(e2);
+        return fail(`Backup download error after re-login: ${m2.en}`, `Backup download error after re-login: ${m2.en}`);
+      }
     }
     if (dl.status >= 300) {
       return fail(`Downloading the backup file failed (HTTP ${dl.status})`, `Downloading the backup file failed (HTTP ${dl.status})`);
