@@ -18,7 +18,9 @@ export async function POST(req: NextRequest) {
   const body = (await req.json().catch(() => ({}))) as { action?: string; force?: boolean };
 
   if (body.action === "check") {
-    const latest = await fetchLatestFromGithub();
+    // force=true → a manual check always asks GitHub, never the 5-minute cache,
+    // so the panel really re-checks instead of echoing the previous value.
+    const latest = await fetchLatestFromGithub(true);
     const info = await getSystemInfo();
     return NextResponse.json({ ok: true, latest, updateAvailable: info.updateAvailable });
   }

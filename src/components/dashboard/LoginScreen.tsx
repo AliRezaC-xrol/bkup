@@ -67,26 +67,17 @@ export function LoginScreen({
       <div className="absolute end-4 top-4 z-10">
         <ThemeToggle />
       </div>
-      {/* monochrome backdrop: soft neutral washes + faint grid */}
-      <div
-        className="pointer-events-none absolute inset-0"
-        style={{
-          background:
-            "radial-gradient(600px 420px at 12% -5%, rgba(10,10,10,0.06), transparent 65%), radial-gradient(700px 520px at 95% 108%, rgba(10,10,10,0.045), transparent 65%)",
-        }}
-      />
-      <div
-        className="pointer-events-none absolute inset-0 opacity-[0.045]"
-        style={{
-          backgroundImage:
-            "linear-gradient(to right, #0a0a0a 1px, transparent 1px), linear-gradient(to bottom, #0a0a0a 1px, transparent 1px)",
-          backgroundSize: "36px 36px",
-        }}
-      />
+      {/* monochrome backdrop: soft neutral washes + faint grid.
+          The palette lives in globals.css (`.login-backdrop` / `.login-grid`):
+          dark ink washes on the light theme, faint light washes on the dark
+          theme — before this the ink-only backdrop went invisible/patchy as
+          soon as the dark palette was active. */}
+      <div className="login-backdrop pointer-events-none absolute inset-0" />
+      <div className="login-grid pointer-events-none absolute inset-0" />
 
-      <Card className="w-full max-w-md border-border bg-card/90 shadow-[0_0_60px_-15px_rgba(10,10,10,0.25)] backdrop-blur">
+      <Card className="w-full max-w-md border-border bg-card/90 shadow-[0_0_60px_-15px_rgba(10,10,10,0.25)] backdrop-blur dark:shadow-[0_0_70px_-20px_rgba(255,255,255,0.10)]">
         <CardHeader className="items-center pb-2 text-center">
-          <div className="mx-auto mb-2 flex h-16 w-16 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-[0_0_30px_-6px_rgba(10,10,10,0.5)]">
+          <div className="mx-auto mb-2 flex h-16 w-16 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-[0_0_30px_-6px_rgba(10,10,10,0.5)] dark:shadow-[0_0_30px_-6px_rgba(255,255,255,0.28)]">
             <DatabaseBackup className="h-8 w-8" />
           </div>
           <CardTitle className="text-xl font-bold">

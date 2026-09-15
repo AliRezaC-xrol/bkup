@@ -37,7 +37,7 @@ function fmtUptime(sec: number): string {
 
 export function DashboardHome({
   config, status, info, runs, busy,
-  onToggle, onBackupNow, onTestPanel, onTestTg, goto,
+  onToggle, onBackupNow, onTestPanel, onTestTg, goto, testingPanel,
 }: {
   config: AppConfigDTO | null;
   status: StatusDTO | null;
@@ -46,9 +46,12 @@ export function DashboardHome({
   busy: boolean;
   onToggle: (v: boolean) => Promise<boolean>;
   onBackupNow: () => void;
-  onTestPanel: () => void;
+  /** tests the ONE panel that was clicked (never the other three) */
+  onTestPanel: (panel: "3x-ui" | "hmpanel" | "pasarguard" | "rebecca") => void;
   onTestTg: () => void;
   goto: (tab: "backups" | "settings" | "system") => void;
+  /** the single panel currently being tested (per-row spinner) */
+  testingPanel?: "3x-ui" | "hmpanel" | "pasarguard" | "rebecca" | null;
 }) {
   const { t } = useLang();
   const [, tick] = useState(0);
@@ -83,41 +86,50 @@ export function DashboardHome({
   const panelReadyState = (p: { enabled: boolean; ready: boolean } | undefined): boolean | null | undefined =>
     p ? (p.enabled ? p.ready : null) : undefined; // null = card off, undefined = loading
 
+  // Each row tests ONLY its own connection. All four panels used to share one
+  // handler that tested every enabled panel, so pressing 3x-ui also tested
+  // HMPanel / PasarGuard / Rebecca.
   const conns = [
     {
       icon: <Link2 className="h-4 w-4" />,
       label: t("panel_3xui"),
       ready: panelReadyState(status?.panels?.xui),
-      onTest: onTestPanel,
+      onTest: () => onTestPanel("3x-ui"),
+      testing: testingPanel === "3x-ui",
     },
     {
       icon: <Boxes className="h-4 w-4" />,
       label: t("panel_hm"),
       ready: panelReadyState(status?.panels?.hm),
-      onTest: onTestPanel,
+      onTest: () => onTestPanel("hmpanel"),
+      testing: testingPanel === "hmpanel",
     },
     {
       icon: <Boxes className="h-4 w-4" />,
       label: t("panel_pg"),
       ready: panelReadyState(status?.panels?.pg),
-      onTest: onTestPanel,
+      onTest: () => onTestPanel("pasarguard"),
+      testing: testingPanel === "pasarguard",
     },
     {
       icon: <Boxes className="h-4 w-4" />,
       label: t("panel_rb"),
       ready: panelReadyState(status?.panels?.rebecca),
-      onTest: onTestPanel,
+      onTest: () => onTestPanel("rebecca"),
+      testing: testingPanel === "rebecca",
     },
     {
       icon: <Send className="h-4 w-4" />,
       label: t("telegram_conn"),
       ready: status?.configReady.telegram,
       onTest: onTestTg,
+      testing: false,
     },
     {
       icon: <Activity className="h-4 w-4" />,
       label: t("scheduler"),
       ready: isLive,
+      testing: false,
     },
   ];
 
@@ -227,7 +239,14 @@ export function DashboardHome({
                 </div>
               </div>
               {c.onTest && (
-                <Button variant="outline" size="sm" className="h-8" onClick={c.onTest} disabled={c.ready === undefined || c.ready === null}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 gap-1.5"
+                  onClick={c.onTest}
+                  disabled={c.testing || c.ready === undefined || c.ready === null}
+                >
+                  {c.testing && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
                   {t("test_now")}
                 </Button>
               )}

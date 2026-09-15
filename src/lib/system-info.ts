@@ -53,9 +53,17 @@ export async function getLocalCommit(): Promise<string | null> {
   }
 }
 
-export async function fetchLatestFromGithub(): Promise<LatestInfo> {
+/**
+ * Latest GitHub release info.
+ *
+ * `force` bypasses the 5-minute cache. The manual "Check for updates" button
+ * MUST pass it: while it served the cache, tapping the button returned the very
+ * same value it already displayed, so nothing on screen changed and the check
+ * looked broken. Background polls keep using the cache.
+ */
+export async function fetchLatestFromGithub(force = false): Promise<LatestInfo> {
   const now = Date.now();
-  if (cache.latest && now - cache.latest.checkedAt < CACHE_TTL) return cache.latest;
+  if (!force && cache.latest && now - cache.latest.checkedAt < CACHE_TTL) return cache.latest;
 
   let info: LatestInfo = { tag: null, version: null, commit: null, checkedAt: now, note: null };
   try {
