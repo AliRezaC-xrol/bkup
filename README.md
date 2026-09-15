@@ -116,11 +116,13 @@ panel was installed by you or by bkup.
 
 After a verified byte-for-byte placement, **bkup proves the panel is actually
 running instead of trusting a heartbeat**: for 3x-ui it checks that both the panel
-service and the X-Ray core are really up. If X-Ray cannot start because the
-restored configuration references certificate files that only existed on the old
-server, bkup creates self-signed certificates **at exactly those referenced
-paths** — the backup's data itself is never edited, and the panel comes up with
-its own configuration intact.
+service and the X-Ray core are really up. And before the panel is even started,
+every certificate file the restored database references is found **inside the
+backup's own bytes** (no sqlite3 needed on the server) and any that this server
+lacks is created **at exactly the referenced path** — an inbound whose TLS cert
+only existed on the old server can no longer take X-Ray down with
+"failed to parse certificate: no such file or directory". The backup's data
+itself is never edited, and the panel comes up with its own configuration intact.
 
 During the restore, every step is displayed in real time. You can cancel the restore while it is running, and the result of every restore is recorded in **History**.
 

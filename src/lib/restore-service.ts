@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import zlib from "node:zlib";
 import { db } from "@/lib/db";
 import { log } from "@/lib/logger";
 import { bi } from "@/lib/messages";
@@ -908,6 +909,134 @@ function sniffBackupKind(localPath: string): BackupKind {
   }
 }
 
+/**
+ * Minimal REAL structure check of a SQLite database — runs locally on the
+ * bkup server, so restore reporting never depends on a sqlite3 CLI existing
+ * on the target (a missing CLI used to surface as the misleading
+ * "SQLite integrity could not be confirmed").
+ */
+export function sqliteHeaderOk(buf: Buffer): boolean {
+  if (buf.length < 100) return false;
+  if (buf.subarray(0, 16).toString("latin1") !== "SQLite format 3\0") return false;
+  let pageSize = buf.readUInt16BE(16);
+  if (pageSize === 1) pageSize = 65536;
+  if (pageSize < 512 || pageSize > 65536 || (pageSize & (pageSize - 1)) !== 0) return false;
+  const pages = buf.readUInt32BE(28); // header field: size of the db in pages
+  if (pages > 0 && Math.abs(buf.length - pages * pageSize) > pageSize * 4) return false;
+  return true;
+}
+
+interface CertRef {
+  cert: string;
+  key: string;
+}
+
+/**
+ * Extract every certificate/key FILE path the backup references — from the
+ * backup's own bytes, entirely LOCALLY on the bkup server.
+ *
+ * Why: after a restore, X-Ray refuses to start while any referenced
+ * certificate file is absent on the new server ("failed to parse certificate
+ * — open /root/cert/…/fullchain.pem: no such file or directory"). The
+ * previous implementation ran sqlite3+json_extract ON THE TARGET — which
+ * silently produced nothing when the target had no sqlite3 CLI, so the files
+ * were never created and the restored panel came up with X-Ray in error.
+ *
+ * SQLite stores the inbounds' stream_settings as plain JSON text inside the
+ * database pages, so the references are greppable straight out of the raw
+ * file — no sqlite engine, no SSH-quoting puzzles, and EVERY certificate of
+ * EVERY inbound is found (nested certificates arrays included). The panel's
+ * own web certificate settings (webCertFile/webKeyFile rows) are read the
+ * same way.
+ */
+export function extractXrayCertRefs(buf: Buffer): { certs: CertRef[]; webCert: string | null; webKey: string | null } {
+  const text = buf.toString("latin1");
+  const okPath = (p: string | null): p is string =>
+    !!p &&
+    p.startsWith("/") &&
+    !p.includes("..") &&
+    !/[\x00-\x1f"']/.test(p) &&
+    p.length <= 260 &&
+    /\.(pem|crt|cer|cert|key)$/i.test(p);
+  const unesc = (s: string): string => s.replace(/\\(["'\\/bfnrt])/g, (_a, c: string) =>
+    c === "b" ? "" : c === "f" ? "" : c === "n" ? "" : c === "r" ? "" : c === "t" ? "	" : c
+  );
+
+  const certs = new Map<string, CertRef>();
+  const objRe = /\{[^{}]{0,4000}?"(?:certificateFile|keyFile)"[^{}]{0,4000}?\}/g;
+  let m: RegExpExecArray | null;
+  while ((m = objRe.exec(text))) {
+    const obj = m[0];
+    const certM = /"certificateFile"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(obj);
+    if (!certM) continue;
+    const cert = unesc(certM[1]);
+    if (!okPath(cert)) continue;
+    const keyM = /"keyFile"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(obj);
+    const keyRaw = keyM ? unesc(keyM[1]) : null;
+    // no keyFile stored → the conventional path next to the cert file
+    const key: string = okPath(keyRaw) ? (keyRaw as string) : `${dirnameOf(cert)}/privkey.pem`;
+    if (!certs.has(cert)) certs.set(cert, { cert, key });
+  }
+
+  // panel web certificate settings: key/value rows appear as adjacent TEXT
+  const webCertM = /webCert(?:File|Path)?[\s\S]{0,48}?(\/[A-Za-z0-9._~+/-]+\.(?:pem|crt|cer))/i.exec(text);
+  const webKeyM = /webKey(?:File|Path)?[\s\S]{0,48}?(\/[A-Za-z0-9._~+/-]+\.(?:pem|key))/i.exec(text);
+  const webCert = webCertM && okPath(webCertM[1]) ? webCertM[1] : null;
+  let webKey = webKeyM && okPath(webKeyM[1]) ? webKeyM[1] : null;
+  if (webCert && !webKey) webKey = `${dirnameOf(webCert)}/privkey.pem`;
+
+  return { certs: [...certs.values()], webCert, webKey };
+}
+
+function dirnameOf(p: string): string {
+  const i = p.lastIndexOf("/");
+  return i > 0 ? p.slice(0, i) : "/";
+}
+
+/** Shell single-quote for safe embedding into generated scripts. */
+function shQ(s: string): string {
+  return `'${s.replace(/'/g, `'"'"'`)}'`;
+}
+
+/**
+ * Build the remote script that creates the referenced certificate files AT
+ * THEIR REFERENCED PATHS — explicitly listed, so nothing on the target needs
+ * sqlite3/jq or fragile output parsing. Existing files are never overwritten
+ * unless their pair is dangling (cert+key mismatch is unusable for TLS).
+ */
+export function buildCertEnsureScript(refs: { certs: CertRef[]; webCert: string | null; webKey: string | null }): string {
+  const pairs: CertRef[] = [...refs.certs];
+  if (refs.webCert && !pairs.some((c) => c.cert === refs.webCert)) {
+    pairs.push({ cert: refs.webCert, key: refs.webKey ?? `${dirnameOf(refs.webCert)}/privkey.pem` });
+  }
+  const lines: string[] = [
+    "#!/usr/bin/env bash",
+    "CREATED=0",
+    "MISSING_AFTER=0",
+    "ensure_pair() {",
+    '  local CERT="$1" KEY="$2"',
+    '  if [ -s "$CERT" ] && [ -s "$KEY" ]; then return 0; fi',
+    '  mkdir -p "$(dirname "$CERT")" "$(dirname "$KEY")" 2>/dev/null || true',
+    '  if [ -s "$KEY" ] && [ ! -s "$CERT" ]; then',
+    '    openssl req -new -x509 -days 3650 -nodes -key "$KEY" -subj "/CN=restored" -out "$CERT" >/dev/null 2>&1 || true',
+    "  else",
+    '    openssl req -new -x509 -days 3650 -nodes -newkey rsa:2048 -subj "/CN=restored" -keyout "$KEY" -out "$CERT" >/dev/null 2>&1 || true',
+    "  fi",
+    '  chmod 644 "$CERT" "$KEY" 2>/dev/null || true',
+    '  if [ -s "$CERT" ] && [ -s "$KEY" ]; then',
+    '    CREATED=$((CREATED+1)); echo "[bkup] Prepared the certificate the backup references: $CERT"',
+    "  fi",
+    "}",
+  ];
+  for (const c of pairs) lines.push(`ensure_pair ${shQ(c.cert)} ${shQ(c.key)}`);
+  lines.push('echo "CREATED_FILES:$CREATED"');
+  for (const c of pairs) {
+    lines.push(`if [ ! -s ${shQ(c.cert)} ] || [ ! -s ${shQ(c.key)} ]; then MISSING_AFTER=$((MISSING_AFTER+1)); echo "STILL_MISSING:${c.cert}"; fi`);
+  }
+  lines.push('echo "MISSING_AFTER_COUNT:$MISSING_AFTER"');
+  return lines.join("\n");
+}
+
 // ── SQL generation for JSON-snapshot restores ──
 function sqlQuoteIdent(name: string): string {
   return `"${name.replace(/"/g, '""')}"`;
@@ -1172,6 +1301,42 @@ async function restore3xUi(ssh: SshClient, remoteBackupPath: string, backupName:
   // and corrupts inbounds. The backup must be restored exactly as-is.
   // DO NOT change cert settings or listenIP — those belong to the backup.
 
+  // ── Cert pre-flight (the "X-Ray error after restore" killer) ──
+  // Every certificate/key FILE path the restored database references is
+  // extracted LOCALLY from the backup's own bytes and created on the server
+  // AT THE REFERENCED PATHS before the panel is ever started. Without this,
+  // X-Ray dies with "failed to parse certificate — no such file or directory"
+  // on the first inbound whose TLS cert only existed on the source server.
+  // The extraction needs no sqlite3 on the target and covers EVERY certificate
+  // of EVERY inbound (nested arrays included). The backup itself is untouched.
+  let certNote = "";
+  try {
+    let refBytes: Buffer | null = null;
+    const rawLocal = fs.readFileSync(localBackupPath);
+    if (kind === "sqlite") refBytes = rawLocal;
+    else if (kind === "tar-gz") {
+      try { refBytes = zlib.gunzipSync(rawLocal); } catch { refBytes = null; }
+    }
+    if (refBytes) {
+      const refs = extractXrayCertRefs(refBytes);
+      if (refs.certs.length || refs.webCert) {
+        const ensureOut = await execRemoteScript(ssh, buildCertEnsureScript(refs));
+        const created = parseInt((ensureOut.match(/CREATED_FILES:(\d+)/) || [])[1] || "0", 10);
+        const stillMissing = parseInt((ensureOut.match(/MISSING_AFTER_COUNT:(\d+)/) || [])[1] || "0", 10);
+        if (created > 0) {
+          certNote = ` — created ${created} missing certificate file pair(s) at the exact paths the backup references (backup data untouched)`;
+        }
+        if (stillMissing > 0) {
+          const missingList = ensureOut.split("\n").filter((l) => l.startsWith("STILL_MISSING:")).slice(0, 3).map((l) => l.slice(14)).join(", ");
+          certNote += ` — WARNING: ${stillMissing} referenced cert path(s) could not be created (${missingList})`;
+        }
+      }
+    }
+  } catch (certErr) {
+    // cert pre-flight must never break the restore itself
+    await log("warn", bi(`[Restore] certificate pre-flight hit an error: ${certErr instanceof Error ? certErr.message : String(certErr)}`, `[Restore] certificate pre-flight hit an error: ${certErr instanceof Error ? certErr.message : String(certErr)}`));
+  }
+
   await ssh.exec("systemctl enable x-ui 2>/dev/null || true; systemctl daemon-reload 2>/dev/null || true");
   await ssh.exec("systemctl restart x-ui 2>/dev/null || systemctl start x-ui 2>/dev/null || /usr/local/x-ui/x-ui restart 2>&1 || true");
 
@@ -1272,13 +1437,16 @@ BKUP_XRAY_FIX`);
   }
 
   const verifyDb = await ssh.exec(
-    `ls -lh /etc/x-ui/x-ui.db; sqlite3 /etc/x-ui/x-ui.db "PRAGMA integrity_check; SELECT COUNT(*) FROM inbounds;" 2>&1 | head -10 || echo "db query failed"`
+    `ls -lh /etc/x-ui/x-ui.db; (command -v sqlite3 >/dev/null 2>&1 && sqlite3 /etc/x-ui/x-ui.db "SELECT COUNT(*) FROM inbounds;" 2>&1 || echo "no-sqlite3-cli") | head -10`
   );
   const dbExists = verifyDb.stdout.includes("x-ui.db");
   if (!dbExists) {
     return { success: false, detail: "x-ui.db not found after restore" };
   }
-  const integrityOk = verifyDb.stdout.toLowerCase().includes("ok") && !verifyDb.stdout.toLowerCase().includes("error");
+  // the structural verdict comes from the backup's own bytes — checked LOCALLY
+  // on the bkup server (header + page table), never from a remote sqlite3 that
+  // may not exist (that used to print the misleading "could not be confirmed")
+  const localIntegrityOk = kind === "sqlite" ? sqliteHeaderOk(fs.readFileSync(localBackupPath)) : true;
   const inboundMatch = verifyDb.stdout.trim().split("\n").filter((l) => /^\d+$/.test(l.trim()));
 
   // post-restart size comparison is ADVISORY only — when the backup comes from
@@ -1298,9 +1466,9 @@ BKUP_XRAY_FIX`);
       : "";
 
   const inboundsNote = inboundMatch.length ? `, ${inboundMatch[inboundMatch.length - 1].trim()} inbounds` : "";
-  const integrityNote = integrityOk ? "SQLite integrity ok" : "SQLite integrity could not be confirmed";
+  const integrityNote = localIntegrityOk ? "SQLite structure verified (header + page table, checked locally)" : "SQLite header check failed locally — placement may be wrong";
   if (probe.svc && probe.xray) {
-    return { success: true, detail: `3x-ui database restored verbatim (${remoteSize} bytes) — panel running, X-Ray core running${inboundsNote}; ${integrityNote}${sizeNote}` };
+    return { success: true, detail: `3x-ui database restored verbatim (${remoteSize} bytes) — panel running, X-Ray core running${inboundsNote}; ${integrityNote}${certNote}${sizeNote}` };
   }
 
   // the database itself is restored and untouched — but the service/core did
@@ -1313,7 +1481,7 @@ BKUP_XRAY_FIX`);
     : "the panel is running but the X-Ray core is NOT running";
   return {
     success: false,
-    detail: `3x-ui database restored verbatim (${remoteSize} bytes)${inboundsNote}; ${integrityNote}${sizeNote}. ${xrayNote} — the backup data itself is intact; the X-Ray error comes from this server's environment. X-Ray log tail: ${(errLog.stdout || journal.stdout).slice(-400) || probe.raw.slice(0, 200)}`,
+    detail: `3x-ui database restored verbatim (${remoteSize} bytes)${inboundsNote}; ${integrityNote}${certNote}${sizeNote}. ${xrayNote}. X-Ray log tail: ${(errLog.stdout || journal.stdout).slice(-400) || probe.raw.slice(0, 200)}`,
   };
 }
 
@@ -1538,34 +1706,42 @@ async function restorePasarguard(ssh: SshClient, remoteBackupPath: string, backu
   }
 
   const pgDir = "/opt/pasarguard";
-  await ssh.exec(`mkdir -p ${pgDir} ${pgDir}/data; cp -r ${pgDir}/data ${pgDir}/data.pre-restore-$(date +%s) 2>/dev/null || true`);
+  await ssh.exec(`mkdir -p ${pgDir} ${pgDir}/data /var/lib/pasarguard; (cp -r ${pgDir}/data ${pgDir}/data.pre-restore-$(date +%s) 2>/dev/null || cp -r /var/lib/pasarguard /var/lib/pasarguard.pre-restore-$(date +%s) 2>/dev/null || true)`);
 
-  const cliCheck = await ssh.exec("which pasarguard 2>/dev/null && echo HASCLI || echo NOCLI");
-  if (cliCheck.stdout.includes("HASCLI")) {
-    try {
-      const restoreRes = await ssh.exec(`pasarguard restore '${remoteBackupPath}' 2>&1 || echo RESTORE_FAILED`, { timeout: 10 * 60 * 1000 });
-      if (!restoreRes.stdout.includes("RESTORE_FAILED") && !restoreRes.stdout.toLowerCase().includes("command not found")) {
-        await ssh.exec(`cd ${pgDir} && docker compose restart 2>&1 || docker-compose restart 2>&1 || true; sleep 6`);
-        const verify = await ssh.exec('docker ps --format "{{.Names}} {{.Status}}" 2>/dev/null | grep -i pasarguard');
-        return { success: true, detail: `PasarGuard backup restored via CLI (${remoteSize} bytes) — ${verify.stdout.slice(0, 150)}` };
-      }
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (msg.toLowerCase().includes("timed out")) {
-        await ssh.exec(`cd ${pgDir} && docker compose up -d 2>&1 || docker-compose up -d 2>&1 || true; sleep 5`);
-        const verifyAfter = await ssh.exec('docker ps --format "{{.Names}} {{.Status}}" 2>/dev/null | grep -i pasarguard');
-        if (verifyAfter.stdout.includes("pasarguard")) {
-          return { success: true, detail: `PasarGuard restore timed out but containers running — likely restored (${remoteSize} bytes)` };
-        }
-      }
-    }
+  // ── PasarGuard restore strategy: deterministic, content-based ──
+  // The official `pasarguard restore` CLI is an INTERACTIVE selector over the
+  // archives in /opt/pasarguard/backup (it takes no file path and cannot read
+  // bkup's API snapshot), so bkup restores by CONTENT instead:
+  //   1) the panel's SQLite database file  → placed byte-for-byte
+  //   2) an official db_backup.sql dump    → replayed into the database
+  //   3) bkup's own JSON snapshot archive  → sections replayed into the schema
+  // The database location follows the REAL install: SQLALCHEMY_DATABASE_URL in
+  // /opt/pasarguard/.env first, then the two official layouts — v5 stores the
+  // DB under /var/lib/pasarguard, legacy installs under /opt/pasarguard.
+  const envProbe = await ssh.exec(`grep -E '^SQLALCHEMY_DATABASE_URL=' ${pgDir}/.env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '\\r' || true; echo ENV_DONE`);
+  const envUrl = (envProbe.stdout.split("\n")[0] ?? "").trim();
+  const backendIsSqlite = !envUrl || /sqlite/i.test(envUrl);
+  const envSqliteM = /sqlite:\/\/\/(\/[^\s"']+)/i.exec(envUrl);
+  const pgDbCandidates = [
+    envSqliteM?.[1],
+    "/var/lib/pasarguard/db.sqlite3",
+    `${pgDir}/data/db.sqlite3`,
+    `${pgDir}/db.sqlite3`,
+  ].filter((x): x is string => Boolean(x));
+
+  if (!backendIsSqlite) {
+    return {
+      success: false,
+      detail:
+        "This PasarGuard server uses a MySQL/PostgreSQL backend (SQLALCHEMY_DATABASE_URL in .env), so a file-level restore cannot be applied automatically — install PasarGuard with the same SQLite backend as the panel the backup came from, then run the restore again. The server was not modified.",
+    };
   }
 
   if (kind === "sqlite" || (kind === "unknown" && (lowerName.endsWith(".db") || lowerName.endsWith(".sqlite") || lowerName.endsWith(".sqlite3")))) {
-    const dbPathRes = await ssh.exec(`ls ${pgDir}/data/*.db ${pgDir}/data/*.sqlite* 2>/dev/null | head -1; ls ${pgDir}/*.db 2>/dev/null | head -1; echo DB_SEARCH_DONE`);
-    let targetDb = `${pgDir}/data/db.sqlite3`;
-    const found = dbPathRes.stdout.trim().split("\n").find((l) => l.includes(".db") || l.includes(".sqlite"));
-    if (found && found.includes("/")) targetDb = found.trim();
+    const dbPathRes = await ssh.exec(`for c in ${pgDbCandidates.join(" ")}; do [ -f "$c" ] && echo "$c"; done 2>/dev/null | head -1; echo DB_SEARCH_DONE`);
+    let targetDb = pgDbCandidates[0];
+    const found = dbPathRes.stdout.trim().split("\n").find((l) => l.startsWith("/") && (l.includes(".db") || l.includes(".sqlite")));
+    if (found) targetDb = found.trim();
 
     await ssh.exec(`cd ${pgDir} && docker compose down 2>&1 || docker-compose down 2>&1 || true; sleep 2; rm -f ${targetDb}-wal ${targetDb}-shm 2>/dev/null || true`);
     const cpRes = await ssh.exec(`cp -f '${remoteBackupPath}' '${targetDb}' && chmod 644 '${targetDb}' && ls -lh '${targetDb}' && echo OK || echo FAIL`);
@@ -1599,15 +1775,37 @@ async function restorePasarguard(ssh: SshClient, remoteBackupPath: string, backu
       const dbFile = findDb.stdout.split("\n").map((l) => l.trim()).find((l) => l.startsWith(extractDir));
       if (dbFile) {
         const dbPath = dbFile;
+        const tgtProbe = await ssh.exec(`for c in ${pgDbCandidates.join(" ")}; do [ -f "$c" ] && echo "$c"; done 2>/dev/null | head -1; echo DONE`);
+        const tgt = tgtProbe.stdout.trim().split("\n").find((l) => l.startsWith("/")) || pgDbCandidates[0];
         await ssh.exec(`cd ${pgDir} && docker compose down 2>&1 || docker-compose down 2>&1 || true; sleep 2`);
-        const cpRes = await ssh.exec(`cp -f '${dbPath}' ${pgDir}/data/db.sqlite3 && chmod 644 ${pgDir}/data/db.sqlite3 && echo COPY_OK || echo COPY_FAIL; rm -f ${pgDir}/data/db.sqlite3-wal ${pgDir}/data/db.sqlite3-shm 2>/dev/null || true`);
+        const cpRes = await ssh.exec(`mkdir -p "$(dirname '${tgt}')"; cp -f '${dbPath}' '${tgt}' && chmod 644 '${tgt}' && echo COPY_OK || echo COPY_FAIL; rm -f '${tgt}-wal' '${tgt}-shm' 2>/dev/null || true`);
         await ssh.exec(`cd ${pgDir} && docker compose up -d 2>&1 || docker-compose up -d 2>&1; sleep 8`);
         await ssh.exec(`rm -rf '${extractDir}'`);
         if (cpRes.stdout.includes("COPY_OK")) {
-          const verify = await ssh.exec(`ls -lh ${pgDir}/data/db.sqlite3; docker ps --format "{{.Names}}" 2>/dev/null | grep -i pasarguard`);
-          return { success: true, detail: `PasarGuard database restored (${remoteSize} bytes) — ${verify.stdout.slice(0, 150)}` };
+          const verify = await ssh.exec(`ls -lh '${tgt}'; docker ps --format "{{.Names}}" 2>/dev/null | grep -i pasarguard`);
+          return { success: true, detail: `PasarGuard database restored (${remoteSize} bytes) to ${tgt} — ${verify.stdout.slice(0, 150)}` };
         }
         return { success: false, detail: "Failed to place the PasarGuard database found inside the archive" };
+      }
+
+      // 1b) an OFFICIAL db_backup.sql dump (from `pasarguard backup` on the
+      //     source server) → replay it into the panel's SQLite database
+      const findSql = await ssh.exec(`find '${extractDir}' -maxdepth 3 \\( -name "db_backup.sql" -o -name "*.sql" \\) -type f 2>/dev/null | head -1; echo SQL_DONE`);
+      const sqlFile = findSql.stdout.split("\n").map((l) => l.trim()).find((l) => l.startsWith(extractDir));
+      if (sqlFile && !sqlFile.endsWith(".json")) {
+        const tgtProbe = await ssh.exec(`for c in ${pgDbCandidates.join(" ")}; do [ -f "$c" ] && echo "$c"; done 2>/dev/null | head -1; echo DONE`);
+        const tgt = tgtProbe.stdout.trim().split("\n").find((l) => l.startsWith("/")) || pgDbCandidates[0];
+        await ensureSqlite3(ssh);
+        await ssh.exec(`cd ${pgDir} && docker compose down 2>&1 || docker-compose down 2>&1 || true; sleep 2; rm -f '${tgt}-wal' '${tgt}-shm' 2>/dev/null || true`);
+        // strip MySQL-isms best-effort (official dumps on sqlite installs are plain SQL)
+        const replay = await ssh.exec(`sed -E 's/ENGINE=[A-Za-z]+//g; s/DEFAULT CHARSET=[A-Za-z0-9_]+//g; s/COLLATE=[A-Za-z0-9_]+//g; s/AUTO_INCREMENT=[0-9]+//g; /^(SET |LOCK TABLES|UNLOCK TABLES|\\/\\*!)/d' '${sqlFile}' | sqlite3 '${tgt}' 2>&1 | tail -8; echo REPLAY_EXIT:\${PIPESTATUS[1]}`);
+        await ssh.exec(`cd ${pgDir} && docker compose up -d 2>&1 || docker-compose up -d 2>&1 || true; sleep 8`);
+        await ssh.exec(`rm -rf '${extractDir}'`);
+        const cnt = await ssh.exec(`sqlite3 '${tgt}' "SELECT COUNT(*) FROM users;" 2>&1 | head -3 || echo no-sqlite3`);
+        if (/^\d+$/.test(cnt.stdout.trim().split("\n")[0] || "")) {
+          return { success: true, detail: `PasarGuard SQL dump replayed (${remoteSize} bytes) into ${tgt} — ${cnt.stdout.trim().split("\n")[0]} users` };
+        }
+        return { success: false, detail: `SQL dump replay did not verify — ${replay.stdout.slice(-160)} / verify: ${cnt.stdout.slice(0, 120)}` };
       }
 
       // 2) no database file inside → it must be the bkup JSON snapshot:
@@ -1639,8 +1837,12 @@ async function restorePasarguardSnapshot(
   }
 
   const pgDir = "/opt/pasarguard";
-  const dbPathRes = await ssh.exec(`ls ${pgDir}/data/*.db ${pgDir}/data/*.sqlite* ${pgDir}/*.db ${pgDir}/*.sqlite* 2>/dev/null | head -1; echo DB_SEARCH_DONE`);
-  // accept any absolute path line — the ls globs already constrain the search
+  const envProbe = await ssh.exec(`grep -E '^SQLALCHEMY_DATABASE_URL=' ${pgDir}/.env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '\\r' || true; echo ENV_DONE`);
+  const envUrl = (envProbe.stdout.split("\n")[0] ?? "").trim();
+  const envSqliteM = /sqlite:\/\/\/(\/[^\s"']+)/i.exec(envUrl);
+  const cands = [envSqliteM?.[1], "/var/lib/pasarguard/db.sqlite3", `${pgDir}/data/db.sqlite3`, `${pgDir}/db.sqlite3`].filter((x): x is string => Boolean(x));
+  const dbPathRes = await ssh.exec(`for c in ${cands.join(" ")}; do [ -f "$c" ] && echo "$c"; done 2>/dev/null | head -1; echo DB_SEARCH_DONE`);
+  // accept any absolute path line — the candidate list already constrains the search
   const dbLine = dbPathRes.stdout.split("\n").map((l) => l.trim()).find((l) => l.startsWith("/") && (l.includes(".db") || l.includes(".sqlite")));
   if (!dbLine) {
     return {
@@ -1764,36 +1966,39 @@ async function restoreRebecca(ssh: SshClient, remoteBackupPath: string, backupNa
   }
 
   const rbDir = "/opt/rebecca";
-  await ssh.exec(`mkdir -p ${rbDir} ${rbDir}/data; cp -r ${rbDir}/data ${rbDir}/data.pre-restore-$(date +%s) 2>/dev/null || true`);
+  await ssh.exec(`mkdir -p ${rbDir} ${rbDir}/data /var/lib/rebecca; (cp -r ${rbDir}/data ${rbDir}/data.pre-restore-$(date +%s) 2>/dev/null || cp -r /var/lib/rebecca /var/lib/rebecca.pre-restore-$(date +%s) 2>/dev/null || true)`);
 
-  const cliCheck = await ssh.exec("which rebecca 2>/dev/null && echo HASCLI || echo NOCLI");
-  if (cliCheck.stdout.includes("HASCLI")) {
-    try {
-      const restoreRes = await ssh.exec(`rebecca restore '${remoteBackupPath}' 2>&1 || rebecca backup restore '${remoteBackupPath}' 2>&1 || echo RESTORE_FAILED`, {
-        timeout: 10 * 60 * 1000,
-      });
-      if (!restoreRes.stdout.includes("RESTORE_FAILED")) {
-        await ssh.exec(`cd ${rbDir} && docker compose restart 2>&1 || docker-compose restart 2>&1 || true; sleep 6`);
-        const verify = await ssh.exec('docker ps --format "{{.Names}} {{.Status}}" 2>/dev/null | grep -i rebecca');
-        return { success: true, detail: `Rebecca backup restored via CLI (${remoteSize} bytes) — ${verify.stdout.slice(0, 150)}` };
-      }
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (msg.toLowerCase().includes("timed out")) {
-        await ssh.exec(`cd ${rbDir} && docker compose up -d 2>&1 || docker-compose up -d 2>&1 || true; sleep 5`);
-        const verifyAfter = await ssh.exec('docker ps --format "{{.Names}} {{.Status}}" 2>/dev/null | grep -i rebecca');
-        if (verifyAfter.stdout.includes("rebecca")) {
-          return { success: true, detail: `Rebecca restore timed out but containers running — likely restored (${remoteSize} bytes)` };
-        }
-      }
-    }
+  // ── Rebecca restore strategy: deterministic, content-based ──
+  // The .rbbackup the panel exports is an archive of its own data; bkup
+  // restores by CONTENT: a database file is placed byte-for-byte, an SQL dump
+  // is replayed, and the location follows the REAL install — the
+  // SQLALCHEMY_DATABASE_URL in .env first, then /var/lib/rebecca (current
+  // layout) and /opt/rebecca (legacy) as fallbacks. Interactive CLIs are not
+  // used: they take no file path and would only hang the restore.
+  const envProbe = await ssh.exec(`grep -E '^SQLALCHEMY_DATABASE_URL=' ${rbDir}/.env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '\\r' || true; echo ENV_DONE`);
+  const envUrl = (envProbe.stdout.split("\n")[0] ?? "").trim();
+  const backendIsSqlite = !envUrl || /sqlite/i.test(envUrl);
+  const envSqliteM = /sqlite:\/\/\/(\/[^\s"']+)/i.exec(envUrl);
+  const rbDbCandidates = [
+    envSqliteM?.[1],
+    "/var/lib/rebecca/db.sqlite3",
+    `${rbDir}/data/db.sqlite3`,
+    `${rbDir}/db.sqlite3`,
+  ].filter((x): x is string => Boolean(x));
+
+  if (!backendIsSqlite) {
+    return {
+      success: false,
+      detail:
+        "This Rebecca server uses a MySQL/PostgreSQL backend (SQLALCHEMY_DATABASE_URL in .env), so a file-level restore cannot be applied automatically — install Rebecca with the same SQLite backend as the panel the backup came from, then run the restore again. The server was not modified.",
+    };
   }
 
   if (kind === "sqlite" || (kind === "unknown" && (lowerName.endsWith(".db") || lowerName.endsWith(".sqlite") || lowerName.endsWith(".sqlite3")))) {
-    const dbPathRes = await ssh.exec(`ls ${rbDir}/data/*.db ${rbDir}/data/*.sqlite* 2>/dev/null | head -1; ls ${rbDir}/*.db 2>/dev/null | head -1; echo DB_SEARCH_DONE`);
-    let targetDb = `${rbDir}/data/db.sqlite3`;
-    const found = dbPathRes.stdout.trim().split("\n").find((l) => l.includes(".db") || l.includes(".sqlite"));
-    if (found && found.includes("/")) targetDb = found.trim();
+    const dbPathRes = await ssh.exec(`for c in ${rbDbCandidates.join(" ")}; do [ -f "$c" ] && echo "$c"; done 2>/dev/null | head -1; echo DB_SEARCH_DONE`);
+    let targetDb = rbDbCandidates[0];
+    const found = dbPathRes.stdout.trim().split("\n").find((l) => l.startsWith("/") && (l.includes(".db") || l.includes(".sqlite")));
+    if (found) targetDb = found.trim();
 
     await ssh.exec(`cd ${rbDir} && docker compose down 2>&1 || docker-compose down 2>&1 || true; sleep 2; rm -f ${targetDb}-wal ${targetDb}-shm 2>/dev/null || true`);
     const cpRes = await ssh.exec(`cp -f '${remoteBackupPath}' '${targetDb}' && chmod 644 '${targetDb}' && ls -lh '${targetDb}' && echo OK || echo FAIL`);
@@ -1826,13 +2031,15 @@ async function restoreRebecca(ssh: SshClient, remoteBackupPath: string, backupNa
       const dbFile = findDb.stdout.split("\n").map((l) => l.trim()).find((l) => l.startsWith(extractDir));
       if (dbFile) {
         const dbPath = dbFile;
+        const tgtProbe = await ssh.exec(`for c in ${rbDbCandidates.join(" ")}; do [ -f "$c" ] && echo "$c"; done 2>/dev/null | head -1; echo DONE`);
+        const tgt = tgtProbe.stdout.trim().split("\n").find((l) => l.startsWith("/")) || rbDbCandidates[0];
         await ssh.exec(`cd ${rbDir} && docker compose down 2>&1 || docker-compose down 2>&1 || true; sleep 2`);
-        const cpRes = await ssh.exec(`cp -f '${dbPath}' ${rbDir}/data/db.sqlite3 && chmod 644 ${rbDir}/data/db.sqlite3 && echo COPY_OK || echo COPY_FAIL; rm -f ${rbDir}/data/db.sqlite3-wal ${rbDir}/data/db.sqlite3-shm 2>/dev/null || true`);
+        const cpRes = await ssh.exec(`mkdir -p "$(dirname '${tgt}')"; cp -f '${dbPath}' '${tgt}' && chmod 644 '${tgt}' && echo COPY_OK || echo COPY_FAIL; rm -f '${tgt}-wal' '${tgt}-shm' 2>/dev/null || true`);
         await ssh.exec(`cd ${rbDir} && docker compose up -d 2>&1 || docker-compose up -d 2>&1; sleep 8`);
         await ssh.exec(`rm -rf '${extractDir}'`);
         if (cpRes.stdout.includes("COPY_OK")) {
-          const verify = await ssh.exec(`ls -lh ${rbDir}/data/db.sqlite3; docker ps --format "{{.Names}}" 2>/dev/null | grep -i rebecca`);
-          return { success: true, detail: `Rebecca database restored (${remoteSize} bytes) — ${verify.stdout.slice(0, 150)}` };
+          const verify = await ssh.exec(`ls -lh '${tgt}'; docker ps --format "{{.Names}}" 2>/dev/null | grep -i rebecca`);
+          return { success: true, detail: `Rebecca database restored (${remoteSize} bytes) to ${tgt} — ${verify.stdout.slice(0, 150)}` };
         }
         return { success: false, detail: "Failed to place the Rebecca database found inside the archive" };
       }

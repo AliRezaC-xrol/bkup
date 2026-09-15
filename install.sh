@@ -21,7 +21,9 @@
 #      restores onto 3x-ui, HM onto HM, PG onto PG, RB onto RB; bkup never
 #      migrates a backup onto another panel and never rewrites it
 #    · restore verifies the panel AND its X-Ray core honestly (no more
-#      "restored successfully" while X-Ray is down)
+#      "restored successfully" while X-Ray is down); certificate files a
+#      restored db references are pre-created at their referenced paths
+#      (extracted locally from the backup bytes — no sqlite3 on the server)
 #    · reassembly labels merged parts with the correct panel for all 4 panels
 #
 #  Usage:
