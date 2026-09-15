@@ -219,6 +219,59 @@ function rssOf(pid) {
 
   await api("PUT", "/api/config", { enabled: false }, H);
 
+  // ══ PART 5b: REASSEMBLY — parts of real panel backups merge byte-exact ══
+  // upload mode: two parts of a gzip named like HMPanel's official archive
+  const fullPayload = zlib.gzipSync(Buffer.from("BKUP-E2E-" + "x".repeat(5000)));
+  const halfPt = Math.ceil(fullPayload.length / 2);
+  const pt1 = fullPayload.subarray(0, halfPt), pt2 = fullPayload.subarray(halfPt);
+  const fdUp = new FormData();
+  fdUp.append("files", new Blob([pt1]), "backup_full_e2e.tar.part01of02.gz");
+  fdUp.append("files", new Blob([pt2]), "backup_full_e2e.tar.part02of02.gz");
+  let rr = await fetch(`${BASE}/api/reassembly`, { method: "POST", headers: H, body: fdUp });
+  const rj = await rr.json().catch(() => ({}));
+  check("reassembly of HMPanel-named parts returns 201", rr.status === 201, `status=${rr.status}`);
+  check("reassembled parts labelled hmpanel from the official archive name", rj?.panel === "hmpanel", `panel=${rj?.panel}`);
+  check("reassembled file is byte-exact", rj?.size === fullPayload.length, `size=${rj?.size} expect=${fullPayload.length}`);
+
+  // guards — corrupt merges must be refused, never stored
+  const fdGap = new FormData();
+  fdGap.append("files", new Blob([pt1]), "backup_full_e2e.tar.part01of02.gz");
+  rr = await fetch(`${BASE}/api/reassembly`, { method: "POST", headers: H, body: fdGap });
+  const gapJson = await rr.json().catch(() => ({}));
+  check("incomplete part set refused (MISSING_PARTS)", rr.status === 409 && gapJson?.error === "MISSING_PARTS", `status=${rr.status}`);
+  const fdMix = new FormData();
+  fdMix.append("files", new Blob([pt1]), "backup_full_e2e.tar.part01of02.gz");
+  fdMix.append("files", new Blob([pt1]), "x-ui-backup-e2e.part01of02.db");
+  rr = await fetch(`${BASE}/api/reassembly`, { method: "POST", headers: H, body: fdMix });
+  check("mixed part sets refused (MIXED_PART_SETS)", rr.status === 409, `status=${rr.status}`);
+
+  // JSON mode: the merged row keeps the RUN's panel — never guessed from names
+  r = await api("GET", "/api/backups?page=1&pageSize=50", null, H);
+  const allRuns = r.data?.items || r.data?.rows || r.data || [];
+  const runArr = Array.isArray(allRuns) ? allRuns : allRuns.items || [];
+  const hmRun = runArr.find((b) => b.status === "success" && b.panel === "hmpanel");
+  const xuiRun = runArr.find((b) => b.status === "success" && b.panel === "3x-ui");
+  r = await api("POST", "/api/reassembly", { backupId: hmRun?.id }, H);
+  check("JSON merge of HM run keeps the hmpanel label", r.status === 201 && r.data?.panel === "hmpanel", `panel=${r.data?.panel} status=${r.status}`);
+  r = await api("POST", "/api/reassembly", { backupId: xuiRun?.id }, H);
+  check("JSON merge of 3x-ui run keeps the 3x-ui label", r.status === 201 && r.data?.panel === "3x-ui", `panel=${r.data?.panel} status=${r.status}`);
+
+  // ══ PART 5c: the SELECTED BACKUP owns the restore panel — no migration ══
+  r = await api("POST", "/api/restore/start", {
+    sshHost: "127.0.0.1", sshPort: 1, sshUser: "root", sshPassword: "x",
+    backupId: xuiRun?.id, backupSource: "backup-run",
+    panel: "hmpanel", // deliberately WRONG — must be overridden by the backup's own panel
+  }, H);
+  check("restore start accepted (async ssh to closed port fails later)", r.status === 200 && r.data?.ok === true, JSON.stringify(r.data).slice(0, 60));
+  await sleep(4000);
+  r = await api("GET", "/api/restore/history", null, H);
+  const jobs = Array.isArray(r.data) ? r.data : r.data?.items || [];
+  const lastJob = jobs[0];
+  check("restore forced to the backup's OWN panel (3x-ui), not the requested one",
+    lastJob?.panel === "3x-ui" && lastJob?.backupId === xuiRun?.id,
+    `job.panel=${lastJob?.panel} job.backupId=${lastJob?.backupId}`);
+  await api("POST", "/api/restore/cancel", {}, H).catch(() => {});
+
   // ══ PART 6: resources ══
   await sleep(8000); // idle cooldown
   const rss1 = rssOf(server.pid);

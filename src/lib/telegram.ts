@@ -191,14 +191,17 @@ export async function sendBackupDocument(
   // larger than the official endpoint allows — send the ORIGINAL file as
   // numbered parts (client-side split, no doomed upload attempt first)
   const total = Math.ceil(buf.length / PART_LIMIT);
-  const width = String(total).padStart(2, "0");
+  // uniform width for index AND total so shell globs (`cat stem.part*of*`)
+  // sort numerically correct even beyond 9 parts (part07 < part10 must hold)
+  const digits = Math.max(2, String(total).length);
+  const width = String(total).padStart(digits, "0");
   const dot = fileName.lastIndexOf(".");
   const stem = dot > 0 ? fileName.slice(0, dot) : fileName;
   const ext = dot > 0 ? fileName.slice(dot) : "";
   const messageIds: number[] = [];
   for (let i = 0; i < total; i++) {
     const part = buf.subarray(i * PART_LIMIT, Math.min((i + 1) * PART_LIMIT, buf.length));
-    const partName = `${stem}.part${String(i + 1).padStart(2, "0")}of${width}${ext}`;
+    const partName = `${stem}.part${String(i + 1).padStart(digits, "0")}of${width}${ext}`;
     const caption =
       captionFor(partName, part.length, method, panel) +
       `\nPart ${i + 1} of ${total} - rejoin with: cat ${stem}.part*of*${ext} &gt; ${fileName}`;

@@ -13,6 +13,17 @@
 #  Re-running it on an existing server UPDATES the code in place
 #  and PRESERVES all data, settings and backups.
 #
+#  v1.2.0 — backup & restore correctness release:
+#    · one FULL backup per panel — the panel's own complete backup,
+#      taken byte-for-byte and never modified (3x-ui database, HMPanel
+#      official archive, PasarGuard full snapshot, Rebecca official export)
+#    · the SELECTED BACKUP owns the restore — a 3x-ui backup only ever
+#      restores onto 3x-ui, HM onto HM, PG onto PG, RB onto RB; bkup never
+#      migrates a backup onto another panel and never rewrites it
+#    · restore verifies the panel AND its X-Ray core honestly (no more
+#      "restored successfully" while X-Ray is down)
+#    · reassembly labels merged parts with the correct panel for all 4 panels
+#
 #  Usage:
 #    bash <(curl -fsSL https://raw.githubusercontent.com/AliRezaC-xrol/bkup/main/install.sh)
 #    (private repo? prefix:  GITHUB_TOKEN=ghp_xxx  and add the same

@@ -15,6 +15,15 @@
 # running version untouched — it will NEVER "update" to a stale copy.
 #
 # Preserves: database (db/custom.db), backups, .env, .cli-secret
+# Fixes in v1.2.0 (backup/restore correctness):
+#   - One full backup method per panel: the panel's OWN complete backup,
+#     byte-for-byte, unmodified (3x-ui db, HMPanel archive, PasarGuard
+#     snapshot, Rebecca export)
+#   - Restore uses the SELECTED backup's own panel — no cross-panel migration
+#   - 3x-ui restore probe can no longer false-report X-Ray as running
+#     (pgrep self-match eliminated via script-file probes)
+#   - Reassembly labels merged backups with the correct panel (HMPanel's
+#     official backup_full_* names included)
 # Fixes in v1.2.0:
 #   - Backup package.json before overwriting, restore on build failure
 #     so next update can retry (prevents "says updated but panel still old")

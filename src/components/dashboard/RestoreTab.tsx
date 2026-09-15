@@ -245,6 +245,13 @@ export function RestoreTab() {
 
   function handleSelectBackup(item: BackupItem) {
     setSelectedBackup(item);
+    // the selected backup OWNS the panel choice — lock the wizard to it so a
+    // 3x-ui backup is only ever restored onto 3x-ui, HM onto HM, PG onto PG,
+    // RB onto RB. Cross-panel restore (migration) is not a bkup feature.
+    const own = (item.panel || "").toString() as PanelId;
+    if (["3x-ui", "hmpanel", "pasarguard", "rebecca"].includes(own) && own !== selectedPanel) {
+      setSelectedPanel(own);
+    }
   }
 
   // ── Cloudflare helpers - clean, token only, template URL creates token ──
@@ -432,7 +439,7 @@ export function RestoreTab() {
           sshPassphrase: authMethod === "key" ? sshPassphrase : undefined,
           backupId: selectedBackup.id,
           backupSource: selectedBackup.source,
-          panel: selectedPanel,
+          panel: (selectedBackup.panel as PanelId) || selectedPanel,
           installNode: installNode,
           sslMode: enableSsl ? sslMode : allDomains.length ? "domain" : "none",
           sslDomain: allDomains[0] || sslDomain.trim() || undefined,

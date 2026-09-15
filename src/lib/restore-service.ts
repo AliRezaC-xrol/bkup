@@ -3,7 +3,7 @@ import path from "node:path";
 import { db } from "@/lib/db";
 import { log } from "@/lib/logger";
 import { bi } from "@/lib/messages";
-import { SshClient, SshError, type SshOptions } from "@/lib/restore-ssh";
+import { SshClient, SshError, type SshOptions, type SshExecOptions } from "@/lib/restore-ssh";
 import {
   getRestoreConfig,
   getInstallScript,
@@ -134,6 +134,36 @@ export function checkIfCancelled(): boolean {
     }
   } catch {}
   return false;
+}
+
+/**
+ * Execute a multi-line shell script on the server via a SCRIPT FILE (uploaded
+ * over SFTP, then `bash <file>`), NEVER via `bash -c "<text>"`.
+ *
+ * Any probe that uses `pgrep -f "<name>"`-style patterns MUST go through
+ * this helper: when the script text travels inside the remote shell's own
+ * command line, `pgrep -f` matches that shell itself (its cmdline contains
+ * the searched words) and the probe ALWAYS reports "running" — even when the
+ * process is dead. That false positive made restores claim "panel running,
+ * X-Ray core running" while the X-Ray core had actually crashed (the missing
+ * cert files it needed were never generated, because the recovery only ran
+ * when the probe reported X-Ray down). Running from a plain file keeps the
+ * process cmdline clean (`bash /tmp/bkup-probe-….sh`), so the probe is honest.
+ */
+async function execRemoteScript(ssh: SshClient, script: string, opts: SshExecOptions = {}): Promise<string> {
+  const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  // local and remote names MUST differ — on a localhost restore the bkup
+  // server IS the target, and identical paths would corrupt the upload
+  const localScript = path.join(dataDir(), `bkup-script-${stamp}.local.sh`);
+  const remoteScript = `/tmp/bkup-script-${stamp}.remote.sh`;
+  fs.writeFileSync(localScript, script);
+  try {
+    await ssh.uploadFile(localScript, remoteScript);
+  } finally {
+    try { fs.unlinkSync(localScript); } catch { /* ignore */ }
+  }
+  const res = await ssh.exec(`bash '${remoteScript}' 2>&1; ec=$?; rm -f '${remoteScript}'; exit $ec`, opts);
+  return res.stdout;
 }
 
 const g = globalThis as unknown as { __restoreRunning?: boolean };
@@ -333,7 +363,7 @@ if [ -n "$CERT_DIR" ] && [ -f "$CERT_DIR/fullchain.cer" ] && [ -s "$CERT_DIR/ful
     systemctl enable x-ui 2>/dev/null || true
     systemctl restart x-ui 2>/dev/null || systemctl start x-ui 2>/dev/null || /usr/local/x-ui/x-ui restart 2>&1 || true
     sleep 3
-    systemctl is-active x-ui 2>&1 || pgrep -a x-ui 2>&1 | head -3 || true
+    systemctl is-active x-ui 2>&1 || ss -tlnp 2>/dev/null | grep -m3 -E "x-ui|xray" || true
     echo "[bkup] 3x-ui cert set for ${domains.join(", ")}"
   elif [ "${panelType}" = "hmpanel" ] && [ -d /opt/hmpanel ]; then
     echo "[bkup] Applying cert to HMPanel for ${domains.join(", ")}"
@@ -633,8 +663,8 @@ echo "[bkup] Rebecca installer done"
       systemctl daemon-reload 2>/dev/null || true
       systemctl restart x-ui 2>/dev/null || systemctl start x-ui 2>/dev/null || /usr/local/x-ui/x-ui restart 2>&1 || true
       sleep 3
-      systemctl is-active x-ui 2>&1 || pgrep -a x-ui 2>&1 | head -5 || true
-      pgrep -a xray 2>&1 | head -5 || echo "xray not yet started — will start after restore"
+      systemctl is-active x-ui 2>&1 || ss -tlnp 2>/dev/null | grep -m5 -E "x-ui|xray" || true
+      ss -tlnp 2>/dev/null | grep -m5 xray || echo "xray not yet started — will start after restore"
     `);
   } else if (panel === "hmpanel") {
     await ssh.exec(`
@@ -661,7 +691,7 @@ echo "[bkup] Rebecca installer done"
   const verify = await checkPanelInstalled(ssh, panel);
   if (verify.installed) {
     if (panel === "3x-ui") {
-      const statusCheck = await ssh.exec("systemctl is-active x-ui 2>/dev/null; pgrep -a x-ui 2>/dev/null | head -1; echo STATUS_CHECK_DONE");
+      const statusCheck = await ssh.exec("systemctl is-active x-ui 2>/dev/null; ss -tlnp 2>/dev/null | grep -m1 x-ui; echo STATUS_CHECK_DONE");
       const isActive = statusCheck.stdout.includes("active") || statusCheck.stdout.includes("x-ui");
       if (isActive) {
         return { success: true, detail: `${panelName} installed successfully with default settings${sslMode !== "none" ? ` (SSL: ${sslMode}, domains: ${domains.join(", ") || "none"})` : ""} — service running` };
@@ -1146,10 +1176,17 @@ async function restore3xUi(ssh: SshClient, remoteBackupPath: string, backupName:
   await ssh.exec("systemctl restart x-ui 2>/dev/null || systemctl start x-ui 2>/dev/null || /usr/local/x-ui/x-ui restart 2>&1 || true");
 
   const probeStatus = async (): Promise<{ svc: boolean; xray: boolean; raw: string }> => {
-    const st = await ssh.exec(
-      'echo "SVC:$(systemctl is-active x-ui 2>/dev/null)"; pgrep -f "x-ui" >/dev/null 2>&1 && echo XUI_UP; pgrep -f "xray" >/dev/null 2>&1 && echo XRAY_UP; echo CHECK_DONE'
-    );
-    const raw = (st.stdout || "").trim();
+    // script-file probe — see execRemoteScript for why this must not travel
+    // inside the remote shell command line (pgrep -f self-match = false success)
+    const raw = (
+      await execRemoteScript(ssh, [
+        "#!/usr/bin/env bash",
+        'echo "SVC:$(systemctl is-active x-ui 2>/dev/null)"',
+        'pgrep -f "/usr/local/x-ui" >/dev/null 2>&1 && echo XUI_UP',
+        'pgrep -f "xray" >/dev/null 2>&1 && echo XRAY_UP',
+        "echo CHECK_DONE",
+      ].join("\n"))
+    ).trim();
     return {
       svc: raw.includes("SVC:active") || raw.includes("XUI_UP"),
       xray: raw.includes("XRAY_UP"),
@@ -1171,24 +1208,43 @@ async function restore3xUi(ssh: SshClient, remoteBackupPath: string, backupName:
   }
 
   // ── Environment-only X-Ray recovery — the restored database is NEVER
-  // modified. When X-Ray refuses to start on THIS server it is almost always
-  // an environment gap, not a broken backup: the backup references certificate
-  // files that only existed on the server it was taken from. Two purely
-  // environmental fixes:
-  //   1) the panel's own web certificate points at a missing file → the panel
-  //      is reset to HTTP (x-ui cert -webCert "") so the panel itself comes up
+  // modified (no setting is reset, no row is touched). When X-Ray refuses to
+  // start on THIS server it is almost always an environment gap, not a broken
+  // backup: the backup references certificate files that only existed on the
+  // server it was taken from. The fix is purely environmental and works for
+  // every certificate reference:
+  //   1) the panel's own web certificate file is missing → a self-signed pair
+  //      is created AT THE EXACT PATH the backup's setting points to (the
+  //      setting itself is left untouched)
   //   2) inbound TLS certificate paths stored INSIDE the backup are missing on
   //      this server → self-signed pairs are generated AT THOSE REFERENCED
   //      PATHS, so the backup's own configuration resolves in this environment
   if (!probe.xray) {
     await ssh.exec(`bash -s <<'BKUP_XRAY_FIX'
 echo "[bkup] X-Ray did not come up — checking the environment (backup data untouched)"
-WEB_CERT=$(/usr/local/x-ui/x-ui setting -show 2>/dev/null | grep -iE "webCert(Path)?:" | awk -F': ' '{print $2}' | tr -d '"[:space:]' | head -1 || true)
-if [ -n "$WEB_CERT" ] && [ "$WEB_CERT" != '""' ] && [ ! -f "$WEB_CERT" ]; then
-  echo "[bkup] Panel certificate $WEB_CERT does not exist on this server — resetting the panel TLS to HTTP"
-  /usr/local/x-ui/x-ui cert -webCert "" -webCertKey "" 2>&1 || true
+# The backup database is NEVER modified — missing files it REFERENCES are
+# created at exactly the referenced paths, so the backup's own configuration
+# resolves on this server verbatim.
+
+# 1) the panel's own web certificate points at a file that only existed on the
+#    source server → create a self-signed pair AT THAT PATH (setting untouched)
+SHOW=$(/usr/local/x-ui/x-ui setting -show 2>/dev/null || true)
+WEB_CERT=$(echo "$SHOW" | grep -ioE "^webCert(File|Path)?[[:space:]]*:.*" | head -1 | cut -d: -f2- | tr -d '"'"'"' | tr -d '\r' | xargs 2>/dev/null || true)
+WEB_KEY=$(echo "$SHOW" | grep -ioE "^webKey(File|Path)?[[:space:]]*:.*" | head -1 | cut -d: -f2- | tr -d '"'"'"' | tr -d '\r' | xargs 2>/dev/null || true)
+case "$WEB_CERT" in /*) ;; *) WEB_CERT="" ;; esac
+if [ -n "$WEB_CERT" ] && [ ! -f "$WEB_CERT" ]; then
+  case "$WEB_KEY" in /*) ;; *) WEB_KEY="\$(dirname "$WEB_CERT")/privkey.pem" ;; esac
+  mkdir -p "\$(dirname "$WEB_CERT")" "\$(dirname "$WEB_KEY")" 2>/dev/null || true
+  if openssl req -new -x509 -days 3650 -nodes -newkey rsa:2048 -subj "/CN=restored-panel" -keyout "$WEB_KEY" -out "$WEB_CERT" >/dev/null 2>&1; then
+    echo "[bkup] Created the panel web certificate the backup references: $WEB_CERT (self-signed — replace with your real cert when convenient)"
+  fi
+  chmod 644 "$WEB_CERT" "$WEB_KEY" 2>/dev/null || true
 fi
-PAIRS=$(sqlite3 /etc/x-ui/x-ui.db "SELECT DISTINCT json_extract(stream_settings,'\$.tlsSettings.certificates[0].certificateFile'), json_extract(stream_settings,'\$.tlsSettings.certificates[0].keyFile') FROM inbounds WHERE json_valid(stream_settings) AND stream_settings LIKE '%certificateFile%';" 2>/dev/null || true)
+
+# 2) inbound TLS certificate paths stored INSIDE the backup are missing on
+#    this server → self-signed pairs generated AT THOSE REFERENCED PATHS.
+#    Every certificate of every inbound is covered (json_each), not just [0].
+PAIRS=$(sqlite3 /etc/x-ui/x-ui.db "SELECT DISTINCT json_extract(stream_settings,'\$.tlsSettings.certificates[0].certificateFile'), json_extract(stream_settings,'\$.tlsSettings.certificates[0].keyFile') FROM inbounds WHERE json_valid(stream_settings) AND stream_settings LIKE '%certificateFile%' UNION SELECT DISTINCT json_extract(c.value,'\$.certificateFile'), json_extract(c.value,'\$.keyFile') FROM inbounds, json_each(inbounds.stream_settings,'\$.tlsSettings.certificates') AS c WHERE json_valid(inbounds.stream_settings);" 2>/dev/null || true)
 echo "$PAIRS" | while IFS='|' read -r CERT KEY; do
   case "$CERT" in /*) ;; *) continue ;; esac
   if [ -f "$CERT" ] && [ -n "$KEY" ] && [ -f "$KEY" ]; then continue; fi
@@ -1835,6 +1891,18 @@ export async function startRestore(req: RestoreRequest): Promise<{ jobId?: numbe
     return { ok: false, error: "BACKUP_FILE_MISSING" };
   }
 
+  // The selected backup OWNS the panel choice — a 3x-ui backup is restored
+  // only onto a 3x-ui panel, an HMPanel backup only onto HMPanel, and so on.
+  // bkup never migrates one panel's backup onto another panel: whatever panel
+  // the client asked for, the backup's own panel wins.
+  if (req.panel !== backup.panel) {
+    await log("warn", bi(
+      `Restore request asked for panel "${req.panel}" but the selected backup belongs to "${backup.panel}" — the backup's own panel is used (no cross-panel migration)`,
+      `Restore request asked for panel "${req.panel}" but the selected backup belongs to "${backup.panel}" — the backup's own panel is used (no cross-panel migration)`
+    ));
+    req = { ...req, panel: backup.panel };
+  }
+
   const job = await db.restoreJob.create({
     data: {
       status: "running",
@@ -2189,46 +2257,43 @@ async function runRestoreAsync(
 
     await ssh.exec("sleep 5");
 
-    // Robust verification for all 4 panel types
-    // Uses multiple fallback checks: docker, systemctl, process, and port check
-    const verifyCmd = `check_panel_running() {
-  local panel="$1"
-  # Docker container running?
-  if docker ps --format "{{.Names}}" 2>/dev/null | grep -qi "$panel"; then
-    echo "docker_running"
-    return 0
-  fi
-  # Systemd service active?
-  if systemctl is-active "$panel" 2>/dev/null | grep -q "^active$"; then
-    echo "systemd_active"
-    return 0
-  fi
-  # Process running by name?
-  if pgrep -f "$panel" >/dev/null 2>&1; then
-    echo "process_running"
-    return 0
-  fi
-  # Panel-specific port checks
-  if [ "$panel" = "3x-ui" ]; then
-    if ss -tlnp 2>/dev/null | grep -q ":2053\b" || ss -tlnp 2>/dev/null | grep -q ":54321\b" || ss -tlnp 2>/dev/null | grep -q "x-ui"; then
-      echo "port_active"
-      return 0
-    fi
-  fi
-  echo "not_running"
-  return 1
-}
-check_panel_running "${req.panel}"`;
-
-    const verifyRes = await ssh.exec(verifyCmd);
-    const verifyOutput = verifyRes.stdout.trim();
-    const isOk = verifyRes.exitCode === 0 ||
+    // Robust verification for all 4 panel types — executed as a SCRIPT FILE.
+    // The previous inline version used `pgrep -f "$panel"`: the pattern text
+    // ("3x-ui", "hmpanel", …) also sat inside the remote shell's own command
+    // line, so pgrep matched the checker itself and ALWAYS reported running.
+    const verifyOutput = (
+      await execRemoteScript(ssh, [
+        "check_panel_running() {",
+        '  local panel="$1"',
+        "  # Docker containers are matched by NAME (not a process scan) — no self-match",
+        '  case "$panel" in',
+        "    hmpanel|pasarguard|rebecca)",
+        '      if docker ps --format "{{.Names}}" 2>/dev/null | grep -qi "$panel"; then echo "docker_running"; return 0; fi',
+        "      ;;",
+        "  esac",
+        '  local svc="" pat=""',
+        '  case "$panel" in',
+        '    3x-ui)      svc="x-ui";       pat="/usr/local/x-ui" ;;',
+        '    hmpanel)    svc="hmpanel";    pat="hmpanel" ;;',
+        '    pasarguard) svc="pasarguard"; pat="pasarguard" ;;',
+        '    rebecca)    svc="rebecca";    pat="rebecca" ;;',
+        "  esac",
+        '  if [ -n "$svc" ] && systemctl is-active "$svc" 2>/dev/null | grep -q "^active$"; then echo "systemd_active"; return 0; fi',
+        '  if [ -n "$pat" ] && pgrep -f "$pat" >/dev/null 2>&1; then echo "process_running"; return 0; fi',
+        '  if [ "$panel" = "3x-ui" ] && ss -tlnp 2>/dev/null | grep -q "x-ui"; then echo "port_active"; return 0; fi',
+        '  echo "not_running"',
+        "  return 1",
+        "}",
+        `check_panel_running "${req.panel}"`,
+      ].join("\n"))
+    ).trim();
+    const isOk =
       verifyOutput.includes("docker_running") ||
       verifyOutput.includes("systemd_active") ||
       verifyOutput.includes("process_running") ||
       verifyOutput.includes("port_active");
 
-    markStep(state.steps, "verify", "done", isOk ? "Verification passed — panel is running" : "Restore completed — verification is best-effort");
+    markStep(state.steps, "verify", "done", isOk ? `Verification passed — panel is running (${verifyOutput.split("\n").pop()?.trim() || "ok"})` : "Restore completed — panel process could not be detected (best-effort verification)");
     state.status = "success";
     state.finishedAt = Date.now();
     state.durationMs = state.finishedAt - state.startedAt;

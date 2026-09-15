@@ -17,10 +17,28 @@ export function stripPartFromName(name: string): string {
   return stripped || name;
 }
 
-/** Best-effort panel hint parsed from the file name. */
+/**
+ * Best-effort panel hint parsed from the file name.
+ *
+ * Must recognise the REAL file names each panel produces — bkup never renames
+ * a backup, so the name is whatever the source panel called it:
+ *   3x-ui:      x-ui-backup-YYYYMMDD-HHMMSS.db        (panel's own database)
+ *   HMPanel:    backup_full_<timestamp>.tar.gz        (panel's official archive id)
+ *   PasarGuard: pasarguard_full_<timestamp>.tar.gz    (bkup full snapshot)
+ *   Rebecca:    rebecca-backup-<ts>.rbbackup          (panel's official export)
+ * Getting this wrong once meant a reassembled HMPanel archive was labelled
+ * "3x-ui" and the restore tried to push it into x-ui.db — a broken restore.
+ */
 export function detectPanel(name: string): string {
-  const n = name.toLowerCase();
-  if (n.includes("hmpanel") || n.startsWith("hm-") || n.includes("hm_")) return "hmpanel";
+  const n = (name.split(/[\\/]/).pop() || name).toLowerCase();
+  if (
+    n.includes("hmpanel") ||
+    n.startsWith("hm-") ||
+    n.includes("hm_") ||
+    n.startsWith("backup_full_") || // HMPanel's official archive naming
+    n.startsWith("backup_") && n.endsWith(".tar.gz") && !n.startsWith("backup_db_")
+  )
+    return "hmpanel";
   if (n.includes("pasarguard") || n.startsWith("pg-") || n.includes("pg_")) return "pasarguard";
   if (n.includes("rebecca") || n.endsWith(".rbbackup") || n.startsWith("rb-")) return "rebecca";
   return "3x-ui";
