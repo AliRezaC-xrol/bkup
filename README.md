@@ -32,7 +32,7 @@ connection with one click. The backup interval is set in **seconds**.
 - **All-in-One Management:** Control 3x-ui, HM Panel, PasarGuard, and Rebecca from dashboard.
 - **Telegram Delivery:** Backup files are sent directly to your Telegram destination.
 - **Flexible Scheduling:** Set intervals in seconds for any scheduling requirement.
-- **Web Panel:** Live logs, backup history, Reassemble, Restore 
+- **Web Panel:** Live logs, backup history, Reassemble, Restore.
 
 ## Install
 
