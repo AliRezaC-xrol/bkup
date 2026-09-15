@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
     const runs = await db.backupRun.findMany({ where: { id: { in: ids } } });
     // verify every selected run: exists, complete, file still on disk —
     // `usable` keeps only the verified (non-null) fields for the merge below
-    const usable: { id: number; fileName: string; filePath: string }[] = [];
+    const usable: { id: number; fileName: string; filePath: string; panel: string }[] = [];
     for (const id of ids) {
       const run = runs.find((r) => r.id === id);
       if (!run) return NextResponse.json({ error: "BACKUP_NOT_FOUND" }, { status: 404 });
@@ -61,7 +61,7 @@ export async function POST(req: NextRequest) {
       } catch {
         return NextResponse.json({ error: "BACKUP_FILE_GONE" }, { status: 409 });
       }
-      usable.push({ id: run.id, fileName: run.fileName ?? "", filePath: run.filePath });
+      usable.push({ id: run.id, fileName: run.fileName ?? "", filePath: run.filePath, panel: run.panel });
     }
 
     // refuse incomplete part sets: merging them would silently produce a
@@ -78,6 +78,11 @@ export async function POST(req: NextRequest) {
     const basesOf = (n: string) => stripPartFromName(n.split(/[\\/]/).pop() || "");
     if (usable.length > 1 && new Set(usable.map((r) => basesOf(r.fileName))).size > 1) {
       return NextResponse.json({ error: "MIXED_PART_SETS" }, { status: 409 });
+    }
+    // parts of ONE source file can only belong to ONE panel — mixing panels in
+    // a merge would corrupt the result, so refuse it instead of guessing
+    if (new Set(usable.map((r) => r.panel)).size > 1) {
+      return NextResponse.json({ error: "MIXED_PANELS" }, { status: 409 });
     }
     // several COMPLETE backups selected at once — concatenating them would
     // destroy both; only a part set (or one complete file) may be merged
@@ -134,7 +139,7 @@ export async function POST(req: NextRequest) {
     const row = await db.reassembledBackup.create({
       data: {
         name: base,
-        panel: detectPanel(base),
+        panel: usable[0].panel || detectPanel(base),
         parts: ordered.length,
         size,
         filePath: outPath,

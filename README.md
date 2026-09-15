@@ -21,6 +21,14 @@ on the schedule you set, and sends it to your **Telegram** chat or channel as a
 file. It runs as a systemd service on your own server — CPU and RAM capped,
 restarted automatically if it stops, back on after a reboot.
 
+Every panel has exactly **one backup method — the panel's own complete backup**,
+taken byte-for-byte and never modified, repacked or filtered: **3x-ui** gives its
+own full database (`x-ui.db`) exactly as the panel serves it, **HMPanel** gives its
+official full archive, **PasarGuard** is captured as a complete snapshot of every
+section (users, hosts, nodes, cores, groups, settings, templates), and **Rebecca**
+gives its official full export. What the panel produced is what lands in Telegram —
+everything included, nothing touched.
+
 <div align="center">
 
 <img src="docs/flow-en-2.svg" alt="Your panels to bkup, then Telegram" width="820">
@@ -81,7 +89,7 @@ update it always matches what is actually running.
 
 Backups larger than **50 MB** are split into multiple numbered parts before being sent to Telegram.
 
-In the **Reassemble** section, you can upload these parts and convert them back into the original backup file. The parts are automatically sorted by their numbers and merged byte-by-byte, while the original files remain untouched.
+In the **Reassemble** section, you can upload these parts and convert them back into the original backup file. The parts are automatically sorted by their numbers and merged byte-by-byte, while the original files remain untouched. The merged file is integrity-checked before it is stored and is labelled with the correct panel for all four panels — 3x-ui, HMPanel, PasarGuard and Rebecca names are all recognized, so every reassembled backup restores with its own panel's restore path.
 
 You can also reassemble parts that are already stored in the **Backups** section. Simply select the parts you need; they are automatically arranged in the correct order, and duplicate part numbers are detected before the merge begins.
 
@@ -95,9 +103,26 @@ The **Restore** section lets you restore a backup directly to a server over **SS
 
 Select the target server, panel, optional **Cloudflare DNS** settings, and the backup you want to restore. Before starting, **bkup** displays a summary of the target server, selected backup, and panel.
 
-During the restore, every step is displayed in real time. You can cancel the restore while it is running, and the result of every restore is recorded in **History**.
+**The selected backup decides the panel — never the other way around.** A 3x-ui
+backup is only ever restored onto 3x-ui, an HMPanel backup only onto HMPanel,
+PasarGuard onto PasarGuard and Rebecca onto Rebecca. bkup does not migrate one
+panel's backup onto another panel, and it never rewrites the backup to make it
+"fit": the exact bytes the panel produced are placed back, so everything that was
+in the backup — users, inbounds, settings, traffic — comes back exactly as it was.
 
-If the selected panel is not installed on the target server, **bkup** installs the panel first and then restores the selected backup.
+If that panel is not installed on the target server yet, **bkup** installs it
+first and then restores the selected backup onto it — the same flow whether the
+panel was installed by you or by bkup.
+
+After a verified byte-for-byte placement, **bkup proves the panel is actually
+running instead of trusting a heartbeat**: for 3x-ui it checks that both the panel
+service and the X-Ray core are really up. If X-Ray cannot start because the
+restored configuration references certificate files that only existed on the old
+server, bkup creates self-signed certificates **at exactly those referenced
+paths** — the backup's data itself is never edited, and the panel comes up with
+its own configuration intact.
+
+During the restore, every step is displayed in real time. You can cancel the restore while it is running, and the result of every restore is recorded in **History**.
 
 Every past run is kept in **Restore History** — filter it by **status** (success, failed, cancelled), expand the exact error behind a failed run and copy it, or export the filtered rows as **CSV**. A failed or cancelled run can be retried with one click: the server address, port, username, and panel are pre-filled, and since passwords and keys are never stored, you only re-enter the credential before connecting.
 

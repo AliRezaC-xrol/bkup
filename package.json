@@ -93,7 +93,7 @@
     "tw-animate-css": "^1.3.5",
     "typescript": "^5"
   },
-  "description": "bkup \u2014 automatic backups of 3x-ui, HM Panel & PasarGuard panels to Telegram",
+  "description": "bkup — automatic full backups of 3x-ui, HMPanel, PasarGuard & Rebecca panels to Telegram, byte-exact reassembly and same-panel restore (every backup goes back onto its own panel, unmodified)",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/AliRezaC-xrol/bkup.git"
@@ -105,7 +105,12 @@
     "telegram-bot",
     "backup",
     "v2ray",
-    "persian"
+    "persian",
+    "hmpanel",
+    "pasarguard",
+    "rebecca",
+    "restore",
+    "reassembly"
   ],
   "license": "UNLICENSED"
 }
