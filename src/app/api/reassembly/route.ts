@@ -5,7 +5,7 @@ import { db } from "@/lib/db";
 import { requireAuthOrCli } from "@/lib/auth";
 import { log } from "@/lib/logger";
 import { bi } from "@/lib/messages";
-import { backupDir } from "@/lib/backup-service";
+import { backupDir, verifyArchive } from "@/lib/backup-service";
 import { compareParts, detectPanel, findPartGaps, parsePartIndex, stripPartFromName } from "@/lib/reassembly";
 
 export const runtime = "nodejs";
@@ -72,6 +72,19 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "MISSING_PARTS", gaps }, { status: 409 });
     }
 
+    // every selected file must belong to ONE backup — parts of two different
+    // files (or a part plus an unrelated backup) concatenated would corrupt
+    // both; refuse the selection instead of storing a broken merge
+    const basesOf = (n: string) => stripPartFromName(n.split(/[\\/]/).pop() || "");
+    if (usable.length > 1 && new Set(usable.map((r) => basesOf(r.fileName))).size > 1) {
+      return NextResponse.json({ error: "MIXED_PART_SETS" }, { status: 409 });
+    }
+    // several COMPLETE backups selected at once — concatenating them would
+    // destroy both; only a part set (or one complete file) may be merged
+    if (usable.length > 1 && usable.every((r) => !parsePartIndex(r.fileName))) {
+      return NextResponse.json({ error: "MULTIPLE_COMPLETE_BACKUPS" }, { status: 409 });
+    }
+
     const dir = path.join(backupDir(), "reassembled");
     fs.mkdirSync(dir, { recursive: true });
 
@@ -103,6 +116,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         { error: e instanceof Error ? e.message : "MERGE_FAILED" },
         { status: 500 }
+      );
+    }
+
+    // integrity gate on the MERGED file — a corrupt merge (wrong part order,
+    // mixed sets, truncated part) must never be stored as a "complete" backup
+    const merged = fs.readFileSync(outPath);
+    const integrity = verifyArchive(base, merged);
+    if (!integrity.ok) {
+      try { fs.unlinkSync(outPath); } catch { /* best-effort */ }
+      return NextResponse.json(
+        { error: "MERGED_FILE_CORRUPT", detail: integrity.error },
+        { status: 422 }
       );
     }
 
@@ -141,6 +166,21 @@ export async function POST(req: NextRequest) {
   // merge order is decided by the parsed part index — never by upload order
   const ordered = [...files].sort((a, b) => compareParts(a.name, b.name));
 
+  // last line of defense for uploads — refuse anything that would merge into
+  // a corrupt file: an incomplete part set, parts of two different backups,
+  // or several complete backups concatenated together
+  const uploadGaps = findPartGaps(files.map((f) => f.name));
+  if (uploadGaps.length > 0) {
+    return NextResponse.json({ error: "MISSING_PARTS", gaps: uploadGaps }, { status: 409 });
+  }
+  const uploadBases = files.map((f) => stripPartFromName((f.name || "").split(/[\\/]/).pop() || ""));
+  if (files.length > 1 && new Set(uploadBases).size > 1) {
+    return NextResponse.json({ error: "MIXED_PART_SETS" }, { status: 409 });
+  }
+  if (files.length > 1 && files.every((f) => !parsePartIndex(f.name))) {
+    return NextResponse.json({ error: "MULTIPLE_COMPLETE_BACKUPS" }, { status: 409 });
+  }
+
   // the original name comes from the FIRST part with the ".partNNofMM" bit stripped
   const rawName = (ordered[0].name || "backup").split(/[\\/]/).pop() || "backup";
   const name = stripPartFromName(rawName) || rawName;
@@ -163,6 +203,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       { error: e instanceof Error ? e.message : "MERGE_FAILED" },
       { status: 500 }
+    );
+  }
+
+  // integrity gate on the MERGED file — see the JSON-mode note above
+  const merged = fs.readFileSync(outPath);
+  const integrity = verifyArchive(name, merged);
+  if (!integrity.ok) {
+    try { fs.unlinkSync(outPath); } catch { /* best-effort */ }
+    return NextResponse.json(
+      { error: "MERGED_FILE_CORRUPT", detail: integrity.error },
+      { status: 422 }
     );
   }
 

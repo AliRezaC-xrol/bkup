@@ -42,8 +42,6 @@ export const CONFIG_ALLOWED = new Set([
   "telegramThreadId",
   "intervalSeconds",
   "enabled",
-  "backupMode",
-  "localDbPath",
   "localRetention",
   "tgAutoDeleteKeep",
 ]);
@@ -107,9 +105,6 @@ export async function applyConfigPatch(
   }
   if (patch.authMode !== undefined && !["session", "bearer"].includes(String(patch.authMode))) {
     return { ok: false, status: 400, error: bi("Invalid authentication mode", "حالت احراز هویت نامعتبر است") };
-  }
-  if (patch.backupMode !== undefined && !["auto", "db", "json", "local"].includes(String(patch.backupMode))) {
-    return { ok: false, status: 400, error: bi("Invalid backup mode", "حالت بکاپ‌گیری نامعتبر است") };
   }
   if (patch.panelUrl !== undefined) {
     const err = validateUrl(patch.panelUrl, "3x-ui panel");

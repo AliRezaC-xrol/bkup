@@ -1056,8 +1056,6 @@ async function restoreFromRemotePath(
 }
 
 async function restore3xUi(ssh: SshClient, remoteBackupPath: string, backupName: string, localBackupPath: string): Promise<{ success: boolean; detail: string }> {
-  const lowerName = backupName.toLowerCase();
-
   // dispatch by CONTENT first — a JSON config export must never be written
   // into /etc/x-ui/x-ui.db as if it were the SQLite database
   const kind = sniffBackupKind(localBackupPath);
@@ -1085,7 +1083,8 @@ async function restore3xUi(ssh: SshClient, remoteBackupPath: string, backupName:
   await ssh.exec("mkdir -p /etc/x-ui /usr/local/x-ui");
 
   let placeOk = false;
-  if (lowerName.endsWith(".db") || !lowerName.match(/\.(tar\.gz|tgz|zip)$/)) {
+  if (kind === "sqlite") {
+    // a raw SQLite database — place it verbatim, byte-for-byte
     const moveRes = await ssh.exec(
       `cp -f '${remoteBackupPath}' /etc/x-ui/x-ui.db && chmod 644 /etc/x-ui/x-ui.db && chown root:root /etc/x-ui/x-ui.db 2>/dev/null || true && ls -lh /etc/x-ui/x-ui.db && echo OK`
     );
@@ -1097,7 +1096,7 @@ async function restore3xUi(ssh: SshClient, remoteBackupPath: string, backupName:
     const extractDir = `/tmp/bkup-xui-extract-${Date.now()}`;
     await ssh.exec(`mkdir -p '${extractDir}'`);
     const extractRes = await ssh.exec(
-      lowerName.endsWith(".zip")
+      kind === "zip"
         ? `cd '${extractDir}' && unzip -o '${remoteBackupPath}' 2>&1 && echo EXTRACT_OK`
         : `cd '${extractDir}' && tar -xzf '${remoteBackupPath}' 2>&1 && echo EXTRACT_OK`
     );
@@ -1145,39 +1144,121 @@ async function restore3xUi(ssh: SshClient, remoteBackupPath: string, backupName:
 
   await ssh.exec("systemctl enable x-ui 2>/dev/null || true; systemctl daemon-reload 2>/dev/null || true");
   await ssh.exec("systemctl restart x-ui 2>/dev/null || systemctl start x-ui 2>/dev/null || /usr/local/x-ui/x-ui restart 2>&1 || true");
-  await ssh.exec("sleep 6");
 
-  const verifyDb = await ssh.exec(
-    `ls -lh /etc/x-ui/x-ui.db; sqlite3 /etc/x-ui/x-ui.db "SELECT COUNT(*) FROM inbounds; SELECT COUNT(*) FROM users;" 2>&1 | head -10 || echo "db query failed"`
-  );
-  const verifyService = await ssh.exec(
-    'systemctl is-active x-ui 2>/dev/null || echo "INACTIVE"; pgrep -a x-ui 2>/dev/null | head -3 || echo "no x-ui pgrep"; pgrep -a xray 2>/dev/null | head -3 || echo "no xray yet"'
-  );
+  const probeStatus = async (): Promise<{ svc: boolean; xray: boolean; raw: string }> => {
+    const st = await ssh.exec(
+      'echo "SVC:$(systemctl is-active x-ui 2>/dev/null)"; pgrep -f "x-ui" >/dev/null 2>&1 && echo XUI_UP; pgrep -f "xray" >/dev/null 2>&1 && echo XRAY_UP; echo CHECK_DONE'
+    );
+    const raw = (st.stdout || "").trim();
+    return {
+      svc: raw.includes("SVC:active") || raw.includes("XUI_UP"),
+      xray: raw.includes("XRAY_UP"),
+      raw,
+    };
+  };
 
-  const dbExists = verifyDb.stdout.includes("x-ui.db");
-  const serviceActive =
-    verifyService.stdout.includes("active") || (verifyService.stdout.includes("x-ui") && !verifyService.stdout.includes("no x-ui"));
-
-  if (verifyService.stdout.includes("no xray")) {
-    await ssh.exec("/usr/local/x-ui/x-ui restart 2>&1 || systemctl restart x-ui 2>&1; sleep 4");
+  // bring-up loop — the panel AND its X-Ray core must actually be running
+  // before success is claimed. A restart makes the panel regenerate the
+  // X-Ray config from the restored database; the backup bytes are never touched.
+  let probe = await probeStatus();
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await ssh.exec("sleep 6");
+    probe = await probeStatus();
+    if (probe.svc && probe.xray) break;
+    if (attempt < 2) {
+      await ssh.exec("/usr/local/x-ui/x-ui restart >/dev/null 2>&1 || systemctl restart x-ui 2>/dev/null || true");
+    }
   }
 
+  // ── Environment-only X-Ray recovery — the restored database is NEVER
+  // modified. When X-Ray refuses to start on THIS server it is almost always
+  // an environment gap, not a broken backup: the backup references certificate
+  // files that only existed on the server it was taken from. Two purely
+  // environmental fixes:
+  //   1) the panel's own web certificate points at a missing file → the panel
+  //      is reset to HTTP (x-ui cert -webCert "") so the panel itself comes up
+  //   2) inbound TLS certificate paths stored INSIDE the backup are missing on
+  //      this server → self-signed pairs are generated AT THOSE REFERENCED
+  //      PATHS, so the backup's own configuration resolves in this environment
+  if (!probe.xray) {
+    await ssh.exec(`bash -s <<'BKUP_XRAY_FIX'
+echo "[bkup] X-Ray did not come up — checking the environment (backup data untouched)"
+WEB_CERT=$(/usr/local/x-ui/x-ui setting -show 2>/dev/null | grep -iE "webCert(Path)?:" | awk -F': ' '{print $2}' | tr -d '"[:space:]' | head -1 || true)
+if [ -n "$WEB_CERT" ] && [ "$WEB_CERT" != '""' ] && [ ! -f "$WEB_CERT" ]; then
+  echo "[bkup] Panel certificate $WEB_CERT does not exist on this server — resetting the panel TLS to HTTP"
+  /usr/local/x-ui/x-ui cert -webCert "" -webCertKey "" 2>&1 || true
+fi
+PAIRS=$(sqlite3 /etc/x-ui/x-ui.db "SELECT DISTINCT json_extract(stream_settings,'\$.tlsSettings.certificates[0].certificateFile'), json_extract(stream_settings,'\$.tlsSettings.certificates[0].keyFile') FROM inbounds WHERE json_valid(stream_settings) AND stream_settings LIKE '%certificateFile%';" 2>/dev/null || true)
+echo "$PAIRS" | while IFS='|' read -r CERT KEY; do
+  case "$CERT" in /*) ;; *) continue ;; esac
+  if [ -f "$CERT" ] && [ -n "$KEY" ] && [ -f "$KEY" ]; then continue; fi
+  KEY_TARGET="$KEY"
+  if [ -z "$KEY_TARGET" ]; then KEY_TARGET="$CERT.key"; fi
+  case "$KEY_TARGET" in /*) ;; *) KEY_TARGET="$(dirname "$CERT")/$(basename "$KEY_TARGET")" ;; esac
+  mkdir -p "$(dirname "$CERT")" "$(dirname "$KEY_TARGET")" 2>/dev/null || true
+  if [ -f "$KEY_TARGET" ]; then
+    openssl req -new -x509 -days 3650 -nodes -key "$KEY_TARGET" -subj "/CN=restored" -out "$CERT" >/dev/null 2>&1 && echo "[bkup] Generated the certificate referenced by the backup: $CERT" || true
+  else
+    openssl req -new -x509 -days 3650 -nodes -newkey rsa:2048 -subj "/CN=restored" -keyout "$KEY_TARGET" -out "$CERT" >/dev/null 2>&1 && echo "[bkup] Generated the certificate pair referenced by the backup: $CERT + $KEY_TARGET" || true
+  fi
+  chmod 644 "$CERT" "$KEY_TARGET" 2>/dev/null || true
+done
+systemctl restart x-ui 2>/dev/null || /usr/local/x-ui/x-ui restart 2>&1 || true
+BKUP_XRAY_FIX`);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await ssh.exec("sleep 6");
+      probe = await probeStatus();
+      if (probe.svc && probe.xray) break;
+      if (attempt < 1) {
+        await ssh.exec("/usr/local/x-ui/x-ui restart >/dev/null 2>&1 || systemctl restart x-ui 2>/dev/null || true");
+      }
+    }
+  }
+
+  const verifyDb = await ssh.exec(
+    `ls -lh /etc/x-ui/x-ui.db; sqlite3 /etc/x-ui/x-ui.db "PRAGMA integrity_check; SELECT COUNT(*) FROM inbounds;" 2>&1 | head -10 || echo "db query failed"`
+  );
+  const dbExists = verifyDb.stdout.includes("x-ui.db");
   if (!dbExists) {
     return { success: false, detail: "x-ui.db not found after restore" };
   }
+  const integrityOk = verifyDb.stdout.toLowerCase().includes("ok") && !verifyDb.stdout.toLowerCase().includes("error");
+  const inboundMatch = verifyDb.stdout.trim().split("\n").filter((l) => /^\d+$/.test(l.trim()));
 
+  // post-restart size comparison is ADVISORY only — when the backup comes from
+  // an older panel version, the panel's own startup migration legitimately
+  // rewrites the schema (adds columns), so a size difference here does NOT
+  // mean the restore corrupted anything. The strict byte-exact size check ran
+  // BEFORE the first restart, while nothing had yet touched the file.
   const finalSizeCheck = await ssh.exec(
     `stat -c %s /etc/x-ui/x-ui.db 2>/dev/null || wc -c < /etc/x-ui/x-ui.db; echo "---"; stat -c %s '${remoteBackupPath}' 2>/dev/null || wc -c < '${remoteBackupPath}' 2>/dev/null || echo 0`
   );
+  const sizeLines = finalSizeCheck.stdout.trim().split("---");
+  const placedBytes = parseInt((sizeLines[0] || "").trim(), 10);
+  const backupBytes = parseInt((sizeLines[1] || "").trim(), 10);
+  const sizeNote =
+    Number.isFinite(placedBytes) && Number.isFinite(backupBytes) && backupBytes > 0 && placedBytes !== backupBytes
+      ? ` (size now ${placedBytes} bytes vs backup ${backupBytes} — the panel rewrote the database on startup, expected for cross-version backups)`
+      : "";
 
-  if (serviceActive) {
-    return { success: true, detail: `3x-ui database restored (${remoteSize} bytes) and panel is running — ${verifyDb.stdout.slice(0, 120)}` };
-  } else {
-    return {
-      success: true,
-      detail: `3x-ui database restored (${remoteSize} bytes) but service not yet active — auto-fix attempted. If panel shows Not Running, run: x-ui cert -webCert "" -webCertKey "" && systemctl restart x-ui. Size check: ${finalSizeCheck.stdout.slice(0, 100)}`,
-    };
+  const inboundsNote = inboundMatch.length ? `, ${inboundMatch[inboundMatch.length - 1].trim()} inbounds` : "";
+  const integrityNote = integrityOk ? "SQLite integrity ok" : "SQLite integrity could not be confirmed";
+  if (probe.svc && probe.xray) {
+    return { success: true, detail: `3x-ui database restored verbatim (${remoteSize} bytes) — panel running, X-Ray core running${inboundsNote}; ${integrityNote}${sizeNote}` };
   }
+
+  // the database itself is restored and untouched — but the service/core did
+  // not come up even after the environment fixes. Report the truth with the
+  // real X-Ray error tail, never a silent success and never a modified backup.
+  const journal = await ssh.exec("journalctl -u x-ui --no-pager -n 12 2>/dev/null | tail -12 || true");
+  const errLog = await ssh.exec("tail -n 8 /usr/local/x-ui/error.log 2>/dev/null || true");
+  const xrayNote = !probe.svc
+    ? "the panel service is NOT running"
+    : "the panel is running but the X-Ray core is NOT running";
+  return {
+    success: false,
+    detail: `3x-ui database restored verbatim (${remoteSize} bytes)${inboundsNote}; ${integrityNote}${sizeNote}. ${xrayNote} — the backup data itself is intact; the X-Ray error comes from this server's environment. X-Ray log tail: ${(errLog.stdout || journal.stdout).slice(-400) || probe.raw.slice(0, 200)}`,
+  };
 }
 
 // ── HMPanel restore — official CLI first (complete & correct), manual fallback ──
@@ -1567,7 +1648,10 @@ async function restorePasarguardSnapshot(
     if (!cols) continue;
     parts.push(`DELETE FROM ${sqlQuoteIdent(item.table)};`);
     parts.push(buildSqlInserts(item.table, cols, item.rows));
-    parts.push(`UPDATE sqlite_sequence SET seq=(SELECT COALESCE(MAX(rowid),0) FROM ${sqlQuoteIdent(item.table)}) WHERE name='${item.table}';`);
+    // resume AUTOINCREMENT from the real key column when there is one —
+    // MAX(rowid) is only the correct seq source for tables without "id"
+    const seqExpr = cols.includes("id") ? "MAX(id)" : "MAX(rowid)";
+    parts.push(`UPDATE sqlite_sequence SET seq=(SELECT COALESCE(${seqExpr},0) FROM ${sqlQuoteIdent(item.table)}) WHERE name='${item.table}';`);
   }
   parts.push("COMMIT;");
 

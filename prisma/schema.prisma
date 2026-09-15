@@ -47,8 +47,8 @@ model BackupConfig {
   intervalSeconds  Int      @default(60)
   enabled          Boolean  @default(false)
   // Backup behavior
-  backupMode       String   @default("auto") // auto | db | json | local
-  localDbPath      String   @default("/etc/x-ui/x-ui.db")
+  backupMode       String   @default("db") // legacy since 1.2.0 — 3x-ui always takes the full database backup
+  localDbPath      String   @default("") // legacy since 1.2.0 — unused
   localRetention   Int      @default(288) // keep last N local files (0 = unlimited)
   tgAutoDeleteKeep Int      @default(0) // keep last N tg messages (0 = never delete)
   createdAt        DateTime @default(now())
