@@ -27,11 +27,15 @@ import { cn } from "@/lib/utils"
  * VARIANTS:
  *   - "default"  — for light cards: muted gray track when OFF, solid
  *                  near-black (primary) track when OFF→ON. White thumb.
- *   - "on-dark"  — for dark/primary surfaces (the dashboard hero card):
- *                  the default variant's ON track is ALSO near-black, which
- *                  vanished against the black card (black-on-black). Here the
- *                  colors invert instead: OFF = translucent white track with
- *                  a white thumb, ON = solid white track with a black thumb.
+ *   - "on-dark"  — for the dashboard hero card, whose surface FLIPS with the
+ *                  app theme (near-black `bg-primary` in light, light graphite
+ *                  in dark). The switch therefore adapts per theme:
+ *                  OFF = frosted track (white frost on the dark surface, soft
+ *                  black frost on the light one) with a white thumb,
+ *                  ON = solid WHITE track with a FIXED near-black thumb.
+ *                  The ON thumb must never be `bg-primary`: primary inverts to
+ *                  near-white in the app's dark theme, which painted a white
+ *                  knob on the white track — invisible (reported bug).
  *                  Monochrome, unmistakable, same geometry.
  *
  * UX guarantees:
@@ -68,13 +72,16 @@ function Switch({
           "shadow-[inset_0_1px_2px_rgba(0,0,0,0.08)]",
           dark ? (
             cn(
-              // OFF on dark: dim translucent track — clearly "resting".
-              // Scoped to the unchecked state so it can never out-compete the
-              // checked style (equal-specificity `dark:` + checked variants
-              // resolve by stylesheet order — that is exactly how dark mode
-              // ended up painting ON toggles with the dark OFF track).
-              "group-data-[state=unchecked]:bg-white/25",
-              // ON on dark: solid white track — full inversion
+              // OFF on the hero surface: frosted track. The hero surface itself
+              // flips with the app theme (near-black in light, light graphite
+              // in dark), so the frost flips with it: white frost on the dark
+              // surface, soft black frost on the light one. Scoped to the
+              // unchecked state so it can never out-compete the checked style
+              // (equal-specificity variants resolve by stylesheet order — that
+              // is exactly how dark mode ended up painting ON toggles with the
+              // dark OFF track).
+              "group-data-[state=unchecked]:bg-white/25 group-data-[state=unchecked]:dark:bg-black/20",
+              // ON on the hero surface: solid white track — full inversion
               "group-data-[state=checked]:bg-white group-data-[state=checked]:shadow-[0_1px_6px_rgba(0,0,0,0.35)]"
             )
           ) : (
@@ -97,7 +104,11 @@ function Switch({
             dark ? (
               cn(
                 "bg-white shadow-md",
-                "group-data-[state=checked]:bg-primary"
+                // ON: FIXED near-black thumb on the white track. Deliberately
+                // NOT bg-primary — primary flips to near-white in the app's
+                // dark theme, which produced a white knob on a white track
+                // (invisible switch, the exact reported dark-mode bug).
+                "group-data-[state=checked]:bg-black"
               )
             ) : (
               cn(
