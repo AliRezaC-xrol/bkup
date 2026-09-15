@@ -26,35 +26,15 @@ interface VerifyResult {
   sha8: string;
 }
 
-const PANELS = [
-  { key: "3x-ui", tag: "3X" },
-  { key: "hmpanel", tag: "HM" },
-  { key: "pasarguard", tag: "PG" },
-  { key: "rebecca", tag: "RB" },
-] as const;
-
-export type PanelFilter = "all" | (typeof PANELS)[number]["key"];
-
 export function BackupsTab({
   runs, onRefresh,
-  // lifted state — lets the Dashboard panel-health tiles drill into a panel
-  panelFilter: panelFilterProp, onPanelFilterChange,
 }: {
   runs: BackupRunDTO[];
   onRefresh: () => void;
-  panelFilter?: PanelFilter;
-  onPanelFilterChange?: (p: PanelFilter) => void;
 }) {
   const { t } = useLang();
   const { toast } = useToast();
   const [filter, setFilter] = useState<"all" | "success" | "failed">("all");
-  // works with EITHER the lifted state (dashboard drill-down) or local state
-  const [panelFilterLocal, setPanelFilterLocal] = useState<PanelFilter>("all");
-  const panelFilter = panelFilterProp ?? panelFilterLocal;
-  const setPanelFilter = (p: PanelFilter) => {
-    setPanelFilterLocal(p);
-    onPanelFilterChange?.(p);
-  };
   const [deleting, setDeleting] = useState<BackupRunDTO | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -79,10 +59,9 @@ export function BackupsTab({
     return runs.filter(
       (r) =>
         (filter === "all" || r.status === filter) &&
-        (panelFilter === "all" || r.panel === panelFilter) &&
         (!q || (r.fileName ?? `#${r.id}`).toLowerCase().includes(q))
     );
-  }, [runs, filter, panelFilter, query]);
+  }, [runs, filter, query]);
 
   // chip counts — reflect the loaded history window, so the numbers always
   // agree with what the table can actually show
@@ -94,11 +73,6 @@ export function BackupsTab({
     }),
     [runs]
   );
-  const panelCounts = useMemo(() => {
-    const base: Record<PanelFilter, number> = { all: runs.length, "3x-ui": 0, hmpanel: 0, pasarguard: 0, rebecca: 0 };
-    for (const r of runs) if (r.panel in base) base[r.panel as PanelFilter] += 1;
-    return base;
-  }, [runs]);
 
   const methodLabel = (m: string | null) =>
     m === "db" ? t("method_db") : m === "json" ? t("method_json") : m === "local" ? t("method_local") : m === "hm-full" ? t("method_hm_full") : m === "pg-full" ? t("method_pg_full") : m === "rb-full" ? t("method_rb_full") : "—";
@@ -264,41 +238,6 @@ export function BackupsTab({
                   }`}
                 >
                   {statusCounts[f]}
-                </span>
-              </button>
-            ))}
-          </div>
-          <div className="flex rounded-lg border p-0.5">
-            <button
-              onClick={() => setPanelFilter("all")}
-              className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
-                panelFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {t("filter_all")}
-              <span
-                className={`rounded px-1 text-[10px] tabular-nums ${
-                  panelFilter === "all" ? "bg-primary-foreground/20 text-primary-foreground" : "bg-muted text-muted-foreground"
-                }`}
-              >
-                {panelCounts.all}
-              </span>
-            </button>
-            {PANELS.map((p) => (
-              <button
-                key={p.key}
-                onClick={() => setPanelFilter(p.key)}
-                className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
-                  panelFilter === p.key ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {p.tag}
-                <span
-                  className={`rounded px-1 text-[10px] tabular-nums ${
-                    panelFilter === p.key ? "bg-primary-foreground/20 text-primary-foreground" : "bg-muted text-muted-foreground"
-                  }`}
-                >
-                  {panelCounts[p.key]}
                 </span>
               </button>
             ))}

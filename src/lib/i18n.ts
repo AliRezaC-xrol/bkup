@@ -189,6 +189,7 @@ export const dict = {
   reassembly_group_remove: "Remove",
   reassembly_search_ph: "Filter by name or panel…",
   reassembly_select_all_shown: "Select all shown",
+  reassembly_deselect_all: "Deselect all shown",
   reassembly_no_match: "No backups match this filter.",
   reassembly_dup_parts: "duplicate part numbers",
   reassembly_missing_lbl: "Missing parts",

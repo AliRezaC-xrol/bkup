@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================
 #  bkup — Interactive Terminal Menu
-#  Auto Backup for 3x-ui + HM Panel + PasarGuard + Rebecca → Telegram
 #  Focused CLI: status, web-panel URL, password, port, logs,
 #  updates and uninstall. Everything else lives in the web panel.
 # =============================================================
@@ -38,7 +37,6 @@ banner() {
   ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝
 ART
   echo -e "${W}     b k u p${N}"
-  echo -e "${D}     3x-ui / HMPanel / PasarGuard / Rebecca → Telegram${N}"
   echo ""
 }
 

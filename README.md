@@ -36,7 +36,7 @@ same install covers anything from a few backups a day to one every few minutes.
 - **3x-ui, HM Panel, PasarGuard and Rebecca in one place** — each panel enabled independently, each with its own connection test
 - **Telegram delivery** — every backup arrives as a file in your chat or channel; nothing to download by hand
 - **Your schedule** — interval in seconds, kept across reboots by the systemd service
-- **Web panel** — dashboard, live logs, backup history with per-backup download and delete, plus a file-name search that combines with the status and panel filters
+- **Web panel** — dashboard, live logs, backup history with per-backup download and delete, plus a file-name search that combines with the status filter
 - **Reassemble split backups** — parts delivered to Telegram are merged back into the one complete file right in the web panel, with a downloadable, bulk-deletable history; you can also pick the parts straight from your stored backups instead of uploading them — part sets of the same file are grouped under one header, so the whole set is one tap away
 - **Restore to any server** — push a backup (a normal run or a reassembled file) back onto a server over SSH; the panel is installed automatically if it is missing, every step streams live, and the run can be cancelled
 - **Settings file** — export every panel, Telegram and schedule setting as JSON and import it on another server; hidden credentials keep their current values, a full export moves them too
@@ -99,7 +99,7 @@ During the restore, every step is displayed in real time. You can cancel the res
 
 If the selected panel is not installed on the target server, **bkup** installs the panel first and then restores the selected backup.
 
-Every past run is kept in **Restore History** — filter it by **panel** or **status** (success, failed, cancelled), expand the exact error behind a failed run and copy it, or export the filtered rows as **CSV**. A failed or cancelled run can be retried with one click: the server address, port, username, and panel are pre-filled, and since passwords and keys are never stored, you only re-enter the credential before connecting.
+Every past run is kept in **Restore History** — filter it by **status** (success, failed, cancelled), expand the exact error behind a failed run and copy it, or export the filtered rows as **CSV**. A failed or cancelled run can be retried with one click: the server address, port, username, and panel are pre-filled, and since passwords and keys are never stored, you only re-enter the credential before connecting.
 
 ## Donate
 

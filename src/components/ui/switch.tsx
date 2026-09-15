@@ -68,15 +68,20 @@ function Switch({
           "shadow-[inset_0_1px_2px_rgba(0,0,0,0.08)]",
           dark ? (
             cn(
-              // OFF on dark: dim translucent track — clearly "resting"
-              "bg-white/25",
+              // OFF on dark: dim translucent track — clearly "resting".
+              // Scoped to the unchecked state so it can never out-compete the
+              // checked style (equal-specificity `dark:` + checked variants
+              // resolve by stylesheet order — that is exactly how dark mode
+              // ended up painting ON toggles with the dark OFF track).
+              "group-data-[state=unchecked]:bg-white/25",
               // ON on dark: solid white track — full inversion
               "group-data-[state=checked]:bg-white group-data-[state=checked]:shadow-[0_1px_6px_rgba(0,0,0,0.35)]"
             )
           ) : (
             cn(
-              // OFF on light: unmistakably muted
-              "bg-input dark:bg-input/80",
+              // OFF on light: unmistakably muted — unchecked-only for the same
+              // reason: OFF and ON styles must never fight each other.
+              "group-data-[state=unchecked]:bg-input group-data-[state=unchecked]:dark:bg-input/80",
               // ON on light: unmistakably primary (near-black / near-white in dark)
               "group-data-[state=checked]:bg-primary"
             )
