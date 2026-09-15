@@ -147,16 +147,45 @@ export function SystemTab({
   const checkUpdate = useCallback(async () => {
     setChecking(true);
     try {
-      await fetch("/api/system/update", {
+      const res = await fetch("/api/system/update", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "check" }),
       });
-      onRefreshInfo();
+      const data = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        error?: string;
+        latest?: { tag?: string | null; version?: string | null; note?: string | null };
+        updateAvailable?: boolean;
+      };
+
+      if (!res.ok || !data.ok) {
+        toast({ title: t("error"), description: data.error, variant: "destructive" });
+        return;
+      }
+
+      // The check used to be silent: the button flashed "Checking…" and nothing
+      // else changed, which is why a working check looked like a broken one.
+      const latest = data.latest;
+      if (latest?.note === "GITHUB_UNREACHABLE") {
+        toast({ title: t("github_unreachable"), variant: "destructive" });
+      } else if (latest?.note === "NO_RELEASES") {
+        toast({ title: t("no_release") });
+      } else if (data.updateAvailable) {
+        toast({
+          title: t("update_badge"),
+          description: `${t("latest_version")}: ${latest?.tag ?? latest?.version ?? ""}`.trim(),
+        });
+      } else {
+        toast({ title: t("up_to_date"), description: latest?.tag ?? undefined });
+      }
+      onRefreshInfo(); // re-read /api/system/info so both version cards update at once
+    } catch {
+      toast({ title: t("network_error"), variant: "destructive" });
     } finally {
       setChecking(false);
     }
-  }, [onRefreshInfo]);
+  }, [onRefreshInfo, t, toast]);
 
   const runUpdate = useCallback(async () => {
     setUpdating(true);

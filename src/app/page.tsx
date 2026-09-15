@@ -28,6 +28,9 @@ function tr(tpl: string, params: Record<string, string | number>): string {
 
 type AuthPhase = "loading" | "setup" | "login" | "app";
 
+/** The four fully independent panel integrations. */
+type PanelKey = "3x-ui" | "hmpanel" | "pasarguard" | "rebecca";
+
 function App() {
   const { toast } = useToast();
   const { t } = useLang();
@@ -41,6 +44,8 @@ function App() {
   const [logs, setLogs] = useState<AppLogDTO[]>([]);
   const [logCursor, setLogCursor] = useState(0);
   const [manualRunning, setManualRunning] = useState(false);
+  // which single panel connection is being tested right now (per-row spinner)
+  const [testingPanel, setTestingPanel] = useState<PanelKey | null>(null);
   // ⚡ stale-response guard: every loadCore run gets an id; only the LATEST
   // run may apply its results. Without this, an out-of-order older poll
   // overwrote fresh state and visually snapped the on/off switches back.
@@ -217,35 +222,41 @@ function App() {
     }
   }, [toast, loadCore, t]);
 
-  const testPanel = useCallback(async () => {
-    // tests whichever panels are enabled — each with its own credentials
+  /**
+   * Tests EXACTLY ONE panel — the one whose "Test now" button was pressed.
+   * It used to loop over every enabled panel, so tapping 3x-ui also connected to
+   * HMPanel / PasarGuard / Rebecca and fired a toast for each of them.
+   */
+  const testPanel = useCallback(async (panel: PanelKey) => {
+    const enabled =
+      panel === "3x-ui" ? config?.xuiEnabled
+        : panel === "hmpanel" ? config?.hmEnabled
+          : panel === "pasarguard" ? config?.pgEnabled
+            : config?.rebeccaEnabled;
+    if (!enabled) {
+      toast({ title: t("no_panels_enabled"), description: t("no_panels_enabled_desc"), variant: "destructive" });
+      return;
+    }
+
+    const name = panel === "hmpanel" ? "HMPanel" : panel === "pasarguard" ? "PasarGuard" : panel === "rebecca" ? "Rebecca" : "3x-ui";
+    setTestingPanel(panel);
     try {
-      const targets: ("3x-ui" | "hmpanel" | "pasarguard" | "rebecca")[] = [];
-      if (config?.xuiEnabled) targets.push("3x-ui");
-      if (config?.hmEnabled) targets.push("hmpanel");
-      if (config?.pgEnabled) targets.push("pasarguard");
-      if (config?.rebeccaEnabled) targets.push("rebecca");
-      if (targets.length === 0) {
-        toast({ title: t("no_panels_enabled"), description: t("no_panels_enabled_desc"), variant: "destructive" });
-        return;
-      }
-      for (const panel of targets) {
-        const res = await fetch("/api/config/test-panel", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ config, panel }),
-        });
-        const data = await res.json();
-        const name = panel === "hmpanel" ? "HMPanel" : panel === "pasarguard" ? "PasarGuard" : panel === "rebecca" ? "Rebecca" : "3x-ui";
-        if (data.ok) {
-          toast({ title: tr(t("panel_conn_ok"), { name }), description: resolveText(data.messageBi ?? data.message, "en") });
-        } else {
-          toast({ title: tr(t("panel_conn_fail"), { name }), description: resolveText(data.errorBi ?? data.error, "en"), variant: "destructive" });
-        }
+      const res = await fetch("/api/config/test-panel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ config, panel }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        toast({ title: tr(t("panel_conn_ok"), { name }), description: resolveText(data.messageBi ?? data.message, "en") });
+      } else {
+        toast({ title: tr(t("panel_conn_fail"), { name }), description: resolveText(data.errorBi ?? data.error, "en"), variant: "destructive" });
       }
       loadCore(); // re-fetch config so a newly detected edition (e.g. HM Panel Premium) shows immediately
     } catch {
       toast({ title: t("network_error"), variant: "destructive" });
+    } finally {
+      setTestingPanel(null);
     }
   }, [config, toast, t, loadCore]);
 
@@ -321,6 +332,7 @@ function App() {
           onToggle={persistEnabled}
           onBackupNow={manualBackup}
           onTestPanel={testPanel}
+          testingPanel={testingPanel}
           onTestTg={testTg}
           goto={(k) => setTab(k)}
         />

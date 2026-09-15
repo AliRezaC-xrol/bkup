@@ -184,6 +184,35 @@ body {
   background: radial-gradient(circle, rgba(255, 255, 255, 0.03), transparent 65%);
 }
 
+/* ── Login screen backdrop ──────────────────────────────────────────────
+   Two monochrome layers painted behind the login card. Light theme: dark-ink
+   washes on the light surface. Dark theme: the exact same geometry flipped to
+   faint LIGHT washes + a faint light grid, so the login page keeps its depth
+   instead of collapsing into a flat black rectangle. */
+.login-backdrop {
+  background:
+    radial-gradient(600px 420px at 12% -5%, rgba(10, 10, 10, 0.06), transparent 65%),
+    radial-gradient(700px 520px at 95% 108%, rgba(10, 10, 10, 0.045), transparent 65%);
+}
+.dark .login-backdrop {
+  background:
+    radial-gradient(600px 420px at 12% -5%, rgba(255, 255, 255, 0.07), transparent 65%),
+    radial-gradient(700px 520px at 95% 108%, rgba(255, 255, 255, 0.05), transparent 65%);
+}
+.login-grid {
+  background-image:
+    linear-gradient(to right, #0a0a0a 1px, transparent 1px),
+    linear-gradient(to bottom, #0a0a0a 1px, transparent 1px);
+  background-size: 36px 36px;
+  opacity: 0.045;
+}
+.dark .login-grid {
+  background-image:
+    linear-gradient(to right, #ffffff 1px, transparent 1px),
+    linear-gradient(to bottom, #ffffff 1px, transparent 1px);
+  opacity: 0.05;
+}
+
 /* Dark scrollbar — visible but gentle */
 .dark .custom-scroll::-webkit-scrollbar-thumb {
   background: #3a3a41;
