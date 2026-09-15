@@ -75,10 +75,10 @@ Backups larger than **50 MB** are split into multiple numbered parts before bein
 
 The **Restore** section lets you restore a backup directly to a server over **SSH**.
 
-- **Complete Restore:** All backup data is restored without modification.
-- **Automatic Installation:** If the panel is not installed, it is installed first and then restored.
-- **SSL & Verification:** Certificates are restored and the panel is checked to ensure it is running correctly
-- **Restore History:** Each restore records its status and errors, with a one-click Retry option.
+**Complete Restore:** All backup data is restored without modification.
+**Automatic Installation:** If the panel is not installed, it is installed first and then restored.
+**SSL & Verification:** Certificates are restored and the panel is checked to ensure it is running correctly
+**Restore History:** Each restore records its status and errors, with a one-click Retry option.
 
 ## Donate
 
