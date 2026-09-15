@@ -28,8 +28,6 @@ export interface AppConfigDTO {
   telegramThreadId: string;
   intervalSeconds: number;
   enabled: boolean;
-  backupMode: "auto" | "db" | "json" | "local";
-  localDbPath: string;
   localRetention: number;
   tgAutoDeleteKeep: number;
   updatedAt: string;
@@ -42,7 +40,7 @@ export interface BackupRunDTO {
   status: "running" | "success" | "failed";
   trigger: "auto" | "manual";
   panel: "3x-ui" | "hmpanel" | "pasarguard" | "rebecca";
-  method: "db" | "json" | "local" | "hm-full" | "pg-full" | "rb-full" | null;
+  method: "db" | "hm-full" | "pg-full" | "rb-full" | null;
   fileName: string | null;
   filePath: string | null;
   fileSize: number | null;

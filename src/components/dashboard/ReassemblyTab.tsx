@@ -451,7 +451,14 @@ export function ReassemblyTab() {
         await loadHistory();
       } else {
         const body = (await res.json().catch(() => null)) as { error?: string } | null;
-        toast({ title: body?.error ?? t("error"), variant: "destructive" });
+        const msg = body?.error === "MISSING_PARTS"
+          ? t("reassembly_blocked")
+          : body?.error === "MIXED_PART_SETS"
+            ? t("reassembly_mixed_sets")
+            : body?.error === "MULTIPLE_COMPLETE_BACKUPS"
+              ? t("reassembly_multiple_complete")
+              : body?.error ?? t("error");
+        toast({ title: msg, variant: "destructive" });
       }
     } finally {
       setBusy(false);
@@ -479,7 +486,11 @@ export function ReassemblyTab() {
           ? t("reassembly_backup_gone")
           : body?.error === "MISSING_PARTS"
             ? t("reassembly_blocked")
-            : body?.error ?? t("error");
+            : body?.error === "MIXED_PART_SETS"
+              ? t("reassembly_mixed_sets")
+              : body?.error === "MULTIPLE_COMPLETE_BACKUPS"
+                ? t("reassembly_multiple_complete")
+                : body?.error ?? t("error");
         toast({ title: msg, variant: "destructive" });
       }
     } finally {

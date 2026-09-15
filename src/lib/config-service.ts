@@ -34,8 +34,10 @@ const DEFAULTS: Omit<BackupConfig, "id" | "createdAt" | "updatedAt"> = {
   telegramThreadId: "",
   intervalSeconds: 60,
   enabled: false,
-  backupMode: "auto",
-  localDbPath: "/etc/x-ui/x-ui.db",
+  // legacy columns kept in the DB schema for compatibility — 3x-ui has ONE
+  // backup method since 1.2.0: the panel's own full database backup (getDb)
+  backupMode: "db",
+  localDbPath: "",
   localRetention: 288,
   tgAutoDeleteKeep: 0,
 };

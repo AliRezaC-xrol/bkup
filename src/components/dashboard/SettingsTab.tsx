@@ -501,25 +501,12 @@ export function SettingsTab({ config, onSaved, onPasswordChanged }: Props) {
                   <Switch id="tls" checked={form.skipTlsVerify} disabled={toggling.has("skipTlsVerify")} onCheckedChange={(v) => void setNow("skipTlsVerify", v)} aria-label={t("skip_tls")} />
                 </div>
               </div>
-              <div className="space-y-2 sm:col-span-2">
-                <Label>{t("settings_backup")}</Label>
-                <Select value={form.backupMode} onValueChange={(v) => set("backupMode", v as AppConfigDTO["backupMode"])}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="auto">{t("mode_auto")}</SelectItem>
-                    <SelectItem value="db">{t("mode_db")}</SelectItem>
-                    <SelectItem value="json">{t("mode_json")}</SelectItem>
-                    <SelectItem value="local">{t("mode_local")}</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              {form.backupMode === "local" && (
-                <div className="space-y-2 sm:col-span-2">
-                  <Label htmlFor="localPath">{t("local_path")}</Label>
-                  <Input id="localPath" dir="ltr" className="text-start" placeholder="/etc/x-ui/x-ui.db"
-                    value={form.localDbPath} onChange={(e) => set("localDbPath", e.target.value)} />
+              <div className="flex items-center justify-between rounded-lg border p-3 sm:col-span-2">
+                <div className="space-y-0.5">
+                  <Label>{t("settings_backup")}</Label>
+                  <p className="text-xs text-muted-foreground">{t("mode_full_only")}</p>
                 </div>
-              )}
+              </div>
             </div>
             <Button variant="outline" onClick={() => testPanel("3x-ui")} disabled={testingXui} className="w-full sm:w-auto">
               {testingXui ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}

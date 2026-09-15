@@ -3,7 +3,7 @@ import path from "node:path";
 import { db } from "@/lib/db";
 import { log } from "@/lib/logger";
 import { getConfig } from "@/lib/config-service";
-import { login, getDb, getJsonExport, invalidateSession } from "@/lib/panel-client";
+import { login, getDb, invalidateSession } from "@/lib/panel-client";
 import { hmFullBackup } from "@/lib/hmpanel-client";
 import { pgFullBackup } from "@/lib/pasarguard-client";
 import { rbFullBackup } from "@/lib/rebecca-client";
@@ -16,7 +16,7 @@ const ALL_PANELS: PanelId[] = ["3x-ui", "hmpanel", "pasarguard", "rebecca"];
 
 export interface BackupOutcome {
   runId: number;
-  panel: PanelId;
+  panel: PanelId | "all"; // "all" = cycle-level notice (e.g. a run still in progress)
   status: "success" | "failed" | "skipped";
   method?: string;
   fileName?: string;
@@ -147,7 +147,7 @@ async function runPanelBackup(
     // 1) Obtain the backup payload
     let buf: Buffer;
     let fileName: string;
-    let method: "db" | "json" | "local" | "hm-full" | "pg-full" | "rb-full";
+    let method: "db" | "hm-full" | "pg-full" | "rb-full";
     let warnNoteBi: Bi | null = null;
 
     if (panel === "hmpanel") {
@@ -181,45 +181,26 @@ async function runPanelBackup(
       fileName = rb.data.fileName;
       method = "rb-full";
     } else {
-      const mode = cfg.backupMode;
-      if (mode === "local") {
-        const res = readLocalDb(cfg.localDbPath);
-        if (!res.ok) throwBi(res.error, res.errorBi.en);
-        buf = res.buf!;
-        fileName = timestampName("x-ui", "db");
-        method = "local";
-      } else {
-        const sess = await login(cfg, cfg.authMode !== "bearer" && trigger === "manual");
-        if (!sess.ok) throwBi(sess.error ?? "Panel login failed", sess.errorBi?.en ?? sess.error ?? "Panel login failed");
+      // ── 3x-ui: ONE backup method only — the panel's OWN full database
+      // backup (getDb), exactly the file the panel serves, byte-for-byte,
+      // never modified. No JSON export, no local-file mode: those produced
+      // partial backups that broke X-Ray after a restore. ──
+      const sess = await login(cfg, cfg.authMode !== "bearer" && trigger === "manual");
+      if (!sess.ok) throwBi(sess.error ?? "Panel login failed", sess.errorBi?.en ?? sess.error ?? "Panel login failed");
 
-        let dbRes = mode === "json" ? null : await getDb(cfg, sess.data!);
-        // One retry with a fresh session on auth failure
-        if (dbRes && !dbRes.ok && (dbRes.status === 401 || dbRes.status === 404)) {
-          invalidateSession();
-          const relogin = await login(cfg, true);
-          if (relogin.ok) dbRes = await getDb(cfg, relogin.data!);
-        }
-
-        if (dbRes && dbRes.ok && dbRes.data) {
-          buf = dbRes.data.buf;
-          fileName = timestampName("x-ui", "db");
-          method = "db";
-        } else if (mode === "db") {
-          throwBi(dbRes?.error ?? "The database download failed", dbRes?.errorBi?.en ?? "The database download failed");
-        } else {
-          // auto mode: fall back to JSON export
-          if (dbRes && !dbRes.ok) {
-            warnNoteBi = bi(`The database file could not be fetched (${dbRes.errorBi?.en ?? dbRes.error}) — a JSON export was used instead`, `The database file could not be fetched (${dbRes.errorBi?.en ?? dbRes.error}) — a JSON export was used instead`);
-          }
-          const js = await getJsonExport(cfg, sess.data!);
-          if (!js.ok || !js.data) {
-            throwBi(`The full backup failed. Database: ${dbRes?.errorBi?.en ?? "unknown"} | JSON: ${js.errorBi?.en ?? "unknown"}`, `The full backup failed. Database: ${dbRes?.errorBi?.en ?? "unknown"} | JSON: ${js.errorBi?.en ?? "unknown"}`);
-          }
-          buf = Buffer.from(js.data.json, "utf8");
-          fileName = timestampName("x-ui", "json");
-          method = "json";
-        }
+      let dbRes = await getDb(cfg, sess.data!);
+      // One retry with a fresh session on auth failure
+      if (!dbRes.ok && (dbRes.status === 401 || dbRes.status === 404)) {
+        invalidateSession();
+        const relogin = await login(cfg, true);
+        if (relogin.ok) dbRes = await getDb(cfg, relogin.data!);
       }
+      if (!dbRes.ok || !dbRes.data) {
+        throwBi(dbRes.error ?? "The database download failed", dbRes.errorBi?.en ?? dbRes.error ?? "The database download failed");
+      }
+      buf = dbRes.data!.buf;
+      fileName = timestampName("x-ui", "db");
+      method = "db";
     }
 
     // integrity gate — the archive must be a real, complete backup file
@@ -288,7 +269,7 @@ async function runPanelBackup(
 }
 
 /** Archive integrity gate — a delivered backup must be a real archive, never an error page. */
-function verifyArchive(fileName: string, buf: Buffer): { ok: true } | { ok: false; error: string; errorBi: Bi } {
+export function verifyArchive(fileName: string, buf: Buffer): { ok: true } | { ok: false; error: string; errorBi: Bi } {
   if (buf.length === 0) return fail("The backup file was empty", "The backup file was empty");
   const head = buf.subarray(0, 4);
   const isGzip = head[0] === 0x1f && head[1] === 0x8b;
@@ -323,22 +304,6 @@ function panelTitle(panel: PanelId): string {
       : panel === "rebecca"
         ? "Rebecca"
         : "3x-ui";
-}
-
-function readLocalDb(p: string): { ok: true; buf: Buffer } | { ok: false; error: string; errorBi: Bi } {
-  try {
-    if (!p.trim()) {
-      return fail("The local database file path is not configured", "The local database file path is not configured");
-    }
-    const resolved = p.trim();
-    if (!fs.existsSync(resolved)) {
-      return fail(`The file was not found at "${resolved}" (if the bot runs inside Docker, mount the path)`, `The file was not found at "${resolved}" (if the bot runs inside Docker, mount the path)`);
-    }
-    return { ok: true, buf: fs.readFileSync(resolved) };
-  } catch (e: unknown) {
-    const t = e instanceof Error ? e.message : String(e);
-    return fail(`Reading the local file failed: ${t}`, `Reading the local file failed: ${t}`);
-  }
 }
 
 /** Keep only the newest N Telegram backup messages per panel (0 = disabled). */
