@@ -16,6 +16,10 @@ Versions follow [Semantic Versioning](https://semver.org/).
 - **System → Reinstall** — new button that redeploys the latest release even when the panel already runs that version (force update). Same safe flow as a normal update: atomic file swap, .env merge, rebuild, migrations, restart, health check. CLI equivalent: `bash scripts/update.sh --force` (or `BKUP_FORCE_UPDATE=1`).
 
 ### Fixed
+- **Reinstall/update build failure (`TypeError: generate is not a function`)** — long-lived installs could fail to rebuild on redeploy: the shipped npm lockfile had drifted out of sync, so every `npm install` re-resolved a different dependency tree (npm floated `next` to a newer, untested 16.x) and stale `.next` state from previous builds poisoned the new one. Fixes:
+  - `next` / `eslint-config-next` pinned to the exact tested version (`16.1.3`) — never floats to an untested Next.js release again
+  - healthy, in-sync `package-lock.json` shipped in the release (`npm ci` now works)
+  - `scripts/build-native.sh` wipes stale `.next` before every build; if a build still fails it retries once with a completely clean tree (`node_modules` + `.next` removed, dependencies rebuilt from the lockfile) — a corrupted install heals itself in a single update run
 - **Update bug root-cause (critical)** — fixed issue where CLI menu option 7 or web-panel update said "updated" but panel stayed on old version:
   - Backup `package.json` before overwriting code, restore on build failure so next update can retry (prevents `vFROM == TAG` false-positive "Already latest")
   - Fix typo `/proc/memsay` → `/proc/meminfo` in `scripts/update.sh` (was causing MEM_MB=0 and unnecessary swap creation)
