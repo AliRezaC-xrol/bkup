@@ -180,7 +180,10 @@ export function Shell({
           </div>
         </header>
 
-        <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6">{children}</main>
+        {/* `min-w-0` + `overflow-x-clip` keep a wide action row from pushing the whole page
+            sideways on phones (v1.2.0 fix) — clipping is scoped to <main>, dialogs/sheets
+            live in portals on <body> so they are unaffected. */}
+        <main className="mx-auto w-full min-w-0 max-w-6xl flex-1 overflow-x-clip px-4 py-6 sm:px-6">{children}</main>
 
         <footer className="mt-auto border-t">
           <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-2 px-4 py-3 text-xs text-muted-foreground sm:px-6">

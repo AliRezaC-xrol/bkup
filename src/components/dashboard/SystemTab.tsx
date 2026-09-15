@@ -274,8 +274,14 @@ export function SystemTab({
             </div>
           </div>
 
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
+          {/* Action row.
+              v1.2.0 mobile fix: `Button` ships `whitespace-nowrap` + `shrink-0`, so three
+              `flex-1` buttons could never shrink and the row burst out of the card on
+              phones (Install / Reinstall pushed off-screen and the "up to date" badge
+              got clipped). Now the buttons stack full-width on small screens and stay
+              wrap-safe in a row from md up. */}
+          <div className="flex min-w-0 flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
               {info?.updateAvailable ? (
                 <Badge className="border-border bg-primary text-primary-foreground">
                   <AlertTriangle className="me-1 h-3 w-3" />
@@ -288,15 +294,20 @@ export function SystemTab({
                 </Badge>
               )}
             </div>
-            <div className="flex w-full justify-center gap-3 sm:w-auto sm:justify-center">
-              <Button variant="outline" onClick={checkUpdate} disabled={checking} className="flex-1 justify-center gap-2 sm:flex-none">
+            <div className="flex w-full min-w-0 flex-col gap-2 md:w-auto md:flex-row md:flex-wrap md:justify-end md:gap-3">
+              <Button
+                variant="outline"
+                onClick={checkUpdate}
+                disabled={checking}
+                className="h-10 w-full min-w-0 justify-center gap-2 md:h-9 md:w-auto"
+              >
                 {checking ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                 {checking ? t("checking") : t("check_update")}
               </Button>
               <Button
                 onClick={runUpdate}
                 disabled={updating || !info?.updateAvailable}
-                className="flex-1 justify-center gap-2 sm:flex-none"
+                className="h-10 w-full min-w-0 justify-center gap-2 md:h-9 md:w-auto"
               >
                 {updating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
                 {updating ? t("updating") : t("update_now")}
@@ -305,7 +316,7 @@ export function SystemTab({
                 variant="outline"
                 onClick={() => setReinstallOpen(true)}
                 disabled={updating || reinstalling}
-                className="flex-1 justify-center gap-2 sm:flex-none"
+                className="h-10 w-full min-w-0 justify-center gap-2 md:h-9 md:w-auto"
               >
                 {reinstalling ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
                 {reinstalling ? t("updating") : t("reinstall_now")}
