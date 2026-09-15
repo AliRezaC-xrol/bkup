@@ -244,6 +244,10 @@ export function ReassemblyTab() {
       (c) => (c.fileName ?? `#${c.id}`).toLowerCase().includes(q) || c.panel.toLowerCase().includes(q)
     );
   }, [choices, query]);
+  // the header button is a two-state Select all / Deselect all: it flips to
+  // "Deselect all" the moment every row passing the filter is picked
+  const shownIds = useMemo(() => new Set(filtered.map((c) => c.id)), [filtered]);
+  const allShownSelected = filtered.length > 0 && filtered.every((c) => selectedSet.has(c.id));
   // cluster the filtered choices into part groups (by stripped base name);
   // plain files without a part marker each form a group of one
   const groups = useMemo<PartGroup[]>(() => {
@@ -646,11 +650,23 @@ export function ReassemblyTab() {
                 </div>
                 <button
                   type="button"
-                  onClick={selectShown}
+                  onClick={() => {
+                    if (allShownSelected) {
+                      // everything shown is picked → this tap UNPICKS it
+                      setSelectedIds((cur) => cur.filter((id) => !shownIds.has(id)));
+                    } else {
+                      selectShown();
+                    }
+                  }}
                   disabled={filtered.length === 0}
-                  className="shrink-0 whitespace-nowrap rounded-md border px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                  aria-pressed={allShownSelected}
+                  className={`shrink-0 whitespace-nowrap rounded-md border px-2 py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                    allShownSelected
+                      ? "border-muted-foreground/40 text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+                      : "border-primary/50 text-primary hover:bg-primary/10"
+                  }`}
                 >
-                  {t("reassembly_select_all_shown")}
+                  {allShownSelected ? t("reassembly_deselect_all") : t("reassembly_select_all_shown")}
                 </button>
               </div>
               <div className="custom-scroll max-h-72 space-y-1.5 overflow-y-auto rounded-lg border p-2">

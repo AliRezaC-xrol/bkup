@@ -1600,15 +1600,6 @@ function effStatus(job: any): RestoreEffStatus {
   return job.status; // success | running
 }
 
-const RESTORE_PANELS = [
-  { key: "3x-ui", tag: "3X" },
-  { key: "hmpanel", tag: "HM" },
-  { key: "pasarguard", tag: "PG" },
-  { key: "rebecca", tag: "RB" },
-] as const;
-
-type RestorePanelFilter = "all" | (typeof RESTORE_PANELS)[number]["key"];
-
 function RestoreHistoryCard({ history, onRefresh, onRetry }: { history: any[]; onRefresh?: () => void; onRetry?: (job: any) => void }) {
   const { t } = useLang();
   const { toast } = useToast();
@@ -1616,17 +1607,14 @@ function RestoreHistoryCard({ history, onRefresh, onRetry }: { history: any[]; o
   const [deleting, setDeleting] = useState<number | null>(null);
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [statusFilter, setStatusFilter] = useState<"all" | RestoreEffStatus>("all");
-  const [panelFilter, setPanelFilter] = useState<RestorePanelFilter>("all");
   const [expanded, setExpanded] = useState<number | null>(null);
 
   const rows = useMemo(
     () =>
       history.filter(
-        (j) =>
-          (statusFilter === "all" || effStatus(j) === statusFilter) &&
-          (panelFilter === "all" || j.panel === panelFilter)
+        (j) => statusFilter === "all" || effStatus(j) === statusFilter
       ),
-    [history, statusFilter, panelFilter]
+    [history, statusFilter]
   );
 
   // chip counts reflect the loaded history window (same policy as Backups)
@@ -1639,11 +1627,6 @@ function RestoreHistoryCard({ history, onRefresh, onRetry }: { history: any[]; o
     }),
     [history]
   );
-  const panelCounts = useMemo(() => {
-    const base: Record<RestorePanelFilter, number> = { all: history.length, "3x-ui": 0, hmpanel: 0, pasarguard: 0, rebecca: 0 };
-    for (const j of history) if (j.panel in base) base[j.panel as RestorePanelFilter] += 1;
-    return base;
-  }, [history]);
 
   // export the rows currently shown (both filters applied) as CSV — BOM first
   // so Excel opens UTF-8 names correctly
@@ -1818,41 +1801,6 @@ function RestoreHistoryCard({ history, onRefresh, onRetry }: { history: any[]; o
                   }`}
                 >
                   {statusCounts[f]}
-                </span>
-              </button>
-            ))}
-          </div>
-          <div className="flex rounded-lg border p-0.5">
-            <button
-              onClick={() => setPanelFilter("all")}
-              className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
-                panelFilter === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {t("filter_all")}
-              <span
-                className={`rounded px-1 text-[10px] tabular-nums ${
-                  panelFilter === "all" ? "bg-primary-foreground/20 text-primary-foreground" : "bg-muted text-muted-foreground"
-                }`}
-              >
-                {panelCounts.all}
-              </span>
-            </button>
-            {RESTORE_PANELS.map((p) => (
-              <button
-                key={p.key}
-                onClick={() => setPanelFilter(p.key)}
-                className={`flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
-                  panelFilter === p.key ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {p.tag}
-                <span
-                  className={`rounded px-1 text-[10px] tabular-nums ${
-                    panelFilter === p.key ? "bg-primary-foreground/20 text-primary-foreground" : "bg-muted text-muted-foreground"
-                  }`}
-                >
-                  {panelCounts[p.key]}
                 </span>
               </button>
             ))}
