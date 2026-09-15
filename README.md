@@ -2,7 +2,7 @@
 
 <img src="docs/banner.svg" alt="bkup" width="640">
 
-**Automatic full backups of 3x-ui, HM Panel, PasarGuard and Rebecca to Telegram.**
+**Auto backup & restore 3x-ui, HM Panel, PasarGuard, Rebecca.**
 
 [![Release](https://img.shields.io/github/v/release/AliRezaC-xrol/bkup?style=flat-square&label=release)](https://github.com/AliRezaC-xrol/bkup/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/AliRezaC-xrol/bkup/total?style=flat-square&label=downloads)](https://github.com/AliRezaC-xrol/bkup/releases)
@@ -10,26 +10,24 @@
 
 <img src="docs/panel-8.png" alt="bkup web panel" width="820">
 
-[Overview](#overview) · [Features](#features) · [Install](#install) · [First run](#first-run) · [Reassembly](#reassemble-backup-parts) · [Restore](#restore-to-a-server) · [Update](#update) · [Terminal menu](#terminal-menu) · [Paths](#paths) · [Donate](#donate) · [مستندات فارسی](README.fa.md)
+[Install](#install) · [First run](#first-run) · [Features](#features) · [Reassemble](#reassemble-backup-parts) · [Restore](#restore-Backup-to-a-server) · [Update](#update) · [Terminal menu](#terminal-menu) · [Donate](#donate) · [مستندات فارسی](README.fa.md)
 
 </div>
 
-## Overview
+## What it does
 
-bkup runs on your server as a systemd service, takes a full backup of every panel you
-configure on the interval you set, and sends each file to your Telegram chat or channel.
-Resource usage is capped, the service restarts itself if it stops, and it comes back
-after a reboot.
+`bkup` connects to every panel you configure, takes a **full backup** of each one
+on the schedule you set, and sends it to your **Telegram** chat or channel as a
+file. It runs as a systemd service on your own server — CPU and RAM capped,
+restarted automatically if it stops, back on after a reboot.
 
-Every panel has exactly one backup method — its own complete backup, byte-for-byte and
-never modified:
-
-| Panel | Captured |
-|---|---|
-| 3x-ui | the panel's own full database (`x-ui.db`) |
-| HM Panel | the panel's official full archive (`backup_full_*`) |
-| PasarGuard | a complete snapshot: users, hosts, nodes, cores, groups, settings, templates |
-| Rebecca | the panel's official full export |
+Every panel has exactly **one backup method — the panel's own complete backup**,
+taken byte-for-byte and never modified, repacked or filtered: **3x-ui** gives its
+own full database (`x-ui.db`) exactly as the panel serves it, **HMPanel** gives its
+official full archive, **PasarGuard** is captured as a complete snapshot of every
+section (users, hosts, nodes, cores, groups, settings, templates), and **Rebecca**
+gives its official full export. What the panel produced is what lands in Telegram —
+everything included, nothing touched.
 
 <div align="center">
 
@@ -37,111 +35,102 @@ never modified:
 
 </div>
 
-Panels are configured and tested separately, and the backup interval is set in seconds.
+Each panel is configured separately: enable the ones you use and test every
+connection with one click. The backup interval is set in **seconds**, so the
+same install covers anything from a few backups a day to one every few minutes.
 
 ## Features
 
-- Four panels in one installation, each enabled and tested on its own
-- One full backup per enabled panel per cycle, unmodified, delivered to Telegram
-- Interval in seconds, preserved across reboots; per-panel local retention
-- Backups above Telegram's 50 MB limit are sent as numbered parts of the same file
-- Web panel: dashboard, live logs, backup history with download and delete, search combined with the status filter
-- Reassemble: merge those parts back into the original file, from an upload or from stored backups
-- Restore: push a backup onto another server over SSH, with live steps, cancel, history and one-click retry
-- Settings export and import, to move an installation to another server
-- Password change and a one-tap log out on every device
-- Dark mode and an installable home-screen app (PWA)
-- In-place updates from the web panel or the terminal menu
+- **3x-ui, HM Panel, PasarGuard and Rebecca in one place** — each panel enabled independently, each with its own connection test
+- **Telegram delivery** — every backup arrives as a file in your chat or channel; nothing to download by hand
+- **Your schedule** — interval in seconds, kept across reboots by the systemd service
+- **Web panel** — dashboard, live logs, backup history with per-backup download and delete, plus a file-name search that combines with the status filter
+- **Reassemble split backups** — parts delivered to Telegram are merged back into the one complete file right in the web panel, with a downloadable, bulk-deletable history; you can also pick the parts straight from your stored backups instead of uploading them — part sets of the same file are grouped under one header, so the whole set is one tap away
+- **Restore to any server** — push a backup (a normal run or a reassembled file) back onto a server over SSH; the panel is installed automatically if it is missing, every step streams live, and the run can be cancelled
+- **Settings file** — export every panel, Telegram and schedule setting as JSON and import it on another server; hidden credentials keep their current values, a full export moves them too
+- **Dark mode and installable app** — the panel follows the system theme (or the switch in the header) and can be added to the phone's home screen like a native app
+- **Session control** — a single button in Settings signs every browser out of the panel at once (this one included), useful when a password was shared or a device is lost
+- **Terminal menu** — `bkup` handles status, panel URL, password, port, logs, update and uninstall without opening the web panel
 
 ## Install
-
-Debian or Ubuntu with root access, and Node.js 20 (installed automatically if missing):
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/AliRezaC-xrol/bkup/main/install.sh)
 ```
 
-The installer takes the latest release, builds it and registers the `bkup` service, then
-prints the panel address and password. Running the same command again updates in place
-and keeps the database, backups and settings.
-
-With Docker:
-
-```bash
-docker compose up -d --build      # panel on http://SERVER_IP:3999, data in ./data
-```
+The command installs Node.js 20 if it is missing, downloads the **latest
+release**, verifies it, builds the app and registers the service — then prints
+the panel address and password. Run it again on the same server and it updates
+in place, keeping every setting and backup.
 
 ## First run
 
 | Step | Where | What to do |
 |---|---|---|
-| 1 | Installer | choose the web panel port and password |
-| 2 | Browser | open `http://<server-ip>:<port>` |
-| 3 | Settings | connect the panels you use and press each test button |
-| 4 | Settings | add the Telegram bot token and chat ID, then test |
-| 5 | Settings | set the backup interval and switch Auto backup on |
-
-## Reassemble Backup Parts
-
-Telegram accepts 50 MB per document, so larger backups arrive as numbered parts of the
-same file. The **Reassemble** section merges them back into the one original file —
-upload the parts or pick them straight from your stored backups. Parts are ordered by
-number, duplicates are detected before the merge, and the result is integrity-checked
-before it is stored. Part sets of one file are grouped with a have / total badge,
-**Add all** selects the whole set, and the history supports bulk deletion.
-
-## Restore to a Server
-
-The **Restore** section pushes a backup onto another server over **SSH**. The selected
-backup decides the panel: a 3x-ui backup is restored only onto 3x-ui, and the same holds
-for HM Panel, PasarGuard and Rebecca — no cross-panel migration and no rewriting of the
-backup bytes. A panel missing on the target is installed first. The placement is
-verified, the running panel is probed instead of trusted, and certificates the restored
-database references are rebuilt from the backup itself before the panel starts. Steps
-stream live, a running restore can be cancelled, and the history keeps every result with
-filters, CSV export and retry.
+| **1** | Installer | pick a port (or a random one) and a panel password |
+| **2** | Browser | open `http://<server-ip>:<port>` and log in |
+| **3** | **Settings** | connect 3x-ui, HM Panel, PasarGuard, Rebecca — press the test button |
+| **4** | **Settings** | add your Telegram bot token and chat ID — press the test button |
+| **5** | **Settings** | set the backup interval and turn **Auto backup** on |
 
 ## Update
 
 | From | How |
 |---|---|
-| Web panel | System → Check for updates → Install update |
-| Web panel | Reinstall, to redeploy the current release |
-| Terminal | `bkup` → Update |
+| Web panel | **System → Check for updates → Update** |
+| Terminal | `bkup` → **Update** |
 | Anywhere | re-run the install command |
 
-Updates resolve the newest release, verify the code against its tag and abort on a
-mismatch, leaving the running installation untouched.
+The version shown in the panel comes from the code at build time, so after an
+update it always matches what is actually running.
 
-## Terminal menu
 
-Run `bkup` on the server:
+## Reassemble Backup Parts
 
-| Option | Purpose |
-|---|---|
-| 1 | status: service state, version and backup statistics |
-| 2 | web panel URL and port |
-| 3 · 4 | change the web panel password · port |
-| 5 | live service logs |
-| 6 · 7 | check for updates · update |
-| 8 · 9 · 10 | start · stop · restart the service |
-| 11 | uninstall |
+Backups larger than **50 MB** are split into multiple numbered parts before being sent to Telegram.
 
-## Paths
+In the **Reassemble** section, you can upload these parts and convert them back into the original backup file. The parts are automatically sorted by their numbers and merged byte-by-byte, while the original files remain untouched. The merged file is integrity-checked before it is stored and is labelled with the correct panel for all four panels — 3x-ui, HMPanel, PasarGuard and Rebecca names are all recognized, so every reassembled backup restores with its own panel's restore path.
 
-| Path | Purpose |
-|---|---|
-| `/opt/bkup` | application directory |
-| `/opt/bkup/.env` | port, database URL, backup directory, timezone |
-| `/opt/bkup/db/custom.db` | settings database |
-| `/opt/bkup/backups` | local copies of the backups |
-| `bkup` | terminal menu command |
-| `bkup.service` | systemd unit |
+You can also reassemble parts that are already stored in the **Backups** section. Simply select the parts you need; they are automatically arranged in the correct order, and duplicate part numbers are detected before the merge begins.
+
+Part sets of the same file are recognized on sight: every group gets its own header with the original file name and a **have/total** badge — green when the whole set is visible, amber when parts are missing. The **Add all** button on the header picks every visible part of that file in one tap (and turns into **Remove** to undo), so assembling a split backup no longer means ticking each part by hand. Picking a single part still flags the missing siblings with an **Add missing parts** shortcut right where the warning appears.
+
+The reassembly history itself is now a working list: every row carries a checkbox and the header offers **select all**, so a batch of stale merged files goes away with one **Delete selected** — files and records together, exactly like the per-row delete.
+
+## Restore Backup to a Server
+
+The **Restore** section lets you restore a backup directly to a server over **SSH**.
+
+Select the target server, panel, optional **Cloudflare DNS** settings, and the backup you want to restore. Before starting, **bkup** displays a summary of the target server, selected backup, and panel.
+
+**The selected backup decides the panel — never the other way around.** A 3x-ui
+backup is only ever restored onto 3x-ui, an HMPanel backup only onto HMPanel,
+PasarGuard onto PasarGuard and Rebecca onto Rebecca. bkup does not migrate one
+panel's backup onto another panel, and it never rewrites the backup to make it
+"fit": the exact bytes the panel produced are placed back, so everything that was
+in the backup — users, inbounds, settings, traffic — comes back exactly as it was.
+
+If that panel is not installed on the target server yet, **bkup** installs it
+first and then restores the selected backup onto it — the same flow whether the
+panel was installed by you or by bkup.
+
+After a verified byte-for-byte placement, **bkup proves the panel is actually
+running instead of trusting a heartbeat**: for 3x-ui it checks that both the panel
+service and the X-Ray core are really up. And before the panel is even started,
+every certificate file the restored database references is found **inside the
+backup's own bytes** (no sqlite3 needed on the server) and any that this server
+lacks is created **at exactly the referenced path** — an inbound whose TLS cert
+only existed on the old server can no longer take X-Ray down with
+"failed to parse certificate: no such file or directory". The backup's data
+itself is never edited, and the panel comes up with its own configuration intact.
+
+During the restore, every step is displayed in real time. You can cancel the restore while it is running, and the result of every restore is recorded in **History**.
+
+Every past run is kept in **Restore History** — filter it by **status** (success, failed, cancelled), expand the exact error behind a failed run and copy it, or export the filtered rows as **CSV**. A failed or cancelled run can be retried with one click: the server address, port, username, and panel are pre-filled, and since passwords and keys are never stored, you only re-enter the credential before connecting.
 
 ## Donate
 
-If bkup saves you time, a star on GitHub and sharing the project are the most useful
-support.
+If `bkup` has been useful to you, even a single **STAR** on **GitHub** can be the greatest support for continuing the development of the project.
 
 | Network | Address |
 |---|---|
@@ -149,6 +138,56 @@ support.
 | **TON (Toncoin)** | `UQDPCYKMhkA9hERfhLYNXIvl1dbV0ZKf4k7quu61iehEeMb1` |
 | **Tether USD (TRC20)** | `TQwEkXiBiFiQikD97iCk38eJJkQrirnwFS` |
 
+## Settings File
+
+Moving bkup to a new server no longer means retyping every connection. In
+**Settings**, **Export settings** downloads all four panel connections, the
+Telegram destination and the schedule as one JSON file. By default credentials
+are hidden in the file, so it is safe to keep or share; choosing **Include
+credentials** writes the real values for a full migration. **Import settings**
+on another install applies the file through the exact same validation the
+settings form uses — masked credentials simply keep the values already on that
+server.
+
+## Log Out Everywhere
+
+Settings → **Web panel security** has two actions now. Changing the password still signs every device out as before. Next to it, **Log out everywhere** invalidates every issued session immediately — the phone you checked this morning, the office browser, and the tab you are using right now — without touching the password. Each device simply lands on the login screen and signs back in with the panel password, which makes it the right tool the moment a password was shared one time too many or a device goes missing.
+
+## Dark Mode & Home-Screen App
+
+The header carries a light/dark switch next to the live indicator. Out of the box bkup follows the operating system's appearance — dark at night, light in the morning — and the switch overrides that per device, with the choice remembered across visits. Every screen is themed, including the log console and the restore wizard, so nothing turns into a white flash after sunset. The dark palette is a soft graphite that never touches pure black or pure white — backgrounds stay gently lifted and text tops out below full white, so reading at night does not glare.
+
+The panel is also a **PWA**: open the browser menu and choose **Add to Home Screen** (or **Install** on desktop Chrome). bkup then launches in its own window with its own icon — no address bar, no tab hunting — which makes checking backups from a phone feel like opening a regular app.
+
+## Terminal menu
+
+Run `bkup` on the server:
+
+| Option | Purpose |
+|---|---|
+| **Status** | service state, installed version, update availability |
+| **Web panel URL** | prints the address and port |
+| **Password** | change the panel password |
+| **Port** | change the panel port |
+| **Logs** | follow the live service logs |
+| **Start panel** | start the web panel service |
+| **Stop panel** | stop the web panel service |
+| **Restart panel** | restart the web panel service |
+| **Update** | install the latest release in place, data preserved |
+| **Uninstall** | remove the service and the application |
+
+## Server paths
+
+| Path / command | What it is |
+|---|---|
+| `/opt/bkup` | application directory |
+| `/opt/bkup/.env` | port and paths |
+| `/opt/bkup/db/custom.db` | settings database |
+| `/opt/bkup/backups` | local copies of the backups |
+| `bkup` | terminal menu command |
+| `bkup.service` | systemd service |
+
 ## License
 
-Distributed under a proprietary license — see [LICENSE](LICENSE).
+This project is distributed under a proprietary license — see
+[LICENSE](LICENSE) for the terms.
