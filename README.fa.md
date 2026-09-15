@@ -8,7 +8,7 @@
 [![Downloads](https://img.shields.io/github/downloads/AliRezaC-xrol/bkup/total?style=flat-square&label=downloads)](https://github.com/AliRezaC-xrol/bkup/releases)
 [![Stars](https://img.shields.io/github/stars/AliRezaC-xrol/bkup?style=flat-square)](https://github.com/AliRezaC-xrol/bkup/stargazers)
 
-<img src="docs/panel-dark.svg" alt="پنل bkup در حالت تاریک روی دسکتاپ و موبایل" width="820">
+<img src="docs/panel-8.png" alt="پنل bkup در حالت تاریک روی دسکتاپ و موبایل" width="820">
 
 [معرفی](#معرفی) · [امکانات](#امکانات) · [بازسازی پارت‌ها](#بازسازی-پارت‌های-بکاپ) · [ریستور](#ریستور-بکاپ-روی-سرور) · [نصب](#نصب) · [شروع سریع](#شروع-سریع) · [آپدیت](#آپدیت) · [منوی ترمینال](#منوی-ترمینال) · [دونیت](#دونیت) · [English](README.md)
 
