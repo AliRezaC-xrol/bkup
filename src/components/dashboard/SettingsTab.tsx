@@ -350,10 +350,12 @@ export function SettingsTab({ config, onSaved, onPasswordChanged }: Props) {
             <p className="text-sm font-semibold">{t("settings_file_title")}</p>
             <p className="mt-0.5 text-xs text-muted-foreground">{t("settings_export_hint")}</p>
           </div>
-          <div className="flex w-full gap-2 sm:w-auto">
+          {/* v1.2.0 mobile fix: buttons stack on phones — `whitespace-nowrap` + `shrink-0`
+              prevented the export/import pair from shrinking inside the card. */}
+          <div className="flex w-full min-w-0 flex-col gap-2 sm:w-auto sm:flex-row">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="flex-1 gap-1.5 sm:flex-none">
+                <Button variant="outline" size="sm" className="w-full min-w-0 gap-1.5 sm:w-auto">
                   <FileDown className="h-3.5 w-3.5" />
                   {t("settings_export")}
                 </Button>
@@ -369,7 +371,7 @@ export function SettingsTab({ config, onSaved, onPasswordChanged }: Props) {
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-            <Button variant="outline" size="sm" className="flex-1 gap-1.5 sm:flex-none" onClick={() => importInputRef.current?.click()}>
+            <Button variant="outline" size="sm" className="w-full min-w-0 gap-1.5 sm:w-auto" onClick={() => importInputRef.current?.click()}>
               <FileUp className="h-3.5 w-3.5" />
               {t("settings_import")}
             </Button>
