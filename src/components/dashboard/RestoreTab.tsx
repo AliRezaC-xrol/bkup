@@ -737,26 +737,30 @@ function StepIndicator({ currentStep }: { currentStep: Step }) {
   const currentIdx = steps.findIndex((s) => s.key === currentStep);
 
   return (
-    <div className="flex w-full items-center gap-1 overflow-x-auto pb-1">
-      {steps.map((s, i) => (
-        <div key={s.key} className="flex shrink-0 items-center gap-1">
-          <div
-            className={`flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-xs font-medium sm:px-3 ${
-              i === currentIdx
-                ? "bg-primary text-primary-foreground"
-                : i < currentIdx
-                  ? "bg-primary/15 text-primary"
-                  : "bg-muted text-muted-foreground"
-            }`}
-          >
-            {i < currentIdx ? <CheckCircle2 className="h-3 w-3" /> : s.icon}
-            <span className="whitespace-nowrap">{s.label}</span>
+    // mx-auto centers the bar when it fits; on narrow screens the auto margins
+    // collapse to 0, so it gracefully degrades to a start-aligned scroller.
+    <div className="flex w-full items-center overflow-x-auto pb-1">
+      <div className="mx-auto flex items-center gap-1">
+        {steps.map((s, i) => (
+          <div key={s.key} className="flex shrink-0 items-center gap-1">
+            <div
+              className={`flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-xs font-medium sm:px-3 ${
+                i === currentIdx
+                  ? "bg-primary text-primary-foreground"
+                  : i < currentIdx
+                    ? "bg-primary/15 text-primary"
+                    : "bg-muted text-muted-foreground"
+              }`}
+            >
+              {i < currentIdx ? <CheckCircle2 className="h-3 w-3" /> : s.icon}
+              <span className="whitespace-nowrap">{s.label}</span>
+            </div>
+            {i < steps.length - 1 && (
+              <div className={`h-px w-3 sm:w-6 ${i < currentIdx ? "bg-primary/40" : "bg-border"}`} />
+            )}
           </div>
-          {i < steps.length - 1 && (
-            <div className={`h-px w-3 sm:w-6 ${i < currentIdx ? "bg-primary/40" : "bg-border"}`} />
-          )}
-        </div>
-      ))}
+        ))}
+      </div>
     </div>
   );
 }
