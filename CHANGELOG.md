@@ -45,6 +45,8 @@ Versions follow [Semantic Versioning](https://semver.org/).
   - Change footer tagline to "Backup & Restore for 3x-ui, HM Panel, PasarGuard, Rebecca" (comma before Rebecca)
   - Remove Clear all button when select-all checkbox exists (IMG_4064)
   - Cloudflare DNS "To update to" close icon changed from Trash2 to XCircle (close/remove from list, not delete DNS)
+  - Enable/disable switches on the dashboard hero now mirror the theme flip — the dark theme renders the exact inverse of the light one (light: white track + black knob on the dark card; dark: near-black track + white knob on the light card), built from the theme's own opposite token pair so the knob can never blend into its track; fixes the invisible knob in dark mode
+  - Restore wizard step bar (Server Connection → Panel Type → Cloudflare DNS → Select Backup → Review) is centered in the page; on narrow screens it degrades gracefully to a start-aligned swipeable scroller
 - **HM Panel AMD64** — improved native install handling, handle both `compose.yml` and `docker-compose.yml`, better verification for AMD64.
 - **Version fallback** — `src/lib/version.ts` hardcoded fallback updated from 1.1.0 to 1.2.0, runtime reads `package.json` from `process.cwd()` (standalone).
 
