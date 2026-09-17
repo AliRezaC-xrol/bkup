@@ -820,26 +820,224 @@ bash /tmp/rebecca-node-install.sh install
   return { success: true, detail: `${panelName} node installed successfully` };
 }
 
+// ── Backup-file sniffing (magic bytes) — dispatch by CONTENT, never by name ──
+// bkup itself produces several formats: raw x-ui.db (SQLite), 3x-ui JSON
+// config exports, PasarGuard JSON snapshot archives (tar.gz), HMPanel official
+// archives, Rebecca's own export. The restore engine must understand the very
+// same formats or fail loudly — never claim success on a file it cannot read.
+type BackupKind = "sqlite" | "json" | "tar-gz" | "zip" | "unknown";
+
+function sniffBackupKind(localPath: string): BackupKind {
+  try {
+    const fd = fs.openSync(localPath, "r");
+    const buf = Buffer.alloc(16);
+    let n = 0;
+    try {
+      n = fs.readSync(fd, buf, 0, 16, 0);
+    } finally {
+      fs.closeSync(fd);
+    }
+    if (n >= 15 && buf.subarray(0, 15).toString("utf8") === "SQLite format 3") return "sqlite";
+    if (n >= 2 && buf[0] === 0x1f && buf[1] === 0x8b) return "tar-gz";
+    if (n >= 2 && buf[0] === 0x50 && buf[1] === 0x4b) return "zip";
+    const head = buf.subarray(0, n).toString("utf8").replace(/^\uFEFF/, "").trimStart();
+    if (head.startsWith("{") || head.startsWith("[")) return "json";
+    return "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+// ── SQL generation for JSON-snapshot restores ──
+function sqlQuoteIdent(name: string): string {
+  return `"${name.replace(/"/g, '""')}"`;
+}
+
+function sqlQuoteValue(v: unknown): string {
+  if (v === null || v === undefined) return "NULL";
+  if (typeof v === "number") return Number.isFinite(v) ? String(v) : "NULL";
+  if (typeof v === "boolean") return v ? "1" : "0";
+  if (typeof v === "string") return `'${v.replace(/'/g, "''")}'`;
+  return `'${JSON.stringify(v).replace(/'/g, "''")}'`;
+}
+
+/** Build chunked multi-row INSERT statements restricted to real table columns. */
+function buildSqlInserts(table: string, columns: string[], rows: Record<string, unknown>[], chunkSize = 40): string {
+  if (!columns.length) return "";
+  const out: string[] = [];
+  const usable = rows.filter((r) => columns.some((c) => c in r));
+  for (let i = 0; i < usable.length; i += chunkSize) {
+    const chunk = usable.slice(i, i + chunkSize);
+    const values = chunk
+      .map((row) => `(${columns.map((c) => sqlQuoteValue(row[c])).join(", ")})`)
+      .join(",\n  ");
+    out.push(`INSERT INTO ${sqlQuoteIdent(table)} (${columns.map(sqlQuoteIdent).join(", ")}) VALUES\n  ${values};`);
+  }
+  return out.join("\n");
+}
+
+function parseSqliteColumns(pragmaOutput: string): string[] {
+  return pragmaOutput
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => (l.split("|")[1] || "").trim())
+    .filter((n) => n && /^[A-Za-z_][A-Za-z0-9_]*$/.test(n));
+}
+
+function parseSqliteTableNames(masterOutput: string): string[] {
+  return masterOutput
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((n) => n && !n.startsWith("sqlite_"));
+}
+
+async function remoteSqliteColumns(ssh: SshClient, dbPath: string, table: string): Promise<string[] | null> {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(table)) return null;
+  const res = await ssh.exec(`sqlite3 '${dbPath}' "PRAGMA table_info(${table});" 2>/dev/null`);
+  const cols = parseSqliteColumns(res.stdout);
+  return cols.length ? cols : null;
+}
+
+async function ensureSqlite3(ssh: SshClient): Promise<boolean> {
+  const probe = await ssh.exec("command -v sqlite3 >/dev/null 2>&1 && echo HAVE_SQLITE3 || echo NO_SQLITE3");
+  if (probe.stdout.includes("HAVE_SQLITE3")) return true;
+  await ssh.exec("apt-get install -y -qq sqlite3 2>/dev/null || yum install -y sqlite 2>/dev/null || true");
+  const probe2 = await ssh.exec("command -v sqlite3 >/dev/null 2>&1 && echo HAVE_SQLITE3 || echo NO_SQLITE3");
+  return probe2.stdout.includes("HAVE_SQLITE3");
+}
+
+/** Restore a bkup 3x-ui JSON config export ({ inbounds, settings }) into the
+ * target server's x-ui.db. The inbounds (plus their client-traffic rows) are
+ * replayed into the panel's real schema — discovered live via PRAGMA — while
+ * the fresh install's admin login and panel settings are kept, so nothing in
+ * the new environment (certs, ports, credentials) breaks. The JSON file is
+ * NEVER written verbatim as the SQLite database. */
+async function restore3xUiJson(ssh: SshClient, localPath: string): Promise<{ success: boolean; detail: string }> {
+  let exportData: { inbounds?: unknown; settings?: unknown };
+  try {
+    exportData = JSON.parse(fs.readFileSync(localPath, "utf8"));
+  } catch {
+    return { success: false, detail: "The 3x-ui JSON backup is not a valid JSON export" };
+  }
+  const inbounds = Array.isArray(exportData.inbounds) ? (exportData.inbounds as Record<string, unknown>[]) : [];
+  if (!inbounds.length) {
+    return { success: false, detail: "The 3x-ui JSON export contains no inbounds — nothing to restore" };
+  }
+
+  if (!(await ensureSqlite3(ssh))) {
+    return { success: false, detail: "sqlite3 is not available on the server and could not be installed — the JSON export cannot be replayed into x-ui.db" };
+  }
+
+  const dbPath = "/etc/x-ui/x-ui.db";
+  const exists = await ssh.exec(`test -f '${dbPath}' && echo DB_EXISTS || echo DB_MISSING`);
+  if (!exists.stdout.includes("DB_EXISTS")) {
+    return { success: false, detail: "x-ui.db was not found on the server — install 3x-ui first, then retry the restore" };
+  }
+
+  const colsInbounds = await remoteSqliteColumns(ssh, dbPath, "inbounds");
+  if (!colsInbounds) {
+    return { success: false, detail: "Could not read the inbounds table schema from x-ui.db (sqlite3 query failed)" };
+  }
+  const colsTraffic = await remoteSqliteColumns(ssh, dbPath, "client_traffics");
+
+  // flatten the per-inbound clientStats into client_traffics rows
+  const trafficRows: Record<string, unknown>[] = [];
+  for (const inb of inbounds) {
+    const stats = inb?.clientStats;
+    if (Array.isArray(stats)) {
+      for (const st of stats as Record<string, unknown>[]) {
+        const row = { ...st };
+        if (row.inbound_id === undefined || row.inbound_id === null) row.inbound_id = inb.id;
+        trafficRows.push(row);
+      }
+    }
+  }
+
+  const parts: string[] = ["BEGIN;"];
+  if (colsTraffic) parts.push(`DELETE FROM ${sqlQuoteIdent("client_traffics")};`);
+  parts.push(`DELETE FROM ${sqlQuoteIdent("inbounds")};`);
+  parts.push(buildSqlInserts("inbounds", colsInbounds, inbounds));
+  if (colsTraffic && trafficRows.length) parts.push(buildSqlInserts("client_traffics", colsTraffic, trafficRows));
+  parts.push(`UPDATE sqlite_sequence SET seq=(SELECT COALESCE(MAX(id),0) FROM ${sqlQuoteIdent("inbounds")}) WHERE name='inbounds';`);
+  if (colsTraffic) parts.push(`UPDATE sqlite_sequence SET seq=(SELECT COALESCE(MAX(id),0) FROM ${sqlQuoteIdent("client_traffics")}) WHERE name='client_traffics';`);
+  parts.push("COMMIT;");
+  const sqlText = parts.filter(Boolean).join("\n") + "\n";
+
+  const stamp = Date.now();
+  // local and remote temp names MUST differ — a same-machine (localhost) restore
+  // would otherwise let the remote SFTP truncation destroy the local SQL file
+  // while it is being read
+  const localSql = `/tmp/bkup-xui-json-${stamp}.local.sql`;
+  const remoteSql = `/tmp/bkup-xui-json-${stamp}.remote.sql`;
+  fs.writeFileSync(localSql, sqlText);
+  try {
+    await ssh.uploadFile(localSql, remoteSql);
+  } finally {
+    try { fs.unlinkSync(localSql); } catch { /* ignore */ }
+  }
+
+  await ssh.exec("systemctl stop x-ui 2>/dev/null || x-ui stop 2>/dev/null || pkill -f x-ui 2>/dev/null || true; sleep 2");
+  await ssh.exec(`cp -f '${dbPath}' '${dbPath}.pre-restore' 2>/dev/null || true; rm -f '${dbPath}-wal' '${dbPath}-shm' '${dbPath}-journal' 2>/dev/null || true`);
+  const apply = await ssh.exec(`sqlite3 '${dbPath}' < '${remoteSql}' 2>&1; echo APPLY_EXIT:$?`);
+  try { await ssh.exec(`rm -f '${remoteSql}'`); } catch { /* ignore */ }
+
+  await ssh.exec('/usr/local/x-ui/x-ui setting -listenIP "0.0.0.0" 2>/dev/null || true; chmod +x /usr/local/x-ui/x-ui /usr/local/x-ui/bin/xray* 2>/dev/null || true; chmod +x /usr/bin/x-ui 2>/dev/null || true');
+  await ssh.exec("systemctl enable x-ui 2>/dev/null || true; systemctl daemon-reload 2>/dev/null || true");
+  await ssh.exec("systemctl restart x-ui 2>/dev/null || systemctl start x-ui 2>/dev/null || /usr/local/x-ui/x-ui restart 2>&1 || true; sleep 6");
+
+  const verify = await ssh.exec(`sqlite3 '${dbPath}' "SELECT COUNT(*) FROM inbounds;" 2>&1`);
+  const restoredCount = parseInt(verify.stdout.trim(), 10);
+  if (!Number.isFinite(restoredCount) || restoredCount !== inbounds.length) {
+    return {
+      success: false,
+      detail: `JSON restore replay failed — expected ${inbounds.length} inbounds in x-ui.db but found ${verify.stdout.trim().slice(0, 40)}. ${apply.stdout.slice(-200)}`,
+    };
+  }
+  let trafficNote = "";
+  if (colsTraffic && trafficRows.length) {
+    const t = await ssh.exec(`sqlite3 '${dbPath}' "SELECT COUNT(*) FROM client_traffics;" 2>&1`);
+    trafficNote = `, ${t.stdout.trim()} client traffic rows`;
+  }
+  const svc = await ssh.exec("systemctl is-active x-ui 2>/dev/null || echo INACTIVE");
+  const svcNote = svc.stdout.includes("active") ? "panel service is running" : "panel restarted — verify it in the panel UI";
+  return {
+    success: true,
+    detail: `3x-ui JSON config restored — ${restoredCount} inbounds${trafficNote} replayed into x-ui.db (fresh-install admin login kept). ${svcNote}`,
+  };
+}
+
 async function restoreFromRemotePath(
   ssh: SshClient,
   panel: PanelId,
   remoteBackupPath: string,
-  backupName: string
+  backupName: string,
+  localBackupPath: string
 ): Promise<{ success: boolean; detail: string }> {
   switch (panel) {
     case "3x-ui":
-      return await restore3xUi(ssh, remoteBackupPath, backupName);
+      return await restore3xUi(ssh, remoteBackupPath, backupName, localBackupPath);
     case "hmpanel":
-      return await restoreHmpanel(ssh, remoteBackupPath, backupName);
+      return await restoreHmpanel(ssh, remoteBackupPath, backupName, localBackupPath);
     case "pasarguard":
-      return await restorePasarguard(ssh, remoteBackupPath, backupName);
+      return await restorePasarguard(ssh, remoteBackupPath, backupName, localBackupPath);
     case "rebecca":
-      return await restoreRebecca(ssh, remoteBackupPath, backupName);
+      return await restoreRebecca(ssh, remoteBackupPath, backupName, localBackupPath);
   }
 }
 
-async function restore3xUi(ssh: SshClient, remoteBackupPath: string, backupName: string): Promise<{ success: boolean; detail: string }> {
+async function restore3xUi(ssh: SshClient, remoteBackupPath: string, backupName: string, localBackupPath: string): Promise<{ success: boolean; detail: string }> {
   const lowerName = backupName.toLowerCase();
+
+  // dispatch by CONTENT first — a JSON config export must never be written
+  // into /etc/x-ui/x-ui.db as if it were the SQLite database
+  const kind = sniffBackupKind(localBackupPath);
+  if (kind === "json") {
+    return await restore3xUiJson(ssh, localBackupPath);
+  }
+  if (kind === "unknown") {
+    return { success: false, detail: "Unrecognized 3x-ui backup format — nothing was modified on the server. Use a bkup 3x-ui backup (.db database, .json config export or their archive)" };
+  }
 
   const uploadCheck = await ssh.exec(`ls -lh '${remoteBackupPath}' 2>&1 && stat -c %s '${remoteBackupPath}' 2>/dev/null || wc -c < '${remoteBackupPath}' 2>/dev/null || echo 0`);
   const uploadOut = uploadCheck.stdout.trim();
@@ -896,10 +1094,16 @@ async function restore3xUi(ssh: SshClient, remoteBackupPath: string, backupName:
   }
 
   if (!placeOk) {
-    const check = await ssh.exec("ls -lh /etc/x-ui/x-ui.db 2>&1 && echo EXISTS || echo MISSING");
-    if (!check.stdout.includes("EXISTS")) {
-      return { success: false, detail: "Failed to place x-ui.db — file not found after copy" };
-    }
+    // the copy itself failed — an old pre-existing file must never be mistaken
+    // for a successful restore (this used to report false success)
+    return { success: false, detail: "Failed to place the restored database file at /etc/x-ui/x-ui.db — copy operation failed" };
+  }
+
+  // the placed database must be byte-for-byte the size of the uploaded backup
+  const sizeCheck = await ssh.exec(`stat -c %s /etc/x-ui/x-ui.db 2>/dev/null || wc -c < /etc/x-ui/x-ui.db`);
+  const placedSize = parseInt(sizeCheck.stdout.trim(), 10);
+  if (!Number.isFinite(placedSize) || placedSize !== remoteSize) {
+    return { success: false, detail: `Restored database size mismatch — uploaded ${remoteSize} bytes but /etc/x-ui/x-ui.db holds ${sizeCheck.stdout.trim().slice(0, 40)} bytes` };
   }
 
   await ssh.exec(
@@ -960,8 +1164,15 @@ async function restore3xUi(ssh: SshClient, remoteBackupPath: string, backupName:
 }
 
 // ── HMPanel restore — official CLI first (complete & correct), manual fallback ──
-async function restoreHmpanel(ssh: SshClient, remoteBackupPath: string, backupName: string): Promise<{ success: boolean; detail: string }> {
+async function restoreHmpanel(ssh: SshClient, remoteBackupPath: string, backupName: string, localBackupPath: string): Promise<{ success: boolean; detail: string }> {
   const lowerName = backupName.toLowerCase();
+  const kind = sniffBackupKind(localBackupPath);
+  if (kind === "json") {
+    return { success: false, detail: "This HMPanel backup is a JSON document — HMPanel restores need the official archive (.tar.gz from the panel or bkup)" };
+  }
+  if (kind === "sqlite") {
+    return { success: false, detail: "This backup is a raw SQLite database, not an HMPanel archive — HMPanel restores its PostgreSQL payload from the official .tar.gz backup" };
+  }
 
   const uploadCheck = await ssh.exec(`ls -lh '${remoteBackupPath}' 2>&1 && stat -c %s '${remoteBackupPath}' 2>/dev/null || wc -c < '${remoteBackupPath}' 2>/dev/null || echo 0`);
   const uploadOut = uploadCheck.stdout.trim();
@@ -1009,19 +1220,24 @@ async function restoreHmpanel(ssh: SshClient, remoteBackupPath: string, backupNa
     }
   }
 
-  if (lowerName.match(/\.(tar\.gz|tgz)$/) || lowerName.endsWith(".tar") || lowerName.endsWith(".gz")) {
+  if (kind === "tar-gz" || kind === "zip" || lowerName.match(/\.(tar\.gz|tgz)$/) || lowerName.endsWith(".tar") || lowerName.endsWith(".gz")) {
     const extractDir = `/tmp/bkup-hm-fast-${Date.now()}`;
     try {
       await ssh.exec(`mkdir -p '${extractDir}' && rm -rf '${extractDir}'/*`);
-      const extractRes = await ssh.exec(`cd '${extractDir}' && tar -xzf '${remoteBackupPath}' 2>&1 && ls -lh && echo EXTRACT_OK || echo EXTRACT_FAIL`, { timeout: 5 * 60 * 1000 });
+      const extractRes = await ssh.exec(`cd '${extractDir}' && (tar -xzf '${remoteBackupPath}' 2>&1 || tar -xf '${remoteBackupPath}' 2>&1) && ls -lh && echo EXTRACT_OK || echo EXTRACT_FAIL`, { timeout: 5 * 60 * 1000 });
       if (extractRes.stdout.includes("EXTRACT_OK")) {
-        const hasDb = await ssh.exec(`ls -lh '${extractDir}/database.sql.gz' '${extractDir}/db_backup.sql' 2>&1; echo DB_CHECK_DONE`);
-        const hasDbFile = hasDb.stdout.includes("database.sql.gz") || hasDb.stdout.includes("db_backup.sql");
+        // the official archive nests its payload — search the WHOLE tree, not
+        // just the top level (a top-level-only check is how restores used to
+        // miss the SQL dump and silently skip the database)
+        const findSql = await ssh.exec(`find '${extractDir}' -maxdepth 4 \\( -name 'database.sql.gz' -o -name 'db_backup.sql' -o -name '*.sql.gz' -o -name 'database.sql' -o -name '*.sql' \\) -type f 2>/dev/null | head -1; echo SQL_FIND_DONE`);
+        const sqlFile = findSql.stdout.split("\n").map((l) => l.trim()).find((l) => l.startsWith(extractDir) && l.length > extractDir.length);
+        const hasDbFile = Boolean(sqlFile);
 
         if (hasDbFile) {
           const fastRestore = await ssh.exec(`
             set -e
             cd ${hmDir}
+            SQL_FILE='${sqlFile}'
             echo "[bkup] Fast restore: stopping panel-app..."
             docker compose stop panel-app 2>/dev/null || docker stop hmpanel-panel 2>/dev/null || true
             sleep 2
@@ -1030,12 +1246,13 @@ async function restoreHmpanel(ssh: SshClient, remoteBackupPath: string, backupNa
             DB_USER=$(grep -E '^POSTGRES_USER=' ${hmDir}/.env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '\\r' || echo "panel_user")
             DB_USER=\${DB_USER:-panel_user}
             echo "[bkup] Using PG container: $PG_CONT user: $DB_USER"
-            if [ -f '${extractDir}/database.sql.gz' ]; then
-              zcat '${extractDir}/database.sql.gz' > /tmp/hm-restore.sql 2>/dev/null || gunzip -c '${extractDir}/database.sql.gz' > /tmp/hm-restore.sql
-            elif [ -f '${extractDir}/db_backup.sql' ]; then
-              cp '${extractDir}/db_backup.sql' /tmp/hm-restore.sql
+            if [ -n "$SQL_FILE" ] && [ -f "$SQL_FILE" ]; then
+              case "$SQL_FILE" in
+                *.gz) zcat "$SQL_FILE" > /tmp/hm-restore.sql 2>/dev/null || gunzip -c "$SQL_FILE" > /tmp/hm-restore.sql ;;
+                *) cp "$SQL_FILE" /tmp/hm-restore.sql ;;
+              esac
             else
-              echo "NO_DB_FILE"
+              echo "NO_SQL_FILE"
               exit 1
             fi
             echo "[bkup] SQL size: $(du -h /tmp/hm-restore.sql | awk '{print $1}')"
@@ -1063,6 +1280,13 @@ async function restoreHmpanel(ssh: SshClient, remoteBackupPath: string, backupNa
           `, { timeout: 10 * 60 * 1000 });
 
           const fastOut = fastRestore.stdout + fastRestore.stderr;
+          if (fastOut.includes("NO_SQL_FILE")) {
+            await ssh.exec(`cp -f '${remoteBackupPath}' ${hmDir}/backups/no-sql-found-$(date +%s).tar.gz 2>/dev/null || true`);
+            return {
+              success: false,
+              detail: `HMPanel archive extracted, but no SQL database dump was found inside — nothing was restored. The archive was kept at ${hmDir}/backups/ for a manual import`,
+            };
+          }
           if (fastOut.includes("FAST_RESTORE_DONE") && !fastOut.includes("FAST_RESTORE_FAIL")) {
             await ssh.exec(`
               set -e
@@ -1128,16 +1352,19 @@ async function restoreHmpanel(ssh: SshClient, remoteBackupPath: string, backupNa
     }
   }
 
+  // last resort — the archive could not be replayed automatically. This must
+  // be an HONEST failure: a running panel says nothing about whether the
+  // backup was actually restored (it used to report success here).
   await ssh.exec(`cp -f '${remoteBackupPath}' ${hmDir}/backups/manual-restore-$(date +%s).tar.gz 2>/dev/null || cp -f '${remoteBackupPath}' /tmp/hmpanel-manual-restore.tar.gz; rm -rf /tmp/bkup-hm-fast-* /tmp/bkup-hm-extract-* 2>/dev/null || true`);
-  const verifyRes = await ssh.exec('docker ps --format "{{.Names}}" 2>/dev/null | grep -i hmpanel || echo "NOT_RUNNING"');
-  if (verifyRes.stdout.includes("hmpanel")) {
-    return { success: true, detail: `HMPanel backup copied to ${hmDir}/backups (${remoteSize} bytes) — panel running, import via Settings if needed` };
-  }
-  return { success: false, detail: `HMPanel backup failed — check docker logs. Backup saved to ${hmDir}/backups/` };
+  return {
+    success: false,
+    detail: `HMPanel backup could not be restored automatically — nothing was changed. The archive was kept at ${hmDir}/backups/ for a manual import via the panel`,
+  };
 }
 
-async function restorePasarguard(ssh: SshClient, remoteBackupPath: string, backupName: string): Promise<{ success: boolean; detail: string }> {
+async function restorePasarguard(ssh: SshClient, remoteBackupPath: string, backupName: string, localBackupPath: string): Promise<{ success: boolean; detail: string }> {
   const lowerName = backupName.toLowerCase();
+  const kind = sniffBackupKind(localBackupPath);
 
   const uploadCheck = await ssh.exec(`ls -lh '${remoteBackupPath}' 2>&1 && stat -c %s '${remoteBackupPath}' 2>/dev/null || wc -c < '${remoteBackupPath}' 2>/dev/null || echo 0`);
   const uploadOut = uploadCheck.stdout.trim();
@@ -1174,7 +1401,7 @@ async function restorePasarguard(ssh: SshClient, remoteBackupPath: string, backu
     }
   }
 
-  if (lowerName.endsWith(".db") || lowerName.endsWith(".sqlite") || lowerName.endsWith(".sqlite3") || !lowerName.match(/\.(tar\.gz|tgz|zip)$/)) {
+  if (kind === "sqlite" || (kind === "unknown" && (lowerName.endsWith(".db") || lowerName.endsWith(".sqlite") || lowerName.endsWith(".sqlite3")))) {
     const dbPathRes = await ssh.exec(`ls ${pgDir}/data/*.db ${pgDir}/data/*.sqlite* 2>/dev/null | head -1; ls ${pgDir}/*.db 2>/dev/null | head -1; echo DB_SEARCH_DONE`);
     let targetDb = `${pgDir}/data/db.sqlite3`;
     const found = dbPathRes.stdout.trim().split("\n").find((l) => l.includes(".db") || l.includes(".sqlite"));
@@ -1192,41 +1419,175 @@ async function restorePasarguard(ssh: SshClient, remoteBackupPath: string, backu
     return { success: false, detail: `Failed to restore PasarGuard db: ${cpRes.stdout.slice(0, 200)}` };
   }
 
-  const extractDir = `/tmp/bkup-pg-extract-${Date.now()}`;
-  await ssh.exec(`mkdir -p '${extractDir}'`);
-  const extractRes = await ssh.exec(
-    lowerName.endsWith(".zip")
-      ? `cd '${extractDir}' && unzip -o '${remoteBackupPath}' 2>&1 && echo EXTRACT_OK || echo EXTRACT_FAIL`
-      : `cd '${extractDir}' && tar -xzf '${remoteBackupPath}' 2>&1 && echo EXTRACT_OK || tar -xf '${remoteBackupPath}' 2>&1 && echo EXTRACT_OK || echo EXTRACT_FAIL`,
-    { timeout: 5 * 60 * 1000 }
-  );
+  if (kind === "json") {
+    return { success: false, detail: "This PasarGuard backup is a bare JSON document — PasarGuard restores need the bkup snapshot archive (.tar.gz) or the panel's database file. Nothing was modified" };
+  }
 
-  if (extractRes.stdout.includes("EXTRACT_OK")) {
-    const findDb = await ssh.exec(`find '${extractDir}' -name "*.db" -o -name "*.sqlite*" | head -5; ls -R '${extractDir}' | head -30`);
-    const dbFile = findDb.stdout.split("\n").find((l) => l.includes(".db") || l.includes(".sqlite"));
-    if (dbFile && dbFile.trim()) {
-      const dbPath = dbFile.trim();
-      await ssh.exec(`cd ${pgDir} && docker compose down 2>&1 || docker-compose down 2>&1 || true; sleep 2`);
-      await ssh.exec(`cp -f '${dbPath}' ${pgDir}/data/db.sqlite3 && chmod 644 ${pgDir}/data/db.sqlite3; rm -f ${pgDir}/data/db.sqlite3-wal ${pgDir}/data/db.sqlite3-shm 2>/dev/null || true; echo COPY_OK`);
-      await ssh.exec(`cd ${pgDir} && docker compose up -d 2>&1 || docker-compose up -d 2>&1; sleep 8`);
-    } else {
-      await ssh.exec(`cd ${pgDir} && docker compose down 2>&1 || true; cp -r '${extractDir}'/* ${pgDir}/data/ 2>/dev/null || cp -r '${extractDir}'/* ${pgDir}/ 2>/dev/null || true; docker compose up -d 2>&1 || docker-compose up -d 2>&1; sleep 8`);
+  if (kind === "tar-gz" || kind === "zip" || lowerName.match(/\.(tar\.gz|tgz|zip)$/)) {
+    const extractDir = `/tmp/bkup-pg-extract-${Date.now()}`;
+    await ssh.exec(`mkdir -p '${extractDir}'`);
+    const extractRes = await ssh.exec(
+      kind === "zip"
+        ? `cd '${extractDir}' && unzip -o '${remoteBackupPath}' 2>&1 && echo EXTRACT_OK || echo EXTRACT_FAIL`
+        : `cd '${extractDir}' && (tar -xzf '${remoteBackupPath}' 2>&1 || tar -xf '${remoteBackupPath}' 2>&1) && echo EXTRACT_OK || echo EXTRACT_FAIL`,
+      { timeout: 5 * 60 * 1000 }
+    );
+
+    if (extractRes.stdout.includes("EXTRACT_OK")) {
+      // 1) a real SQLite database inside the archive → place it (classic path)
+      const findDb = await ssh.exec(`find '${extractDir}' \\( -name "*.db" -o -name "*.sqlite*" \\) -type f 2>/dev/null | head -5`);
+      const dbFile = findDb.stdout.split("\n").map((l) => l.trim()).find((l) => l.startsWith(extractDir));
+      if (dbFile) {
+        const dbPath = dbFile;
+        await ssh.exec(`cd ${pgDir} && docker compose down 2>&1 || docker-compose down 2>&1 || true; sleep 2`);
+        const cpRes = await ssh.exec(`cp -f '${dbPath}' ${pgDir}/data/db.sqlite3 && chmod 644 ${pgDir}/data/db.sqlite3 && echo COPY_OK || echo COPY_FAIL; rm -f ${pgDir}/data/db.sqlite3-wal ${pgDir}/data/db.sqlite3-shm 2>/dev/null || true`);
+        await ssh.exec(`cd ${pgDir} && docker compose up -d 2>&1 || docker-compose up -d 2>&1; sleep 8`);
+        await ssh.exec(`rm -rf '${extractDir}'`);
+        if (cpRes.stdout.includes("COPY_OK")) {
+          const verify = await ssh.exec(`ls -lh ${pgDir}/data/db.sqlite3; docker ps --format "{{.Names}}" 2>/dev/null | grep -i pasarguard`);
+          return { success: true, detail: `PasarGuard database restored (${remoteSize} bytes) — ${verify.stdout.slice(0, 150)}` };
+        }
+        return { success: false, detail: "Failed to place the PasarGuard database found inside the archive" };
+      }
+
+      // 2) no database file inside → it must be the bkup JSON snapshot:
+      //    replay the sections into the panel's real SQLite schema
+      const snap = await restorePasarguardSnapshot(ssh, extractDir, remoteSize);
+      await ssh.exec(`rm -rf '${extractDir}'`);
+      return snap;
     }
+
     await ssh.exec(`rm -rf '${extractDir}'`);
-    const verify = await ssh.exec('docker ps --format "{{.Names}}" 2>/dev/null | grep -i pasarguard; ls -lh /opt/pasarguard/data/ 2>&1 | head -10');
-    return { success: true, detail: `PasarGuard backup extracted and restored (${remoteSize} bytes) — ${verify.stdout.slice(0, 150)}` };
+    return { success: false, detail: `The PasarGuard backup archive could not be extracted — nothing was modified on the server` };
   }
 
-  await ssh.exec(`rm -rf '${extractDir}'`);
-  const verifyRes = await ssh.exec('docker ps --format "{{.Names}}" 2>/dev/null | grep -i pasarguard || echo "NOT_RUNNING"');
-  if (verifyRes.stdout.includes("pasarguard")) {
-    return { success: true, detail: `PasarGuard backup processed (${remoteSize} bytes) — panel is running` };
-  }
-  return { success: false, detail: `PasarGuard restore attempted but panel status unclear (${remoteSize} bytes)` };
+  return { success: false, detail: `Unrecognized PasarGuard backup format — nothing was modified on the server` };
 }
 
-async function restoreRebecca(ssh: SshClient, remoteBackupPath: string, backupName: string): Promise<{ success: boolean; detail: string }> {
+/** Restore a bkup PasarGuard full snapshot (tar.gz of manifest.json +
+ * <section>.json files) into the panel's SQLite database. Each section is
+ * mapped onto the REAL table (discovered via sqlite_master + PRAGMA) and the
+ * rows are replayed inside one transaction — then the counts are verified, so
+ * "success" only ever means the data is actually back in the database. */
+async function restorePasarguardSnapshot(
+  ssh: SshClient,
+  extractDir: string,
+  remoteSize: number
+): Promise<{ success: boolean; detail: string }> {
+  if (!(await ensureSqlite3(ssh))) {
+    return { success: false, detail: "sqlite3 is not available on the server and could not be installed — the JSON snapshot cannot be replayed into the PasarGuard database" };
+  }
+
+  const pgDir = "/opt/pasarguard";
+  const dbPathRes = await ssh.exec(`ls ${pgDir}/data/*.db ${pgDir}/data/*.sqlite* ${pgDir}/*.db ${pgDir}/*.sqlite* 2>/dev/null | head -1; echo DB_SEARCH_DONE`);
+  // accept any absolute path line — the ls globs already constrain the search
+  const dbLine = dbPathRes.stdout.split("\n").map((l) => l.trim()).find((l) => l.startsWith("/") && (l.includes(".db") || l.includes(".sqlite")));
+  if (!dbLine) {
+    return {
+      success: false,
+      detail: "PasarGuard database file (SQLite) was not found on the server — the JSON snapshot restore supports SQLite installs. Nothing was modified",
+    };
+  }
+  const dbPath = dbLine;
+
+  const tablesRes = await ssh.exec(`sqlite3 '${dbPath}' "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';" 2>/dev/null`);
+  const tables = parseSqliteTableNames(tablesRes.stdout);
+  if (!tables.length) {
+    return { success: false, detail: "Could not read the PasarGuard database schema (sqlite3 query failed) — nothing was modified" };
+  }
+  const tset = new Set(tables);
+
+  // section → candidate table names (Marzban-family naming varies by version)
+  const SECTION_TABLES: Record<string, string[]> = {
+    users: ["users", "user"],
+    hosts: ["hosts", "host"],
+    nodes: ["nodes", "node"],
+    cores: ["cores", "core"],
+    groups: ["groups", "group"],
+    client_templates: ["client_templates", "client_template", "clienttemplates"],
+  };
+
+  const plan: { table: string; rows: Record<string, unknown>[]; section: string }[] = [];
+  for (const [section, candidates] of Object.entries(SECTION_TABLES)) {
+    const table = candidates.find((c) => tset.has(c));
+    if (!table) continue;
+    const cat = await ssh.exec(`cat '${extractDir}/${section}.json' 2>/dev/null | head -c 52428800`);
+    if (!cat.stdout.trim()) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(cat.stdout);
+    } catch {
+      continue;
+    }
+    let rows: unknown[] = [];
+    if (Array.isArray(parsed)) rows = parsed;
+    else if (parsed && typeof parsed === "object") {
+      const obj = parsed as Record<string, unknown>;
+      for (const key of ["users", "obj", "items", "data", "hosts", "nodes", "cores", "groups", "client_templates"]) {
+        if (Array.isArray(obj[key])) {
+          rows = obj[key] as unknown[];
+          break;
+        }
+      }
+    }
+    if (!rows.length) continue;
+    plan.push({ table, rows: rows as Record<string, unknown>[], section });
+  }
+
+  if (!plan.length) {
+    return { success: false, detail: "The PasarGuard snapshot contains no restorable sections (users/hosts/nodes/cores/groups) — nothing was modified" };
+  }
+
+  const parts: string[] = ["BEGIN;"];
+  for (const item of plan) {
+    const cols = await remoteSqliteColumns(ssh, dbPath, item.table);
+    if (!cols) continue;
+    parts.push(`DELETE FROM ${sqlQuoteIdent(item.table)};`);
+    parts.push(buildSqlInserts(item.table, cols, item.rows));
+    parts.push(`UPDATE sqlite_sequence SET seq=(SELECT COALESCE(MAX(rowid),0) FROM ${sqlQuoteIdent(item.table)}) WHERE name='${item.table}';`);
+  }
+  parts.push("COMMIT;");
+
+  const stamp = Date.now();
+  // distinct local/remote names — see the same-machine note in restore3xUiJson
+  const localSql = `/tmp/bkup-pg-snap-${stamp}.local.sql`;
+  const remoteSql = `/tmp/bkup-pg-snap-${stamp}.remote.sql`;
+  fs.writeFileSync(localSql, parts.filter(Boolean).join("\n") + "\n");
+  try {
+    await ssh.uploadFile(localSql, remoteSql);
+  } finally {
+    try { fs.unlinkSync(localSql); } catch { /* ignore */ }
+  }
+
+  await ssh.exec(`cd ${pgDir} && docker compose down 2>/dev/null || docker-compose down 2>/dev/null || true; sleep 2`);
+  await ssh.exec(`rm -f '${dbPath}-wal' '${dbPath}-shm' 2>/dev/null || true`);
+  await ssh.exec(`sqlite3 '${dbPath}' < '${remoteSql}' 2>&1 | tail -5`);
+  try { await ssh.exec(`rm -f '${remoteSql}'`); } catch { /* ignore */ }
+  await ssh.exec(`cd ${pgDir} && docker compose up -d 2>/dev/null || docker-compose up -d 2>/dev/null || true; sleep 8`);
+
+  // verify EVERY restored table row-by-row before claiming success
+  const verifyParts: string[] = [];
+  let allOk = true;
+  for (const item of plan) {
+    const c = await ssh.exec(`sqlite3 '${dbPath}' "SELECT COUNT(*) FROM ${sqlQuoteIdent(item.table)};" 2>&1`);
+    const n = parseInt(c.stdout.trim(), 10);
+    const ok = Number.isFinite(n) && n === item.rows.length;
+    if (!ok) allOk = false;
+    verifyParts.push(`${item.section}=${Number.isFinite(n) ? n : "?"}/${item.rows.length}`);
+  }
+  if (!allOk) {
+    return { success: false, detail: `PasarGuard snapshot replay failed — restored table counts do not match the backup (${verifyParts.join(", ")})` };
+  }
+  const docker = await ssh.exec('docker ps --format "{{.Names}}" 2>/dev/null | grep -i pasarguard || true');
+  return {
+    success: true,
+    detail: `PasarGuard snapshot restored (${remoteSize} bytes) — ${verifyParts.join(", ")} rows replayed into the panel database${docker.stdout.trim() ? "; panel containers running" : "; panel restarted"}. Target admin login and panel settings are kept`,
+  };
+}
+
+async function restoreRebecca(ssh: SshClient, remoteBackupPath: string, backupName: string, localBackupPath: string): Promise<{ success: boolean; detail: string }> {
   const lowerName = backupName.toLowerCase();
+  const kind = sniffBackupKind(localBackupPath);
 
   const uploadCheck = await ssh.exec(`ls -lh '${remoteBackupPath}' 2>&1 && stat -c %s '${remoteBackupPath}' 2>/dev/null || wc -c < '${remoteBackupPath}' 2>/dev/null || echo 0`);
   const uploadOut = uploadCheck.stdout.trim();
@@ -1265,7 +1626,7 @@ async function restoreRebecca(ssh: SshClient, remoteBackupPath: string, backupNa
     }
   }
 
-  if (lowerName.endsWith(".db") || lowerName.endsWith(".sqlite") || lowerName.endsWith(".sqlite3") || !lowerName.match(/\.(tar\.gz|tgz|zip)$/)) {
+  if (kind === "sqlite" || (kind === "unknown" && (lowerName.endsWith(".db") || lowerName.endsWith(".sqlite") || lowerName.endsWith(".sqlite3")))) {
     const dbPathRes = await ssh.exec(`ls ${rbDir}/data/*.db ${rbDir}/data/*.sqlite* 2>/dev/null | head -1; ls ${rbDir}/*.db 2>/dev/null | head -1; echo DB_SEARCH_DONE`);
     let targetDb = `${rbDir}/data/db.sqlite3`;
     const found = dbPathRes.stdout.trim().split("\n").find((l) => l.includes(".db") || l.includes(".sqlite"));
@@ -1283,37 +1644,49 @@ async function restoreRebecca(ssh: SshClient, remoteBackupPath: string, backupNa
     return { success: false, detail: `Failed to restore Rebecca db: ${cpRes.stdout.slice(0, 200)}` };
   }
 
-  const extractDir = `/tmp/bkup-rb-extract-${Date.now()}`;
-  await ssh.exec(`mkdir -p '${extractDir}'`);
-  const extractRes = await ssh.exec(
-    lowerName.endsWith(".zip")
-      ? `cd '${extractDir}' && unzip -o '${remoteBackupPath}' 2>&1 && echo EXTRACT_OK || echo EXTRACT_FAIL`
-      : `cd '${extractDir}' && tar -xzf '${remoteBackupPath}' 2>&1 && echo EXTRACT_OK || tar -xf '${remoteBackupPath}' 2>&1 && echo EXTRACT_OK || echo EXTRACT_FAIL`,
-    { timeout: 5 * 60 * 1000 }
-  );
+  if (kind === "json") {
+    return { success: false, detail: "This Rebecca backup is a bare JSON document — Rebecca restores need its own export file (via the rebecca CLI) or its database file. Nothing was modified" };
+  }
 
-  if (extractRes.stdout.includes("EXTRACT_OK")) {
-    const findDb = await ssh.exec(`find '${extractDir}' -name "*.db" -o -name "*.sqlite*" | head -5; ls -R '${extractDir}' | head -30`);
-    const dbFile = findDb.stdout.split("\n").find((l) => l.includes(".db") || l.includes(".sqlite"));
-    if (dbFile && dbFile.trim()) {
-      const dbPath = dbFile.trim();
-      await ssh.exec(`cd ${rbDir} && docker compose down 2>&1 || docker-compose down 2>&1 || true; sleep 2`);
-      await ssh.exec(`cp -f '${dbPath}' ${rbDir}/data/db.sqlite3 && chmod 644 ${rbDir}/data/db.sqlite3; rm -f ${rbDir}/data/db.sqlite3-wal ${rbDir}/data/db.sqlite3-shm 2>/dev/null || true; echo COPY_OK`);
-      await ssh.exec(`cd ${rbDir} && docker compose up -d 2>&1 || docker-compose up -d 2>&1; sleep 8`);
-    } else {
-      await ssh.exec(`cd ${rbDir} && docker compose down 2>&1 || true; cp -r '${extractDir}'/* ${rbDir}/data/ 2>/dev/null || cp -r '${extractDir}'/* ${rbDir}/ 2>/dev/null || true; docker compose up -d 2>&1 || docker-compose up -d 2>&1; sleep 8`);
+  if (kind === "tar-gz" || kind === "zip" || lowerName.match(/\.(tar\.gz|tgz|zip)$/)) {
+    const extractDir = `/tmp/bkup-rb-extract-${Date.now()}`;
+    await ssh.exec(`mkdir -p '${extractDir}'`);
+    const extractRes = await ssh.exec(
+      kind === "zip"
+        ? `cd '${extractDir}' && unzip -o '${remoteBackupPath}' 2>&1 && echo EXTRACT_OK || echo EXTRACT_FAIL`
+        : `cd '${extractDir}' && (tar -xzf '${remoteBackupPath}' 2>&1 || tar -xf '${remoteBackupPath}' 2>&1) && echo EXTRACT_OK || echo EXTRACT_FAIL`,
+      { timeout: 5 * 60 * 1000 }
+    );
+
+    if (extractRes.stdout.includes("EXTRACT_OK")) {
+      const findDb = await ssh.exec(`find '${extractDir}' \\( -name "*.db" -o -name "*.sqlite*" \\) -type f 2>/dev/null | head -5`);
+      const dbFile = findDb.stdout.split("\n").map((l) => l.trim()).find((l) => l.startsWith(extractDir));
+      if (dbFile) {
+        const dbPath = dbFile;
+        await ssh.exec(`cd ${rbDir} && docker compose down 2>&1 || docker-compose down 2>&1 || true; sleep 2`);
+        const cpRes = await ssh.exec(`cp -f '${dbPath}' ${rbDir}/data/db.sqlite3 && chmod 644 ${rbDir}/data/db.sqlite3 && echo COPY_OK || echo COPY_FAIL; rm -f ${rbDir}/data/db.sqlite3-wal ${rbDir}/data/db.sqlite3-shm 2>/dev/null || true`);
+        await ssh.exec(`cd ${rbDir} && docker compose up -d 2>&1 || docker-compose up -d 2>&1; sleep 8`);
+        await ssh.exec(`rm -rf '${extractDir}'`);
+        if (cpRes.stdout.includes("COPY_OK")) {
+          const verify = await ssh.exec(`ls -lh ${rbDir}/data/db.sqlite3; docker ps --format "{{.Names}}" 2>/dev/null | grep -i rebecca`);
+          return { success: true, detail: `Rebecca database restored (${remoteSize} bytes) — ${verify.stdout.slice(0, 150)}` };
+        }
+        return { success: false, detail: "Failed to place the Rebecca database found inside the archive" };
+      }
+      await ssh.exec(`rm -rf '${extractDir}'`);
+      return { success: false, detail: "The Rebecca archive contained no database file — nothing was restored. Use the rebecca CLI path or Rebecca's SQLite database backup" };
     }
+
     await ssh.exec(`rm -rf '${extractDir}'`);
-    const verify = await ssh.exec('docker ps --format "{{.Names}}" 2>/dev/null | grep -i rebecca; ls -lh /opt/rebecca/data/ 2>&1 | head -10');
-    return { success: true, detail: `Rebecca backup extracted and restored (${remoteSize} bytes) — ${verify.stdout.slice(0, 150)}` };
+    return { success: false, detail: "The Rebecca backup archive could not be extracted — nothing was modified on the server" };
   }
 
-  await ssh.exec(`rm -rf '${extractDir}'`);
-  const verifyRes = await ssh.exec('docker ps --format "{{.Names}}" 2>/dev/null | grep -i rebecca || echo "NOT_RUNNING"');
-  if (verifyRes.stdout.includes("rebecca")) {
-    return { success: true, detail: `Rebecca backup processed (${remoteSize} bytes) — panel is running` };
-  }
-  return { success: false, detail: `Rebecca restore attempted (${remoteSize} bytes) — please verify via panel UI` };
+  // unknown binary export (e.g. Rebecca's own .rbbackup): copying it verbatim
+  // over db.sqlite3 would CORRUPT the panel — that false-success path is gone.
+  return {
+    success: false,
+    detail: "This Rebecca export must be restored with the rebecca CLI — install Rebecca on the target server (which provides the CLI), then retry the restore. Nothing was modified",
+  };
 }
 
 async function resolveBackup(
@@ -1546,7 +1919,7 @@ async function runRestoreAsync(
     markStep(state.steps, "upload_backup", "running", `Uploading ${backup.fileName}...`);
     writeStateFile(state);
 
-    const remotePath = `/tmp/bkup-restore-${Date.now()}-${backup.fileName.replace(/[^\\w.@-]/g, "_")}`;
+    const remotePath = `/tmp/bkup-restore-${Date.now()}-${backup.fileName.replace(/[^\w.@-]/g, "_")}`;
     await ssh.uploadFile(backup.filePath, remotePath, (sent, total) => {
       const pct = total > 0 ? Math.round((sent / total) * 100) : 0;
       markStep(state.steps, "upload_backup", "running", `Uploading... ${pct}%`);
@@ -1571,7 +1944,7 @@ async function runRestoreAsync(
     state.currentStepKey = "restore";
     writeStateFile(state);
 
-    const restoreResult = await restoreFromRemotePath(ssh, req.panel, remotePath, backup.fileName);
+    const restoreResult = await restoreFromRemotePath(ssh, req.panel, remotePath, backup.fileName, backup.filePath);
 
     try {
       await ssh.exec(`rm -f '${remotePath}'`);
