@@ -22,6 +22,7 @@ export interface AppConfigDTO {
   rebeccaUrl: string;
   rebeccaUsername: string;
   rebeccaPassword: string;
+  customPaths: string;
   telegramApiBase: string;
   telegramBotToken: string;
   telegramChatId: string;
@@ -39,8 +40,8 @@ export interface BackupRunDTO {
   finishedAt: string | null;
   status: "running" | "success" | "failed";
   trigger: "auto" | "manual";
-  panel: "3x-ui" | "hmpanel" | "pasarguard" | "rebecca";
-  method: "db" | "hm-full" | "pg-full" | "rb-full" | null;
+  panel: "3x-ui" | "hmpanel" | "pasarguard" | "rebecca" | "custom";
+  method: "db" | "hm-full" | "pg-full" | "rb-full" | "custom-full" | null;
   fileName: string | null;
   filePath: string | null;
   fileSize: number | null;
@@ -59,7 +60,7 @@ export interface BackupCycleDTO {
 
 export interface BackupOutcomeDTO {
   runId: number;
-  panel: "3x-ui" | "hmpanel" | "pasarguard" | "rebecca";
+  panel: "3x-ui" | "hmpanel" | "pasarguard" | "rebecca" | "custom";
   status: "success" | "failed" | "skipped";
   method?: string;
   fileName?: string;

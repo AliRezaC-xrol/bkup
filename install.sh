@@ -13,6 +13,15 @@
 #  Re-running it on an existing server UPDATES the code in place
 #  and PRESERVES all data, settings and backups.
 #
+#  v1.3.0 — memory-safe backups + custom paths:
+#    · single-panel backups no longer crash the service: every archive is
+#      STREAMED to disk and uploaded in sliced parts, so a 400MB systemd
+#      MemoryMax handles multi-gigabyte backups (the old code buffered whole
+#      archives twice in RAM and was OOM-killed — issue #3)
+#    · CUSTOM PATHS: back up arbitrary directories on this server (e.g.
+#      /opt/myapp) alongside the panel backups, from Settings → Custom paths
+#    · all server logs and messages are now English
+#
 #  v1.2.0 — backup & restore correctness release:
 #    · one FULL backup per panel — the panel's own complete backup,
 #      taken byte-for-byte and never modified (3x-ui database, HMPanel

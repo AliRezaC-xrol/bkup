@@ -4,6 +4,8 @@
 #  Focused CLI: status, web-panel URL, password, port, logs,
 #  updates and uninstall. Everything else lives in the web panel.
 #
+#  v1.3.0: memory-safe streamed backups (single-panel runs no longer OOM),
+#  custom-path backups, English-only logs.
 #  v1.2.0: pairs with the backup/restore correctness release — every
 #  panel's backup is its own complete file and restores onto its own
 #  panel only (see install.sh header for the full list).

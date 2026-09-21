@@ -7,12 +7,13 @@ import { login, getDb, invalidateSession } from "@/lib/panel-client";
 import { hmFullBackup } from "@/lib/hmpanel-client";
 import { pgFullBackup } from "@/lib/pasarguard-client";
 import { rbFullBackup } from "@/lib/rebecca-client";
-import { sendBackupDocument, deleteMessage } from "@/lib/telegram";
+import { sendBackupFile, deleteMessage } from "@/lib/telegram";
 import { bi, fail, storeBi, throwBi, errorBiOf, type Bi } from "@/lib/messages";
+import { customPathBackup, parseCustomPaths } from "@/lib/custom-path-client";
 
-export type PanelId = "3x-ui" | "hmpanel" | "pasarguard" | "rebecca";
+export type PanelId = "3x-ui" | "hmpanel" | "pasarguard" | "rebecca" | "custom";
 
-const ALL_PANELS: PanelId[] = ["3x-ui", "hmpanel", "pasarguard", "rebecca"];
+const ALL_PANELS: PanelId[] = ["3x-ui", "hmpanel", "pasarguard", "rebecca", "custom"];
 
 export interface BackupOutcome {
   runId: number;
@@ -92,6 +93,8 @@ export async function runBackup(trigger: "auto" | "manual"): Promise<CycleResult
   if (cfg.hmEnabled) targets.push("hmpanel");
   if (cfg.pgEnabled) targets.push("pasarguard");
   if (cfg.rebeccaEnabled) targets.push("rebecca");
+  const customPaths = parseCustomPaths(cfg.customPaths);
+  for (const _ of customPaths) targets.push("custom");
 
   if (targets.length === 0) {
     g.__xuiRunning = false;
@@ -99,9 +102,18 @@ export async function runBackup(trigger: "auto" | "manual"): Promise<CycleResult
     return { outcomes: [], ok: false, durationMs: 0 };
   }
 
+  // the per-entry custom-path runs need their own iterator — a "custom"
+  // target appears once per configured path
+  let customIndex = 0;
+
   const outcomes: BackupOutcome[] = [];
   for (const panel of targets) {
-    outcomes.push(await runPanelBackup(panel, cfg, trigger));
+    if (panel === "custom") {
+      const entry = customPaths[customIndex++];
+      if (entry) outcomes.push(await runCustomBackup(entry, cfg, trigger));
+    } else {
+      outcomes.push(await runPanelBackup(panel, cfg, trigger));
+    }
   }
 
   // post-cycle cleanups — each in its OWN try/catch so one failing
@@ -144,19 +156,27 @@ async function runPanelBackup(
   // Only the backup FILE is delivered to Telegram — no progress, success or
   // completion messages of any kind.
   try {
-    // 1) Obtain the backup payload
-    let buf: Buffer;
+    // 1) Obtain the backup payload — every panel streams its archive to a
+    //    staging file under backups/.staging/ so the payload is NEVER held
+    //    in RAM: a full backup can be hundreds of MB and buffering it is
+    //    what used to OOM-kill the service mid-backup.
+    const stagingDir = path.join(backupDir(), ".staging");
+    fs.mkdirSync(stagingDir, { recursive: true });
+
+    let filePath: string;
     let fileName: string;
+    let size: number;
     let method: "db" | "hm-full" | "pg-full" | "rb-full";
     let warnNoteBi: Bi | null = null;
 
     if (panel === "hmpanel") {
       // ── HMPanel: FULL archive via official API (db + config + uploads,
       //    premium data included when the panel is a Premium edition) ──
-      const hm = await hmFullBackup(cfg);
+      const hm = await hmFullBackup(cfg, stagingDir);
       if (!hm.ok || !hm.data) throwBi(hm.error ?? "The HMPanel backup failed", hm.errorBi?.en ?? "The HMPanel backup failed");
-      buf = hm.data.buf;
+      filePath = hm.data.filePath;
       fileName = hm.data.fileName;
+      size = hm.data.size;
       method = "hm-full";
       // Persist the freshly-detected premium status so the UI stays current
       // Only write when the value actually changed — Prisma @updatedAt bumps on every update()
@@ -168,17 +188,19 @@ async function runPanelBackup(
     } else if (panel === "pasarguard") {
       // ── PasarGuard: FULL logical snapshot via official API (users + hosts +
       //    nodes + cores + groups + settings + templates) packed as tar.gz ──
-      const pg = await pgFullBackup(cfg);
+      const pg = await pgFullBackup(cfg, stagingDir);
       if (!pg.ok || !pg.data) throwBi(pg.error ?? "The PasarGuard backup failed", pg.errorBi?.en ?? "The PasarGuard backup failed");
-      buf = pg.data.buf;
+      filePath = pg.data.filePath;
       fileName = pg.data.fileName;
+      size = pg.data.size;
       method = "pg-full";
     } else if (panel === "rebecca") {
       // ── Rebecca: FULL export via official API (database + configuration) ──
-      const rb = await rbFullBackup(cfg);
+      const rb = await rbFullBackup(cfg, stagingDir);
       if (!rb.ok || !rb.data) throwBi(rb.error ?? "The Rebecca backup failed", rb.errorBi?.en ?? "The Rebecca backup failed");
-      buf = rb.data.buf;
+      filePath = rb.data.filePath;
       fileName = rb.data.fileName;
+      size = rb.data.size;
       method = "rb-full";
     } else {
       // ── 3x-ui: ONE backup method only — the panel's OWN full database
@@ -188,39 +210,48 @@ async function runPanelBackup(
       const sess = await login(cfg, cfg.authMode !== "bearer" && trigger === "manual");
       if (!sess.ok) throwBi(sess.error ?? "Panel login failed", sess.errorBi?.en ?? sess.error ?? "Panel login failed");
 
-      let dbRes = await getDb(cfg, sess.data!);
+      const dbName = timestampName("x-ui", "db");
+      let dbRes = await getDb(cfg, sess.data!, stagingDir, dbName);
       // One retry with a fresh session on auth failure
       if (!dbRes.ok && (dbRes.status === 401 || dbRes.status === 404)) {
         invalidateSession();
         const relogin = await login(cfg, true);
-        if (relogin.ok) dbRes = await getDb(cfg, relogin.data!);
+        if (relogin.ok) dbRes = await getDb(cfg, relogin.data!, stagingDir, dbName);
       }
       if (!dbRes.ok || !dbRes.data) {
         throwBi(dbRes.error ?? "The database download failed", dbRes.errorBi?.en ?? dbRes.error ?? "The database download failed");
       }
-      buf = dbRes.data!.buf;
-      fileName = timestampName("x-ui", "db");
+      filePath = dbRes.data!.filePath;
+      fileName = dbRes.data!.fileName;
+      size = dbRes.data!.size;
       method = "db";
     }
 
-    // integrity gate — the archive must be a real, complete backup file
-    const integrity = verifyArchive(fileName, buf);
+    // integrity gate — the archive must be a real, complete backup file.
+    // Read the header from the file rather than from an in-memory buffer.
+    const integrity = await verifyArchiveFile(fileName, filePath);
     if (!integrity.ok) throwBi(integrity.error!, integrity.errorBi!.en);
 
-    // 2) Persist locally
-    const dir = backupDir();
-    const filePath = path.join(dir, fileName);
-    fs.writeFileSync(filePath, buf);
-    await log("info", bi(`[${panelTitle(panel)}] backup file saved: ${fileName} (${formatSize(buf.length)})`, `[${panelTitle(panel)}] backup file saved: ${fileName} (${formatSize(buf.length)})`));
+    await log("info", bi(`[${panelTitle(panel)}] backup file saved: ${fileName} (${formatSize(size)})`, `[${panelTitle(panel)}] backup file saved: ${fileName} (${formatSize(size)})`));
 
-    // 3) Send to Telegram — ANY size; large files go out as parts
-    const tg = await sendBackupDocument(cfg, buf, fileName, method, panel);
+    // 2) Send to Telegram — ANY size; large files go out as parts. The file
+    //    is streamed off disk, never copied into RAM.
+    const tg = await sendBackupFile(cfg, filePath, size, fileName, method, panel);
     if (!tg.ok) {
       throwBi(`Sending to Telegram failed: ${tg.errorBi?.en ?? tg.error}`, `Sending to Telegram failed: ${tg.errorBi?.en ?? tg.error}`);
     }
     await log("success", bi(`[${panelTitle(panel)}] the full backup was sent to Telegram successfully (chat ${cfg.telegramChatId})`, `[${panelTitle(panel)}] the full backup was sent to Telegram successfully (chat ${cfg.telegramChatId})`));
 
     if (warnNoteBi) await log("warn", warnNoteBi);
+
+    // 3) Move the verified archive out of staging into the real backups dir.
+    //    Only a file that passed the integrity gate AND reached Telegram is
+    //    promoted — a failed run never leaves a fake "backup" in history.
+    const finalPath = path.join(backupDir(), fileName);
+    if (path.resolve(filePath) !== path.resolve(finalPath)) {
+      await fs.promises.rename(filePath, finalPath);
+      filePath = finalPath;
+    }
 
     const durationMs = Date.now() - started;
     await db.backupRun.update({
@@ -231,7 +262,7 @@ async function runPanelBackup(
         method,
         fileName,
         filePath,
-        fileSize: buf.length,
+        fileSize: size,
         tgMessageId: tg.data!.messageIds[0],
         tgMessageIds: JSON.stringify(tg.data!.messageIds),
         durationMs,
@@ -249,7 +280,7 @@ async function runPanelBackup(
       status: "success",
       method,
       fileName,
-      fileSize: buf.length,
+      fileSize: size,
       tgMessageId: tg.data!.messageIds[0],
       durationMs,
     };
@@ -271,9 +302,38 @@ async function runPanelBackup(
 /** Archive integrity gate — a delivered backup must be a real archive, never an error page. */
 export function verifyArchive(fileName: string, buf: Buffer): { ok: true } | { ok: false; error: string; errorBi: Bi } {
   if (buf.length === 0) return fail("The backup file was empty", "The backup file was empty");
-  const head = buf.subarray(0, 4);
-  const isGzip = head[0] === 0x1f && head[1] === 0x8b;
-  const isZip = head[0] === 0x50 && head[1] === 0x4b;
+  return verifyMagic(fileName, buf.length, buf.subarray(0, 16));
+}
+
+/**
+ * File-backed integrity gate — reads only the first 16 bytes + the size from
+ * disk. Backups now stream to a file, so this is the version the backup path
+ * uses; verifyArchive above stays for the in-memory reassembly path.
+ */
+export async function verifyArchiveFile(fileName: string, filePath: string): Promise<{ ok: true } | { ok: false; error: string; errorBi: Bi }> {
+  let stat;
+  try {
+    stat = await fs.promises.stat(filePath);
+  } catch {
+    return fail("The backup file is missing", "The backup file is missing");
+  }
+  if (stat.size === 0) return fail("The backup file was empty", "The backup file was empty");
+  const fd = await fs.promises.open(filePath, "r");
+  try {
+    const head = Buffer.alloc(16);
+    const { bytesRead } = await fd.read(head, 0, 16, 0);
+    return verifyMagic(fileName, stat.size, head.subarray(0, bytesRead));
+  } finally {
+    await fd.close();
+  }
+}
+
+/** Shared magic-byte gate used by both the in-memory and the file-backed path. */
+function verifyMagic(fileName: string, size: number, head: Buffer): { ok: true } | { ok: false; error: string; errorBi: Bi } {
+  if (size === 0) return fail("The backup file was empty", "The backup file was empty");
+  const b0 = head[0], b1 = head[1];
+  const isGzip = b0 === 0x1f && b1 === 0x8b;
+  const isZip = b0 === 0x50 && b1 === 0x4b;
   const lower = fileName.toLowerCase();
   if ((lower.endsWith(".gz") || lower.endsWith(".tgz")) && !isGzip) {
     return fail("The backup file is not a valid gzip archive", "The backup file is not a valid gzip archive");
@@ -282,10 +342,10 @@ export function verifyArchive(fileName: string, buf: Buffer): { ok: true } | { o
     return fail("The backup file is not a valid zip archive", "The backup file is not a valid zip archive");
   }
   // a JSON error body or an HTML error page must never be stored/sent as a backup
-  const looksJson = head[0] === 0x7b || head[0] === 0x5b;
-  const looksHtml = head[0] === 0x3c;
+  const looksJson = b0 === 0x7b || b0 === 0x5b;
+  const looksHtml = b0 === 0x3c;
   // .db files must be real SQLite — check the magic header "SQLite format 3\000"
-  const isSqlite = buf.length >= 16 && buf.subarray(0, 15).toString("ascii") === "SQLite format 3";
+  const isSqlite = head.length >= 15 && head.subarray(0, 15).toString("ascii") === "SQLite format 3";
   if (lower.endsWith(".db") && !isSqlite) {
     return fail("The backup file claims to be a database but is not a valid SQLite file", "The backup file claims to be a database but is not a valid SQLite file");
   }
@@ -303,7 +363,103 @@ function panelTitle(panel: PanelId): string {
       ? "PasarGuard"
       : panel === "rebecca"
         ? "Rebecca"
-        : "3x-ui";
+        : panel === "custom"
+          ? "Custom"
+          : "3x-ui";
+}
+
+/**
+ * Back up ONE custom directory. Same contract as a panel backup: create a
+ * run row, stream the archive to disk, integrity-check it, send it to
+ * Telegram, then promote it out of staging and enforce retention.
+ */
+async function runCustomBackup(
+  entry: { path: string; label: string },
+  cfg: Awaited<ReturnType<typeof getConfig>>,
+  trigger: "auto" | "manual"
+): Promise<BackupOutcome> {
+  const started = Date.now();
+  const label = entry.label || path.basename(entry.path) || entry.path;
+
+  let run;
+  try {
+    run = await db.backupRun.create({ data: { status: "running", trigger, panel: "custom" } });
+  } catch (e: unknown) {
+    const error = e instanceof Error ? e.message : String(e);
+    await log("error", bi(`Could not create the custom-path backup run record: ${error}`, `Could not create the custom-path backup run record: ${error}`));
+    return { runId: -1, panel: "custom", status: "failed", error, durationMs: 0 };
+  }
+
+  let outcome: BackupOutcome;
+  try {
+    const stagingDir = path.join(backupDir(), ".staging");
+    fs.mkdirSync(stagingDir, { recursive: true });
+
+    const res = await customPathBackup(cfg, entry, stagingDir, process.cwd());
+    if (!res.ok || !res.data) {
+      throwBi(res.error ?? "The custom-path backup failed", res.errorBi?.en ?? res.error ?? "The custom-path backup failed");
+    }
+    const { filePath, fileName, size, files } = res.data;
+
+    const integrity = await verifyArchiveFile(fileName, filePath);
+    if (!integrity.ok) throwBi(integrity.error!, integrity.errorBi!.en);
+
+    await log("info", bi(`[Custom:${label}] backup file saved: ${fileName} (${formatSize(size)}, ${files} files)`, `[Custom:${label}] backup file saved: ${fileName} (${formatSize(size)}, ${files} files)`));
+
+    const tg = await sendBackupFile(cfg, filePath, size, fileName, "custom-full", "custom");
+    if (!tg.ok) {
+      throwBi(`Sending to Telegram failed: ${tg.errorBi?.en ?? tg.error}`, `Sending to Telegram failed: ${tg.errorBi?.en ?? tg.error}`);
+    }
+    await log("success", bi(`[Custom:${label}] the directory backup was sent to Telegram successfully (chat ${cfg.telegramChatId})`, `[Custom:${label}] the directory backup was sent to Telegram successfully (chat ${cfg.telegramChatId})`));
+
+    const finalPath = path.join(backupDir(), fileName);
+    if (path.resolve(filePath) !== path.resolve(finalPath)) {
+      await fs.promises.rename(filePath, finalPath);
+    }
+
+    const durationMs = Date.now() - started;
+    await db.backupRun.update({
+      where: { id: run.id },
+      data: {
+        status: "success",
+        finishedAt: new Date(),
+        method: "custom-full",
+        fileName,
+        filePath: finalPath,
+        fileSize: size,
+        tgMessageId: tg.data!.messageIds[0],
+        tgMessageIds: JSON.stringify(tg.data!.messageIds),
+        durationMs,
+      },
+    });
+
+    try {
+      await enforceLocalRetention(cfg, "custom");
+    } catch { /* retention is best-effort */ }
+
+    outcome = {
+      runId: run.id,
+      panel: "custom",
+      status: "success",
+      method: "custom-full",
+      fileName,
+      fileSize: size,
+      tgMessageId: tg.data!.messageIds[0],
+      durationMs,
+    };
+  } catch (e: unknown) {
+    const error = e instanceof Error ? e.message : String(e);
+    const errBi = errorBiOf(e);
+    const durationMs = Date.now() - started;
+    await db.backupRun.update({
+      where: { id: run.id },
+      data: { status: "failed", finishedAt: new Date(), error: storeBi(errBi, error), durationMs },
+    });
+    await log("error", bi(`[Custom:${label}] the backup failed: ${errBi?.en ?? error}`, `[Custom:${label}] the backup failed: ${errBi?.en ?? error}`));
+    outcome = { runId: run.id, panel: "custom", status: "failed", error, errorBi: errBi, durationMs };
+  }
+
+  return outcome;
 }
 
 /** Keep only the newest N Telegram backup messages per panel (0 = disabled). */
@@ -374,6 +530,10 @@ async function enforceLocalRetention(
  * Orphan sweep — archives left on disk by a cycle that crashed after writing
  * the file (they belong to no history row). One hour of grace in case a cycle
  * is still running. Runs once per cycle; retention itself is per-panel above.
+ *
+ * Also reaps the .staging/ directory: a cycle that died mid-download leaves a
+ * half-written archive there. Staging files get a SHORT grace (10 min) since
+ * they can never be a finished backup.
  */
 async function sweepOrphanFiles(cfg: Awaited<ReturnType<typeof getConfig>>) {
   const dir = backupDir();
@@ -389,6 +549,17 @@ async function sweepOrphanFiles(cfg: Awaited<ReturnType<typeof getConfig>>) {
       if (Date.now() - fs.statSync(full).mtimeMs > 60 * 60 * 1000) fs.unlinkSync(full);
     } catch { /* best-effort */ }
   }
+
+  const staging = path.join(dir, ".staging");
+  try {
+    for (const f of fs.readdirSync(staging)) {
+      const full = path.join(staging, f);
+      try {
+        // a run in flight holds this file; only reap the stale ones
+        if (Date.now() - fs.statSync(full).mtimeMs > 10 * 60 * 1000) fs.unlinkSync(full);
+      } catch { /* best-effort */ }
+    }
+  } catch { /* staging dir does not exist yet — nothing to sweep */ }
 }
 
 export function formatSize(bytes: number): string {

@@ -150,8 +150,8 @@ export async function POST(req: NextRequest) {
         ? `${ordered.length} stored backup parts were picked in the web panel and merged into one complete file: ${base} (${size} bytes)`
         : `The stored backup "${base}" was picked in the web panel and stored as one complete reassembled file (${size} bytes)`,
       ordered.length > 1
-        ? `${ordered.length} پارت از بکاپ‌های ذخیره‌شده در پنل وب انتخاب و به یک فایل کامل چسبانده شد: ${base} (${size} بایت)`
-        : `بکاپ ذخیره‌شدهٔ "${base}" در پنل وب انتخاب و به‌صورت یک فایل کامل ذخیره شد (${size} بایت)`
+        ? `${ordered.length} stored backup parts were picked in the web panel and merged into one complete file: ${base} (${size} bytes)`
+        : `The stored backup "${base}" was picked in the web panel and stored as one complete reassembled file (${size} bytes)`
     ));
     return NextResponse.json(row, { status: 201 });
   }

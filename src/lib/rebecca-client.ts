@@ -1,7 +1,9 @@
 import axios, { type AxiosInstance } from "axios";
+import path from "node:path";
 import { sharedHttpAgent, sharedHttpsAgent } from "@/lib/http-agents";
 import type { AppConfig } from "@/lib/config-service";
 import { bi, fail, type Bi } from "@/lib/messages";
+import { streamDownload } from "@/lib/stream-download";
 
 /**
  * Rebecca (rebeccapanel/Rebecca) API client.
@@ -119,8 +121,9 @@ async function rbLogin(cfg: AppConfig): Promise<RbResult<{ token: string }>> {
 
 /** Download Rebecca's own FULL backup export (database + configuration). */
 export async function rbFullBackup(
-  cfg: AppConfig
-): Promise<RbResult<{ buf: Buffer; fileName: string; size: number }>> {
+  cfg: AppConfig,
+  destDir: string
+): Promise<RbResult<{ filePath: string; fileName: string; size: number }>> {
   const login = await rbLogin(cfg);
   if (!login.ok || !login.data) return { ok: false, error: login.error, errorBi: login.errorBi };
 
@@ -128,46 +131,39 @@ export async function rbFullBackup(
   const ax = axiosFor(cfg, EXPORT_TIMEOUT_MS);
   const auth = { Authorization: `Bearer ${login.data.token}` };
 
-  let res;
-  try {
-    res = await ax.get(`${base}/api/settings/backup/export`, {
-      headers: auth,
-      responseType: "arraybuffer",
-    });
-    // some builds want an explicit scope — retry once with scope=full
-    if (res.status >= 400) {
-      res = await ax.get(`${base}/api/settings/backup/export`, {
-        headers: auth,
-        params: { scope: "full" },
-        responseType: "arraybuffer",
-      });
-    }
-  } catch (e: unknown) {
-    const m = rbErrMsg(e);
-    return fail(`Creating the Rebecca backup failed: ${m.en}`, `Creating the Rebecca backup failed: ${m.en}`);
-  }
-
-  if (res.status === 401 || res.status === 403) {
-    return fail("The Rebecca backup download was not allowed (admin access required)", "The Rebecca backup download was not allowed (admin access required)");
-  }
-  if (res.status === 409) {
-    return fail("Rebecca backups are disabled on this install (binary runtime only)", "Rebecca backups are disabled on this install (binary runtime only)");
-  }
-  if (res.status >= 300) {
-    return fail(`Downloading the Rebecca backup failed (HTTP ${res.status})`, `Downloading the Rebecca backup failed (HTTP ${res.status})`);
-  }
-
-  const buf = Buffer.from(res.data);
-  if (buf.length === 0) return fail("The Rebecca backup file was empty", "The Rebecca backup file was empty");
-  // a JSON error body would arrive as 200 with JSON — reject it
-  if (buf[0] === 0x7b && buf[1] === 0x22) {
-    return fail("Rebecca answered with JSON instead of the backup file", "Rebecca answered with JSON instead of the backup file");
-  }
-
-  const cd = String(res.headers["content-disposition"] ?? "");
+  // the filename comes from Content-Disposition when the panel sends one;
+  // fall back to a timestamped name so the stream target is known up-front
+  const probe = await ax
+    .head(`${base}/api/settings/backup/export`, { headers: auth, params: { scope: "full" } })
+    .catch(() => null);
+  const cd = String(probe?.headers?.["content-disposition"] ?? "");
   const m = cd.match(/filename\s*=\s*"?([^";]+)"?/i);
-  const fileName = m?.[1] ?? `rebecca-backup-${Date.now()}.rbbackup`;
-  return { ok: true, data: { buf, fileName, size: buf.length } };
+  // the file name comes from the panel — keep only the base name so it can
+  // never escape the staging directory
+  const rawName = m?.[1] ?? `rebecca-backup-${Date.now()}.rbbackup`;
+  const fileName = path.basename(rawName) || `rebecca-backup-${Date.now()}.rbbackup`;
+  const destPath = path.join(destDir, fileName);
+
+  const exportUrl = `${base}/api/settings/backup/export`;
+  let res = await streamDownload(ax, exportUrl, destPath, { headers: auth });
+  // some builds want an explicit scope — retry once with scope=full
+  if (!res.ok && res.errorBody) {
+    res = await streamDownload(ax, exportUrl, destPath, {
+      headers: auth,
+      params: { scope: "full" },
+    });
+  }
+
+  if (!res.ok) {
+    const detail = res.errorBody || res.error || "download failed";
+    // a JSON error body would arrive as 200 with JSON — reject it
+    if (detail.startsWith("{") || detail.startsWith("<")) {
+      return fail("Rebecca answered with an error instead of the backup file", "Rebecca answered with an error instead of the backup file");
+    }
+    return fail(`Downloading the Rebecca backup failed (${detail})`, `Downloading the Rebecca backup failed (${detail})`);
+  }
+
+  return { ok: true, data: { filePath: res.data!.filePath, fileName: res.data!.fileName, size: res.data!.size } };
 }
 
 /** Connection test used by the test button: login → validate token → report. */

@@ -28,6 +28,7 @@ const DEFAULTS: Omit<BackupConfig, "id" | "createdAt" | "updatedAt"> = {
   rebeccaUrl: "",
   rebeccaUsername: "",
   rebeccaPassword: "",
+  customPaths: "[]",
   telegramApiBase: "https://api.telegram.org",
   telegramBotToken: "",
   telegramChatId: "",

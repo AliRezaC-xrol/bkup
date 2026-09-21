@@ -28,7 +28,7 @@ export async function GET(req: NextRequest) {
     "info",
     bi(
       full ? "Settings were exported to a file (with credentials)" : "Settings were exported to a file",
-      full ? "تنظیمات در فایلی ذخیره شد (همراه اعتبارنامه‌ها)" : "تنظیمات در فایلی ذخیره شد"
+      full ? "Settings were exported to a file (with credentials)" : "Settings were exported to a file"
     )
   );
 

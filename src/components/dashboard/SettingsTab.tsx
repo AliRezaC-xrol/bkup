@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import {
-  Server, Send, Timer, Save, Loader2, ShieldCheck, Info, KeyRound, Eye, Boxes, Shield, FileDown, FileUp, AlertTriangle, LogOut,
+  Server, Send, Timer, Save, Loader2, ShieldCheck, Info, KeyRound, Eye, Boxes, Shield, FileDown, FileUp, AlertTriangle, LogOut, FolderPlus, Trash2, Folder,
 } from "lucide-react";
 import { useLang } from "@/components/dashboard/lang";
 import type { AppConfigDTO } from "./types";
@@ -27,6 +27,8 @@ interface Props {
 }
 
 export function SettingsTab({ config, onSaved, onPasswordChanged }: Props) {
+  // must stay in sync with MAX_PATHS in src/lib/custom-path-client.ts
+  const MAX_CUSTOM_PATHS = 16;
   const { t } = useLang();
   const { toast } = useToast();
   const [form, setForm] = useState<AppConfigDTO | null>(config);
@@ -53,6 +55,62 @@ export function SettingsTab({ config, onSaved, onPasswordChanged }: Props) {
   const [changingPw, setChangingPw] = useState(false);
   const [revokeOpen, setRevokeOpen] = useState(false);
   const [revoking, setRevoking] = useState(false);
+
+  // custom-path editor — kept as a local list; saved as one JSON field.
+  // The list is re-derived from the config whenever it changes, EXCEPT while
+  // the user has unsaved edits (a background poll must never wipe them).
+  const [customPaths, setCustomPaths] = useState<{ path: string; label: string }[]>([]);
+  const [customDirty, setCustomDirty] = useState(false);
+  const [customLoadedAt, setCustomLoadedAt] = useState<string | null>(null);
+  const [newPath, setNewPath] = useState("");
+  const [newLabel, setNewLabel] = useState("");
+  const [customErr, setCustomErr] = useState<string | null>(null);
+
+  // "Adjust state during render" (React docs) — keyed on updatedAt so a poll
+  // refreshes the list, but only when the user is not mid-edit
+  if (config && !customDirty && config.updatedAt !== customLoadedAt) {
+    setCustomLoadedAt(config.updatedAt);
+    const next: { path: string; label: string }[] = [];
+    try {
+      const arr = JSON.parse(config.customPaths || "[]");
+      if (Array.isArray(arr)) {
+        for (const v of arr) {
+          const e = typeof v === "string" ? { path: v, label: "" } : v;
+          if (e && typeof e.path === "string") next.push({ path: e.path, label: (e.label ?? "").slice(0, 40) });
+        }
+      }
+    } catch { /* malformed stored list — start empty */ }
+    setCustomPaths(next);
+  }
+
+  /** Push the local custom-path list into the form so Save persists it. */
+  function syncCustomPaths(list: { path: string; label: string }[]) {
+    setCustomPaths(list);
+    setCustomDirty(true);
+    setForm((f) => (f ? { ...f, customPaths: JSON.stringify(list.map((e) => e.label.trim() ? { path: e.path.trim(), label: e.label.trim() } : { path: e.path.trim() })) } : f));
+  }
+
+  function addCustomPath() {
+    setCustomErr(null);
+    const p = newPath.trim();
+    if (!p) return;
+    if (customPaths.some((e) => e.path === p)) {
+      setCustomErr(t("custom_bad_path"));
+      return;
+    }
+    if (customPaths.length >= MAX_CUSTOM_PATHS) {
+      setCustomErr(t("custom_too_many"));
+      return;
+    }
+    syncCustomPaths([...customPaths, { path: p, label: newLabel.trim() }]);
+    setNewPath("");
+    setNewLabel("");
+  }
+
+  function removeCustomPath(idx: number) {
+    setCustomErr(null);
+    syncCustomPaths(customPaths.filter((_, i) => i !== idx));
+  }
 
   /** Sign out every browser/device (this one included) — bumps sessionsVersion. */
   async function revokeEverywhere() {
@@ -220,7 +278,11 @@ export function SettingsTab({ config, onSaved, onPasswordChanged }: Props) {
         return false;
       }
       dirtyKeys.current.clear(); // everything saved → server is authoritative
+      setCustomDirty(false);
       onSaved(data);
+      if (data && typeof data === "object" && "updatedAt" in data) {
+        setCustomLoadedAt(String((data as AppConfigDTO).updatedAt));
+      }
       if (!silent) toast({ title: t("settings_saved") });
       return true;
     } catch {
@@ -703,6 +765,93 @@ export function SettingsTab({ config, onSaved, onPasswordChanged }: Props) {
             </Button>
           </CardContent>
         )}
+      </Card>
+
+      {/* ===== Custom paths (server directories) ===== */}
+      <Card className={customPaths.length > 0 ? "border-primary/40" : undefined}>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <FolderPlus className="h-4 w-4" />
+            {t("custom_card_title")}
+            {customDirty && (
+              <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400">
+                {t("custom_needs_save")}
+              </span>
+            )}
+          </CardTitle>
+          <CardDescription>{t("custom_card_desc")}</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-2 sm:grid-cols-[1fr_0.7fr_auto] sm:items-end">
+            <div className="space-y-2">
+              <Label htmlFor="customPath">{t("custom_path_label")}</Label>
+              <Input
+                id="customPath" dir="ltr" className="text-start font-mono text-sm"
+                placeholder={t("custom_path_ph")}
+                value={newPath}
+                onChange={(e) => setNewPath(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") { e.preventDefault(); void addCustomPath(); }
+                }}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="customLabel">{t("custom_label_label")}</Label>
+              <Input
+                id="customLabel" dir="ltr" className="text-start"
+                placeholder={t("custom_label_ph")}
+                value={newLabel}
+                onChange={(e) => setNewLabel(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") { e.preventDefault(); void addCustomPath(); }
+                }}
+              />
+            </div>
+            <Button variant="outline" onClick={() => void addCustomPath()} className="gap-2">
+              <FolderPlus className="h-4 w-4" />
+              {t("custom_add")}
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">{t("custom_path_hint")}</p>
+
+          {customErr && (
+            <p className="flex items-center gap-1.5 text-sm font-medium text-destructive">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+              {customErr}
+            </p>
+          )}
+
+          {customPaths.length === 0 ? (
+            <div className="flex items-center gap-2 rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+              <Folder className="h-4 w-4 shrink-0" />
+              {t("custom_empty")}
+            </div>
+          ) : (
+            <ul className="space-y-2">
+              {customPaths.map((entry, idx) => (
+                <li
+                  key={`${entry.path}-${idx}`}
+                  className="flex items-center gap-3 rounded-lg border p-2.5"
+                >
+                  <Folder className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-mono text-sm" dir="ltr">{entry.path}</p>
+                    {entry.label && (
+                      <p className="truncate text-xs text-muted-foreground">{entry.label}</p>
+                    )}
+                  </div>
+                  <Button
+                    variant="ghost" size="icon" className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
+                    onClick={() => removeCustomPath(idx)}
+                    aria-label={`${t("custom_remove")} ${entry.path}`}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </CardContent>
       </Card>
 
       {/* ===== Telegram (shared destination) ===== */}

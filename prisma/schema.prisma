@@ -38,6 +38,9 @@ model BackupConfig {
   rebeccaUrl       String   @default("")
   rebeccaUsername  String   @default("")
   rebeccaPassword  String   @default("")
+  // ── Custom paths — arbitrary directories on THIS server backed up as
+  //    tar.gz alongside the panel backups (e.g. /opt/myapp, /etc/nginx) ──
+  customPaths      String   @default("[]") // JSON array of absolute paths
   // Telegram (shared destination for BOTH panels)
   telegramApiBase  String   @default("https://api.telegram.org")
   telegramBotToken String   @default("")

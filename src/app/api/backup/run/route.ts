@@ -7,7 +7,11 @@ import { bi } from "@/lib/messages";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 120;
+// A full backup of a large panel (HMPanel carries uploads/) legitimately
+// takes minutes: download + gzip + Telegram upload. The old 120s ceiling
+// aborted the request mid-flight, leaving the run stuck in "running" and
+// the panel looking frozen. The run itself is guarded by its own timeouts.
+export const maxDuration = 1800;
 
 /** Manual one-shot backup cycle — runs ALL enabled panels (3x-ui + HM Panel). */
 export async function POST(req: Request) {
