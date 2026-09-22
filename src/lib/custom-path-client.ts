@@ -130,10 +130,10 @@ export async function customPathBackup(
   const gz = zlib.createGzip({ level: 6 });
   gz.pipe(out);
 
-  const header = (name: string, size: number, type: string) => {
+  const header = (name: string, size: number, type: string, mode = 0o644) => {
     const h = Buffer.alloc(512, 0);
     h.write(name.slice(0, 100), 0, "utf8");
-    h.write("0000644\0", 100); // mode
+    h.write((mode & 0o7777).toString(8).padStart(7, "0") + "\0", 100); // mode
     h.write("0000000\0", 108); // uid
     h.write("0000000\0", 116); // gid
     h.write(size.toString(8).padStart(11, "0") + "\0", 124);
@@ -148,8 +148,8 @@ export async function customPathBackup(
     return h;
   };
 
-  const writeMember = (name: string, data: Buffer) => {
-    gz.write(header(name, data.length, "0"));
+  const writeMember = (name: string, data: Buffer, mode = 0o644) => {
+    gz.write(header(name, data.length, "0", mode));
     gz.write(data);
     const pad = (512 - (data.length % 512)) % 512;
     if (pad) gz.write(Buffer.alloc(pad, 0));
@@ -158,7 +158,7 @@ export async function customPathBackup(
   /** A symlink header: the link target goes in the 157-byte linkname field. */
   const writeSymlink = (name: string, target: string) => {
     const linkTarget = target.slice(0, 155);
-    gz.write(header(name, linkTarget.length, "2"));
+    gz.write(header(name, linkTarget.length, "2", 0o777));
     gz.write(Buffer.from(linkTarget, "utf8"));
     const pad = (512 - (linkTarget.length % 512)) % 512;
     if (pad) gz.write(Buffer.alloc(pad, 0));
@@ -195,11 +195,14 @@ export async function customPathBackup(
           continue;
         }
         if (ent.isDirectory()) {
-          gz.write(header(rel + "/", 0, "5"));
+          gz.write(header(rel + "/", 0, "5", 0o755));
           stack.push(full);
           continue;
         }
         if (!ent.isFile()) continue;
+        // a file that happens to be named like our manifest would otherwise be
+        // overwritten by the real manifest written at the end of the archive
+        if (rel === "backup-manifest.json") continue;
         try {
           const st = await fs.promises.stat(full);
           if (totalBytes + st.size > MAX_BYTES) continue;
@@ -209,7 +212,7 @@ export async function customPathBackup(
           await new Promise<void>((resolve, reject) => {
             const src = fs.createReadStream(full, { highWaterMark: 1024 * 1024 });
             src.on("error", reject);
-            gz.write(header(rel, st.size, "0"));
+            gz.write(header(rel, st.size, "0", st.mode & 0o7777));
             src.on("data", (chunk) => {
               if (!gz.write(chunk)) {
                 src.pause();

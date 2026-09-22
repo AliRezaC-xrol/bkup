@@ -124,6 +124,10 @@ export function bootstrapScheduler() {
       data: { status: "failed", error: "Backup execution was interrupted by service restart", durationMs: 0 },
     }).catch(() => undefined)
   );
+  // legacy Persian log rows (written by v1.0.0–v1.2.0) → English, once per boot
+  import("@/lib/log-english")
+    .then((m) => m.translateLegacyLogs())
+    .catch(() => undefined);
   scheduleNext();
 }
 

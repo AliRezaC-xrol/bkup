@@ -4,7 +4,7 @@ import zlib from "node:zlib";
 import { db } from "@/lib/db";
 import { log } from "@/lib/logger";
 import { bi } from "@/lib/messages";
-import { SshClient, SshError, type SshOptions, type SshExecOptions } from "@/lib/restore-ssh";
+import { SshClient, SshError, type SshOptions, type SshExecOptions, type ExecResult } from "@/lib/restore-ssh";
 import {
   getRestoreConfig,
   getInstallScript,
@@ -12,6 +12,7 @@ import {
   OFFICIAL_NODE_INSTALL_URLS,
 } from "@/lib/restore-config";
 import type { RestoreConfig } from "@prisma/client";
+import { normalizeRestoreTargetPath, validateRestoreTargetPath } from "@/lib/restore-target-path";
 
 export type PanelId = "3x-ui" | "hmpanel" | "pasarguard" | "rebecca";
 export type SslMode = "none" | "domain" | "ip" | "custom";
@@ -52,7 +53,7 @@ export interface RestoreStep {
 export interface RestoreState {
   jobId: number;
   status: "running" | "success" | "failed" | "cancelled";
-  panel: PanelId;
+  panel: PanelId | "custom";
   backupName: string;
   sshHost: string;
   steps: RestoreStep[];
@@ -61,6 +62,21 @@ export interface RestoreState {
   finishedAt?: number;
   error?: string;
   durationMs?: number;
+}
+
+/** A custom-path restore: extract a directory archive onto a server over SSH.
+ *  No panel is installed and no panel data is touched — the archive is unpacked
+ *  into `targetPath` and verified against its manifest. */
+export interface CustomRestoreRequest {
+  sshHost: string;
+  sshPort: number;
+  sshUser: string;
+  sshPassword?: string;
+  sshPrivateKey?: string;
+  sshPassphrase?: string;
+  backupId: number;
+  backupSource: "backup-run" | "reassembled";
+  targetPath: string;
 }
 
 function dataDir(): string {
@@ -152,6 +168,12 @@ export function checkIfCancelled(): boolean {
  * process cmdline clean (`bash /tmp/bkup-probe-….sh`), so the probe is honest.
  */
 async function execRemoteScript(ssh: SshClient, script: string, opts: SshExecOptions = {}): Promise<string> {
+  return (await execRemoteScriptFull(ssh, script, opts)).stdout;
+}
+
+/** Same as execRemoteScript but keeps exitCode/signal — the custom-path
+ *  restore distinguishes "script ran and failed" from "script never ran". */
+async function execRemoteScriptFull(ssh: SshClient, script: string, opts: SshExecOptions = {}): Promise<ExecResult> {
   const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   // local and remote names MUST differ — on a localhost restore the bkup
   // server IS the target, and identical paths would corrupt the upload
@@ -164,7 +186,7 @@ async function execRemoteScript(ssh: SshClient, script: string, opts: SshExecOpt
     try { fs.unlinkSync(localScript); } catch { /* ignore */ }
   }
   const res = await ssh.exec(`bash '${remoteScript}' 2>&1; ec=$?; rm -f '${remoteScript}'; exit $ec`, opts);
-  return res.stdout;
+  return res;
 }
 
 const g = globalThis as unknown as { __restoreRunning?: boolean };
@@ -187,6 +209,19 @@ function makeSteps(panel: PanelId, installNode: boolean): RestoreStep[] {
     { key: "upload_backup", title: "Uploading backup file", status: "pending" },
     { key: "restore", title: "Restoring backup", status: "pending" },
     { key: "verify", title: "Verifying restoration", status: "pending" },
+  ];
+}
+
+/** Steps for a custom-path restore. The panel-only steps are dropped; the
+ *  shared keys (connect / upload_backup / restore / verify) are reused so the
+ *  existing progress view renders them without a second code path. */
+function makeCustomSteps(): RestoreStep[] {
+  return [
+    { key: "connect", title: "Connecting to server", status: "pending" },
+    { key: "check_target", title: "Checking target directory", status: "pending" },
+    { key: "upload_backup", title: "Uploading backup archive", status: "pending" },
+    { key: "restore", title: "Extracting archive into the target directory", status: "pending" },
+    { key: "verify", title: "Verifying restored files", status: "pending" },
   ];
 }
 
@@ -2059,6 +2094,12 @@ async function restoreRebecca(ssh: SshClient, remoteBackupPath: string, backupNa
   };
 }
 
+/** A custom-path (directory) archive — panel "custom" or a custom_* file name.
+ *  Restored by unpacking into a directory, never by the panel restore flow. */
+function isCustomBackup(b: { fileName: string; panel: string }): boolean {
+  return String(b.panel) === "custom" || (b.fileName || "").startsWith("custom_");
+}
+
 async function resolveBackup(
   backupId: number,
   source: "backup-run" | "reassembled"
@@ -2092,6 +2133,12 @@ export async function startRestore(req: RestoreRequest): Promise<{ jobId?: numbe
     backup = await resolveBackup(req.backupId, req.backupSource);
   } catch {
     return { ok: false, error: "BACKUP_NOT_FOUND" };
+  }
+
+  if (isCustomBackup(backup)) {
+    // a directory archive carries no panel — the panel restore cannot place it
+    // anywhere meaningful. Route it to startCustomRestore instead.
+    return { ok: false, error: "CUSTOM_BACKUP_REQUIRES_CUSTOM_RESTORE" };
   }
 
   if (!fs.existsSync(backup.filePath)) {
@@ -2552,7 +2599,7 @@ async function runRestoreAsync(
 }
 
 export async function listAvailableBackups(): Promise<{
-  backupRuns: { id: number; fileName: string; panel: string; fileSize: number | null; startedAt: string; source: "backup-run" }[];
+  backupRuns: { id: number; fileName: string; panel: string; fileSize: number | null; startedAt: string; source: "backup-run"; sourcePath: string | null }[];
   reassembled: { id: number; name: string; panel: string; size: number; createdAt: string; source: "reassembled" }[];
 }> {
   const [runs, reassembled] = await Promise.all([
@@ -2560,7 +2607,7 @@ export async function listAvailableBackups(): Promise<{
       where: { status: "success", filePath: { not: null } },
       orderBy: { startedAt: "desc" },
       take: 100,
-      select: { id: true, fileName: true, panel: true, fileSize: true, startedAt: true, filePath: true },
+      select: { id: true, fileName: true, panel: true, fileSize: true, startedAt: true, filePath: true, sourcePath: true },
     }),
     db.reassembledBackup.findMany({
       orderBy: { createdAt: "desc" },
@@ -2577,6 +2624,7 @@ export async function listAvailableBackups(): Promise<{
       panel: r.panel,
       fileSize: r.fileSize,
       startedAt: r.startedAt.toISOString(),
+      sourcePath: r.sourcePath ?? null,
       source: "backup-run" as const,
     }));
 
@@ -2600,4 +2648,348 @@ export async function getRestoreHistory(limit: number = 50) {
     take: Math.min(200, Math.max(1, limit)),
   });
   return rows;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Custom-path restore — unpack a directory archive onto a server over SSH.
+//
+// Deliberately narrower than the panel restore: no panel is installed, no
+// service is restarted, nothing outside targetPath is touched. Every remote
+// action runs from a script file (see execRemoteScript) and must print a
+// sentinel on success, because a nonzero exit alone cannot tell "the directory
+// was refused" from "mkdir ran out of space".
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function startCustomRestore(
+  req: CustomRestoreRequest
+): Promise<{ jobId?: number; ok: boolean; error?: string }> {
+  if (isRestoreRunning()) {
+    return { ok: false, error: "RESTORE_ALREADY_RUNNING" };
+  }
+
+  const targetErr = validateRestoreTargetPath(req.targetPath);
+  if (targetErr) return { ok: false, error: targetErr };
+
+  let backup: { filePath: string; fileName: string; panel: string };
+  try {
+    backup = await resolveBackup(req.backupId, req.backupSource);
+  } catch {
+    return { ok: false, error: "BACKUP_NOT_FOUND" };
+  }
+
+  if (!isCustomBackup(backup)) {
+    return { ok: false, error: "NOT_A_CUSTOM_BACKUP" };
+  }
+  if (!fs.existsSync(backup.filePath)) {
+    return { ok: false, error: "BACKUP_FILE_MISSING" };
+  }
+
+  const job = await db.restoreJob.create({
+    data: {
+      status: "running",
+      panel: "custom",
+      backupId: req.backupId,
+      backupName: backup.fileName,
+      backupSource: req.backupSource,
+      backupPath: backup.filePath,
+      sshHost: req.sshHost,
+      sshPort: req.sshPort,
+      sshUser: req.sshUser,
+    },
+  });
+
+  const state: RestoreState = {
+    jobId: job.id,
+    status: "running",
+    panel: "custom",
+    backupName: backup.fileName,
+    sshHost: req.sshHost,
+    steps: makeCustomSteps(),
+    startedAt: Date.now(),
+  };
+  writeStateFile(state);
+  g.__restoreRunning = true;
+
+  runCustomRestoreAsync(req, backup, state).catch((e) => {
+    console.error("[restore:custom] unhandled error:", e);
+  });
+
+  return { jobId: job.id, ok: true };
+}
+
+async function runCustomRestoreAsync(
+  req: CustomRestoreRequest,
+  backup: { filePath: string; fileName: string },
+  state: RestoreState
+): Promise<void> {
+  const ssh = new SshClient(dataDir());
+  const target = normalizeRestoreTargetPath(req.targetPath);
+  // an hour is generous: a big archive over a slow link is legitimately slow,
+  // and tar of a few hundred thousand small files is not instant either
+  const LONG: SshExecOptions = { timeout: 3600000 };
+  let remoteArchive = "";
+
+  try {
+    clearCancelFlag();
+    assertNotCancelled();
+    markStep(state.steps, "connect", "running");
+    state.currentStepKey = "connect";
+    writeStateFile(state);
+
+    await ssh.connect({
+      host: req.sshHost,
+      port: req.sshPort || 22,
+      username: req.sshUser,
+      password: req.sshPassword,
+      privateKey: req.sshPrivateKey,
+      passphrase: req.sshPassphrase,
+      timeout: 20000,
+    });
+    markStep(state.steps, "connect", "done", `Connected to ${req.sshUser}@${req.sshHost}:${req.sshPort}`);
+    writeStateFile(state);
+    await log("info", bi(
+      `[Restore:custom] SSH connection established: ${req.sshHost}:${req.sshPort}`,
+      `[Restore:custom] SSH connection established: ${req.sshHost}:${req.sshPort}`
+    ));
+
+    // ── check the target directory: create it, prove we can write into it ──
+    assertNotCancelled();
+    markStep(state.steps, "check_target", "running");
+    state.currentStepKey = "check_target";
+    writeStateFile(state);
+
+    const probe = await execRemoteScriptFull(ssh, [
+      `TGT='${target.replace(/'/g, "'\\''")}'`,
+      // refuse a system directory even if the API check was bypassed — the
+      // server-side guard is the last line of defence for /, /etc, /usr, …
+      'case "$TGT" in',
+      "  /|/bin|/boot|/dev|/etc|/home|/lib|/lib32|/lib64|/opt|/proc|/root|/run|/sbin|/srv|/sys|/tmp|/usr|/var)",
+      '    echo "TARGET_REFUSED"; exit 2 ;;',
+      "esac",
+      'case "$TGT" in',
+      "  ..*|*..*) echo \"TARGET_REFUSED\"; exit 2 ;;",
+      "esac",
+      "mkdir -p \"$TGT\" || { echo \"MKDIR_FAILED\"; exit 3; }",
+      // write + read + delete a probe file: proves the directory is really
+      // writable and not, say, a read-only mount or a quota-exceeded path
+      'if ! ( touch "$TGT/.bkup-write-probe" && rm -f "$TGT/.bkup-write-probe" ) 2>/dev/null; then',
+      '  echo "TARGET_NOT_WRITABLE"; exit 4;',
+      "fi",
+      "echo \"TARGET_READY\"",
+    ].join("\n"));
+
+    const probeOut = (probe.stdout || "").trim();
+    if (!probeOut.includes("TARGET_READY")) {
+      const tail = probeOut.split("\n").filter(Boolean).pop() || "unknown error";
+      const code = probe.exitCode;
+      throw new Error(
+        `The target directory could not be prepared on ${req.sshHost} — ${tail}` +
+        (code != null ? ` (remote exit ${code})` : "") +
+        `. Nothing was extracted and the server was not modified`
+      );
+    }
+    markStep(state.steps, "check_target", "done", `Target ready: ${target}`);
+    writeStateFile(state);
+
+    // ── upload the archive (reconnect once if the link dropped mid-upload) ──
+    assertNotCancelled();
+    markStep(state.steps, "upload_backup", "running");
+    state.currentStepKey = "upload_backup";
+    writeStateFile(state);
+
+    const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    remoteArchive = `/tmp/bkup-custom-${stamp}.tar.gz`;
+    const localSize = fs.statSync(backup.filePath).size;
+
+    const uploadOnce = async (): Promise<void> => {
+      await ssh.uploadFile(backup.filePath, remoteArchive, (sent, total) => {
+        const pct = total > 0 ? Math.floor((sent / total) * 100) : 0;
+        if (pct % 10 === 0) {
+          markStep(state.steps, "upload_backup", "running", `${pct}% of ${formatRemoteBytes(localSize)} uploaded`);
+          writeStateFile(state);
+        }
+      });
+    };
+
+    try {
+      await uploadOnce();
+    } catch (upErr) {
+      // a dropped connection mid-upload is the single most common SSH failure;
+      // one reconnect-and-retry beats failing a 2GB upload at 95%
+      await log("warn", bi(
+        `[Restore:custom] upload interrupted (${upErr instanceof Error ? upErr.message : String(upErr)}) — reconnecting and retrying once`,
+        `[Restore:custom] upload interrupted (${upErr instanceof Error ? upErr.message : String(upErr)}) — reconnecting and retrying once`
+      ));
+      ssh.disconnect();
+      await ssh.connect({
+        host: req.sshHost,
+        port: req.sshPort || 22,
+        username: req.sshUser,
+        password: req.sshPassword,
+        privateKey: req.sshPrivateKey,
+        passphrase: req.sshPassphrase,
+        timeout: 20000,
+      });
+      await uploadOnce();
+    }
+
+    // verify the upload by size on the REMOTE side — a truncated archive would
+    // fail in tar below, but failing here keeps the error message honest
+    const sizeRes = await ssh.exec(`stat -c %s '${remoteArchive.replace(/'/g, "'\\''")}' 2>/dev/null || echo 0`);
+    const remoteSize = Number((sizeRes.stdout || "0").trim()) || 0;
+    if (remoteSize !== localSize) {
+      throw new Error(
+        `The uploaded archive is incomplete on ${req.sshHost}: ${remoteSize} bytes sent vs ${localSize} expected. The extraction was not started`
+      );
+    }
+    markStep(state.steps, "upload_backup", "done", `${formatRemoteBytes(localSize)} uploaded`);
+    writeStateFile(state);
+
+    // ── extract: verify no member escapes the target, then tar into it ──
+    assertNotCancelled();
+    markStep(state.steps, "restore", "running");
+    state.currentStepKey = "restore";
+    writeStateFile(state);
+
+    // list the archive first and refuse any absolute or dotdot member: tar
+    // would happily write outside -C and clobber an unrelated directory
+    const escTarget = target.replace(/'/g, "'\\''");
+    const escArchive = remoteArchive.replace(/'/g, "'\\''");
+    const extract = await execRemoteScriptFull(ssh, [
+      `ARC='${escArchive}'`,
+      `TGT='${escTarget}'`,
+      "BAD=$(tar -tzf \"$ARC\" 2>/dev/null | grep -E '^(/|.*\\.\\.)' | head -1)",
+      'if [ -n "$BAD" ]; then',
+      '  echo "UNSAFE_MEMBER: $BAD"; exit 5;',
+      "fi",
+      // overwrite existing files: a restore is a restore. Ownership and modes
+      // come from the archive (the 1.3.0 writer records real file modes).
+      "tar -xzf \"$ARC\" -C \"$TGT\" 2>&1",
+      "ec=$?",
+      'if [ "$ec" -ne 0 ]; then echo "EXTRACT_FAILED (tar exit $ec)"; exit "$ec"; fi',
+      "echo \"EXTRACT_OK\"",
+    ].join("\n"), LONG);
+
+    const extractOut = (extract.stdout || "").trim();
+    if (!extractOut.includes("EXTRACT_OK")) {
+      const unsafe = extractOut.match(/UNSAFE_MEMBER: (.*)/);
+      if (unsafe) {
+        throw new Error(
+          `The archive contains an unsafe member ("${unsafe[1]}") that would extract outside the target directory — extraction refused, the server was not modified`
+        );
+      }
+      const tail = extractOut.split("\n").filter(Boolean).pop() || "tar failed";
+      throw new Error(
+        `Extraction failed on ${req.sshHost} — ${tail}. Partial files may remain in ${target}`
+      );
+    }
+    markStep(state.steps, "restore", "done", `Archive extracted into ${target}`);
+    writeStateFile(state);
+
+    // ── verify against the manifest the backup writer recorded ──
+    assertNotCancelled();
+    markStep(state.steps, "verify", "running");
+    state.currentStepKey = "verify";
+    writeStateFile(state);
+
+    const verify = await execRemoteScriptFull(ssh, [
+      `TGT='${escTarget}'`,
+      'if [ -f "$TGT/backup-manifest.json" ]; then',
+      '  EXP=$(grep -o \'"files"[[:space:]]*:[[:space:]]*[0-9]*\' "$TGT/backup-manifest.json" | grep -o "[0-9]*$" | head -1)',
+      "else",
+      "  EXP=\"\"",
+      "fi",
+      // count regular files AND symlinks — both are members the writer counted
+      'ACT=$(find "$TGT" \\( -type f -o -type l \\) ! -name "backup-manifest.json" 2>/dev/null | wc -l | tr -d " ")',
+      'if [ -n "$EXP" ] && [ "$ACT" -lt "$EXP" ]; then',
+      '  echo "FILE_COUNT_MISMATCH expected=$EXP actual=$ACT"; exit 6;',
+      "fi",
+      'if [ -n "$EXP" ]; then',
+      '  echo "VERIFY_OK files=$ACT/$EXP"',
+      "else",
+      '  if [ "$ACT" -eq 0 ]; then echo "TARGET_EMPTY"; exit 7; fi',
+      '  echo "VERIFY_OK_NO_MANIFEST files=$ACT"',
+      "fi",
+    ].join("\n"), LONG);
+
+    const verifyOut = (verify.stdout || "").trim();
+    if (verifyOut.includes("FILE_COUNT_MISMATCH")) {
+      throw new Error(
+        `Verification failed on ${req.sshHost} — fewer files were extracted than the archive manifest records (${verifyOut}). The directory may be incomplete`
+      );
+    }
+    if (verifyOut.includes("TARGET_EMPTY")) {
+      throw new Error(
+        `Verification failed on ${req.sshHost} — the archive contained no manifest and no files were extracted into ${target}`
+      );
+    }
+    const verifyDetail = verifyOut.includes("VERIFY_OK")
+      ? `Verified — ${verifyOut.replace(/^VERIFY_OK(_NO_MANIFEST)?\s*/, "")} files in ${target}`
+      : `Extraction finished; the remote check returned an unexpected result (${verifyOut || "no output"})`;
+
+    markStep(state.steps, "verify", "done", verifyDetail);
+    state.status = "success";
+    state.finishedAt = Date.now();
+    state.durationMs = state.finishedAt - state.startedAt;
+    writeStateFile(state);
+
+    await db.restoreJob.update({
+      where: { id: state.jobId },
+      data: {
+        status: "success",
+        finishedAt: new Date(),
+        durationMs: state.durationMs,
+        steps: JSON.stringify(state.steps),
+      },
+    });
+
+    clearCancelFlag();
+    await log("success", bi(
+      `[Restore:custom] archive restored successfully into ${target} on ${req.sshHost} (${backup.fileName})`,
+      `[Restore:custom] archive restored successfully into ${target} on ${req.sshHost} (${backup.fileName})`
+    ));
+  } catch (e: unknown) {
+    const rawError = e instanceof Error ? e.message : String(e);
+    const isCancelled = rawError === "RESTORE_CANCELLED" || rawError.toLowerCase().includes("cancel");
+    const error = isCancelled ? "Cancelled by user" : rawError;
+    state.status = isCancelled ? "cancelled" : "failed";
+    state.error = error;
+    state.finishedAt = Date.now();
+    state.durationMs = state.finishedAt - state.startedAt;
+    if (state.currentStepKey) {
+      const cur = stepBy(state.steps, state.currentStepKey);
+      if (cur && cur.status !== "failed") markStepError(state.steps, state.currentStepKey, error);
+    }
+    writeStateFile(state);
+    await db.restoreJob.update({
+      where: { id: state.jobId },
+      data: {
+        status: state.status,
+        finishedAt: new Date(),
+        error,
+        durationMs: state.durationMs,
+        steps: JSON.stringify(state.steps),
+      },
+    });
+    clearCancelFlag();
+    await log("error", bi(`[Restore:custom] restore failed: ${error}`, `[Restore:custom] restore failed: ${error}`));
+  } finally {
+    // never leave the archive behind on the target — it can be many GB and it
+    // already served its purpose once extracted
+    if (remoteArchive) {
+      try {
+        await ssh.exec(`rm -f '${remoteArchive.replace(/'/g, "'\\''")}'`).catch(() => undefined);
+      } catch { /* best-effort cleanup */ }
+    }
+    ssh.disconnect();
+    g.__restoreRunning = false;
+    clearCancelFlag();
+  }
+}
+
+function formatRemoteBytes(n: number): string {
+  if (n >= 1024 * 1024 * 1024) return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  if (n >= 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${n} B`;
 }

@@ -11,6 +11,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useLang } from "@/components/dashboard/lang";
 import type { AppLogDTO } from "./types";
 import { resolveText } from "@/lib/messages";
+import { copyTextToClipboard } from "@/lib/copy-text";
 
 // Log console has a dark background — use light-theme level colors on it
 const LEVEL_STYLE: Record<string, string> = {
@@ -86,11 +87,17 @@ export function LogsTab({
       .join("\n");
 
   async function copyShown() {
-    try {
-      await navigator.clipboard.writeText(shownText());
+    // plain-HTTP panels have no navigator.clipboard at all — the helper
+    // falls back to the legacy textarea path there
+    const ok = await copyTextToClipboard(shownText());
+    if (ok) {
       toast({ title: t("copied") });
-    } catch {
-      toast({ title: t("error"), variant: "destructive" });
+    } else {
+      toast({
+        title: t("error"),
+        description: "Copying to the clipboard is not available in this browser context",
+        variant: "destructive",
+      });
     }
   }
 

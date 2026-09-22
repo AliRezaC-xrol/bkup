@@ -77,10 +77,11 @@ model BackupRun {
   status        String // running | success | failed
   trigger       String // auto | manual
   panel         String    @default("3x-ui") // 3x-ui | hmpanel | pasarguard — which panel this run belongs to
-  method        String? // db | json | local | hm-full | pg-full
+  method        String? // db | json | local | hm-full | pg-full | custom-full
   fileName      String?
   filePath      String?
   fileSize      Int?
+  sourcePath    String? // custom-path backups: the directory this archive was taken from
   tgMessageId   Int?
   tgMessageIds  String? // JSON array — ALL message ids (multi-part sends)
   tgDeleted     Boolean  @default(false)

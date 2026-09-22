@@ -15,7 +15,20 @@ let lastId = 0;
 function print(row) {
   const t = new Date(row.ts).toISOString().replace("T", " ").slice(0, 19);
   const tag = { info: "INFO", success: " OK ", warn: "WARN", error: " ERR" }[row.level] ?? "    ";
-  console.log(`${t}  [${tag}] ${row.message}`);
+  // rows may be a Bi JSON pair ({"fa":...,"en":...}) or plain text — always print English
+  console.log(`${t}  [${tag}] ${resolveEn(row.message)}`);
+}
+
+function resolveEn(raw) {
+  if (typeof raw !== "string") return String(raw ?? "");
+  if (!raw.startsWith('{"')) return raw;
+  try {
+    const b = JSON.parse(raw);
+    if (b && typeof b === "object" && (typeof b.en === "string" || typeof b.fa === "string")) {
+      return b.en || b.fa;
+    }
+  } catch { /* legacy plain text */ }
+  return raw;
 }
 
 try {

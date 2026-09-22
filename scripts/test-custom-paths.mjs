@@ -43,7 +43,11 @@ fs.writeFileSync(
       baseUrl: path.join(ROOT, "src"),
       paths: { "@/*": ["./*"] },
     },
-    include: [path.join(ROOT, "src/lib/custom-path-client.ts"), path.join(ROOT, "src/lib/messages.ts")],
+    include: [
+      path.join(ROOT, "src/lib/custom-path-client.ts"),
+      path.join(ROOT, "src/lib/messages.ts"),
+      path.join(ROOT, "src/lib/restore-target-path.ts"),
+    ],
   }, null, 2)
 );
 const tsc = spawnSync(process.execPath, [path.join(ROOT, "node_modules/typescript/bin/tsc"), "-p", path.join(OUT, "tsconfig.json")], { encoding: "utf8" });
@@ -61,6 +65,9 @@ fs.writeFileSync(emitted, code);
 
 const { customPathBackup, validateCustomPath, parseCustomPaths } = await import(
   pathToFileURL(path.join(OUT, "lib/custom-path-client.js")).href
+);
+const { validateRestoreTargetPath, normalizeRestoreTargetPath } = await import(
+  pathToFileURL(path.join(OUT, "lib/restore-target-path.js")).href
 );
 
 let failures = 0;
@@ -191,11 +198,131 @@ check(parseCustomPaths(JSON.stringify({ a: 1 })).length === 0, "non-array JSON �
 check(parseCustomPaths(JSON.stringify([{ nope: 1 }, { path: "/ok" }])).length === 1, "entries without a path are dropped");
 
 // ---------------------------------------------------------------------------
-// 5. cleanup
+// 5. validateRestoreTargetPath — the restore-side guard rails
+// ---------------------------------------------------------------------------
+console.log("\n== validateRestoreTargetPath: guard rails ==");
+check(validateRestoreTargetPath("/opt/app") === null, "valid two-level path accepted");
+check(validateRestoreTargetPath("/home/user/apps") === null, "valid deep path accepted");
+check(validateRestoreTargetPath("/opt/app/") === null, "trailing slash accepted");
+check(normalizeRestoreTargetPath("/opt/app/") === "/opt/app", "normalize strips the trailing slash");
+check(normalizeRestoreTargetPath("  /opt/app  ") === "/opt/app", "normalize trims whitespace");
+check(validateRestoreTargetPath("") === "TARGET_PATH_REQUIRED", "empty target rejected");
+check(validateRestoreTargetPath("   ") === "TARGET_PATH_REQUIRED", "whitespace-only target rejected");
+check(validateRestoreTargetPath("opt/app") === "TARGET_PATH_MUST_BE_ABSOLUTE", "relative target rejected");
+check(validateRestoreTargetPath("/opt/../etc") === "TARGET_PATH_NO_DOTDOT", "'..' in target rejected");
+check(validateRestoreTargetPath("/opt/app/../../etc") === "TARGET_PATH_NO_DOTDOT", "deep '..' rejected");
+check(validateRestoreTargetPath("/opt/app$weird") === "TARGET_PATH_INVALID_CHARS", "invalid characters rejected");
+check(validateRestoreTargetPath("/") === "TARGET_PATH_REFUSED", "the root refused");
+check(validateRestoreTargetPath("/etc") === "TARGET_PATH_REFUSED", "/etc refused");
+check(validateRestoreTargetPath("/opt") === "TARGET_PATH_REFUSED", "single-level /opt refused");
+check(validateRestoreTargetPath("/usr") === "TARGET_PATH_REFUSED", "/usr refused");
+check(validateRestoreTargetPath("/root") === "TARGET_PATH_REFUSED", "/root refused");
+check(validateRestoreTargetPath("/var") === "TARGET_PATH_REFUSED", "/var refused");
+
+// ---------------------------------------------------------------------------
+// 6. file modes survive the round trip (1.3.0 fix — pre-1.3.0 archives
+//    hardcoded 0644, so restored scripts lost their +x bit)
+// ---------------------------------------------------------------------------
+console.log("\n== file modes preserved ==");
+const modeDir = fs.mkdtempSync(path.join(os.tmpdir(), "bkup-modes-"));
+fs.writeFileSync(path.join(modeDir, "script.sh"), "#!/bin/sh\necho hi\n");
+try { fs.chmodSync(path.join(modeDir, "script.sh"), 0o755); } catch { /* Windows */ }
+fs.mkdirSync(path.join(modeDir, "sub"), { recursive: true });
+try { fs.chmodSync(path.join(modeDir, "sub"), 0o700); } catch { /* Windows */ }
+fs.writeFileSync(path.join(modeDir, "secret.key"), "k");
+try { fs.chmodSync(path.join(modeDir, "secret.key"), 0o600); } catch { /* Windows */ }
+
+// Node on Windows cannot report unix mode bits (stat().mode is 0666/0444 from
+// the DACL), so the source-side read is unreliable there. Trust tar instead:
+// the ARCHIVE header itself is what the restore unpacks, and GNU tar's -tvf
+// prints the stored mode regardless of the host filesystem.
+const isWindows = process.platform === "win32";
+const srcModeOf = (p) => (fs.statSync(p).mode & 0o7777).toString(8);
+
+const modeRes = await customPathBackup(fakeCfg, { path: modeDir, label: "modes" }, dest, ROOT);
+check(modeRes.ok === true, "mode backup reports ok");
+if (!modeRes.ok || !modeRes.data) {
+  console.error("  fatal: " + JSON.stringify(modeRes));
+  process.exit(1);
+}
+const modeExtract = fs.mkdtempSync(path.join(os.tmpdir(), "bkup-mode-extract-"));
+const modeTar = spawnSync("tar", ["-xzf", posixPath(modeRes.data.filePath), "-C", posixPath(modeExtract)], { encoding: "utf8" });
+check(modeTar.status === 0, "mode archive extracts cleanly");
+
+const modeListing = spawnSync("tar", ["-tvzf", posixPath(modeRes.data.filePath)], { encoding: "utf8" });
+const storedMode = (name) => {
+  const line = modeListing.stdout.split("\n").find((l) => l.endsWith(name));
+  if (!line) return null;
+  // first column looks like "-rwxr-xr-x" — convert the type+mode string
+  const perms = line.trim().split(/\s+/)[0];
+  return perms;
+};
+const scriptPerms = storedMode("script.sh");
+const srcScriptMode = srcModeOf(path.join(modeDir, "script.sh"));
+console.log(`  (script.sh stored as ${scriptPerms ?? "???"}; source reads ${srcScriptMode} on this OS)`);
+
+// The contract is fidelity: whatever the source filesystem reports must be
+// what lands in the archive header. Pre-1.3.0 this was always 0644, so a
+// 0755 script on Linux restored as 0644 and lost its +x.
+const permsToOctal = (p) => {
+  // "-rwxr-xr-x" → 755
+  const bits = p.slice(1);
+  let out = "";
+  for (let i = 0; i < 9; i += 3) {
+    let v = 0;
+    if (bits[i] !== "-") v += 4;
+    if (bits[i + 1] !== "-") v += 2;
+    if (bits[i + 2] !== "-") v += 1;
+    out += v;
+  }
+  return out;
+};
+if (!isWindows) {
+  check(scriptPerms?.[0] === "-" && scriptPerms?.indexOf("x") > 0, "executable script is stored with an execute bit in the archive");
+  check(permsToOctal(scriptPerms) === srcScriptMode, `archive mode matches the source mode (${srcScriptMode})`);
+} else {
+  // Windows cannot represent execute bits at all, so the source is 0666 — the
+  // correct behaviour is to store exactly that, not to invent a 0644
+  check(permsToOctal(scriptPerms) === srcScriptMode, `archive mode matches the source mode (${srcScriptMode}, no bits invented on Windows)`);
+}
+
+if (!isWindows) {
+  const scriptMode = srcModeOf(path.join(modeExtract, "script.sh"));
+  check(scriptMode === "755", `executable script keeps 0755 (got ${scriptMode})`);
+  const keyMode = srcModeOf(path.join(modeExtract, "secret.key"));
+  check(keyMode === "600", `private key keeps 0600 (got ${keyMode})`);
+  const subMode = srcModeOf(path.join(modeExtract, "sub"));
+  check(subMode === "700", `directory keeps 0700 (got ${subMode})`);
+} else {
+  console.log("  (skipping extracted-mode assertions — Windows cannot store unix permission bits)");
+}
+
+// ---------------------------------------------------------------------------
+// 7. a user file named backup-manifest.json must not be clobbered by ours
+// ---------------------------------------------------------------------------
+console.log("\n== reserved manifest name ==");
+const resvDir = fs.mkdtempSync(path.join(os.tmpdir(), "bkup-resv-"));
+fs.writeFileSync(path.join(resvDir, "backup-manifest.json"), JSON.stringify({ user: "data" }));
+const resvRes = await customPathBackup(fakeCfg, { path: resvDir, label: "resv" }, dest, ROOT);
+check(resvRes.ok === true, "backup with a user manifest reports ok");
+if (resvRes.ok && resvRes.data) {
+  const resvExtract = fs.mkdtempSync(path.join(os.tmpdir(), "bkup-resv-extract-"));
+  spawnSync("tar", ["-xzf", posixPath(resvRes.data.filePath), "-C", posixPath(resvExtract)]);
+  const mf = JSON.parse(fs.readFileSync(path.join(resvExtract, "backup-manifest.json"), "utf8"));
+  check(mf.product === "custom-path-backup", "our manifest wins (the user copy is replaced, never the reverse)");
+  check(mf.files === 0, "the user's manifest.json was not counted as a backed-up file");
+  fs.rmSync(resvExtract, { recursive: true, force: true });
+}
+
+// ---------------------------------------------------------------------------
+// 8. cleanup
 // ---------------------------------------------------------------------------
 fs.rmSync(src, { recursive: true, force: true });
 fs.rmSync(dest, { recursive: true, force: true });
 fs.rmSync(extractDir, { recursive: true, force: true });
+fs.rmSync(modeDir, { recursive: true, force: true });
+fs.rmSync(modeExtract, { recursive: true, force: true });
+fs.rmSync(resvDir, { recursive: true, force: true });
 fs.rmSync(OUT, { recursive: true, force: true });
 
 console.log("\n" + (failures === 0 ? "ALL CHECKS PASSED" : `${failures} CHECK(S) FAILED`));

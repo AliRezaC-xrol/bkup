@@ -18,9 +18,11 @@ import {
   Server, DatabaseBackup, Boxes, ShieldCheck, CheckCircle2, XCircle,
   Loader2, ChevronRight, ChevronLeft, ChevronDown, ChevronUp, Wifi, History, AlertTriangle,
   RefreshCw, Key, Lock, RotateCcw, Rocket, Inbox, Network, Globe, Eye, EyeOff,
-  Cloud, Plus, Trash2, Copy, ExternalLink, Shield, Link2, Combine, FileDown,
+  Cloud, Plus, Trash2, Copy, ExternalLink, Shield, Link2, Combine, FileDown, FolderOpen, Target,
 } from "lucide-react";
 import { resolveText } from "@/lib/messages";
+import { validateRestoreTargetPath, normalizeRestoreTargetPath } from "@/lib/restore-target-path";
+import { copyTextToClipboard } from "@/lib/copy-text";
 import { useToast } from "@/hooks/use-toast";
 import { useLang } from "@/components/dashboard/lang";
 import { TimeAgo } from "@/components/dashboard/TimeAgo";
@@ -30,7 +32,7 @@ import type { DictKey } from "@/lib/i18n";
 // ── Types ──
 type Step = "connection" | "panel" | "cloudflare" | "select" | "confirm" | "progress";
 type AuthMethod = "password" | "key";
-type PanelId = "3x-ui" | "hmpanel" | "pasarguard" | "rebecca";
+type PanelId = "3x-ui" | "hmpanel" | "pasarguard" | "rebecca" | "custom";
 
 interface BackupItem {
   id: number;
@@ -41,6 +43,7 @@ interface BackupItem {
   size?: number;
   startedAt?: string;
   createdAt?: string;
+  sourcePath?: string | null;
   source: "backup-run" | "reassembled";
 }
 
@@ -85,6 +88,7 @@ const PANEL_OPTIONS: { value: PanelId; labelKey: DictKey; descKey: DictKey; icon
   { value: "hmpanel", labelKey: "restore_panel_hm", descKey: "restore_panel_hm_desc", icon: <Boxes className="h-5 w-5" />, hasNode: false, tag: "HM" },
   { value: "pasarguard", labelKey: "restore_panel_pg", descKey: "restore_panel_pg_desc", icon: <ShieldCheck className="h-5 w-5" />, hasNode: true, tag: "PG" },
   { value: "rebecca", labelKey: "restore_panel_rb", descKey: "restore_panel_rb_desc", icon: <Server className="h-5 w-5" />, hasNode: true, tag: "RB" },
+  { value: "custom", labelKey: "restore_panel_custom", descKey: "restore_panel_custom_desc", icon: <FolderOpen className="h-5 w-5" />, hasNode: false, tag: "DIR" },
 ];
 
 // ── Main Component ──
@@ -111,6 +115,8 @@ export function RestoreTab() {
   const [selectedBackup, setSelectedBackup] = useState<BackupItem | null>(null);
   const [selectedPanel, setSelectedPanel] = useState<PanelId | null>(null);
   const [installNode, setInstallNode] = useState(false);
+  // custom-path restore: the directory on the target server to extract into
+  const [targetPath, setTargetPath] = useState("");
 
   // SSL Certificate (optional) - NOW supports multi-domain directly in this section
   const [enableSsl, setEnableSsl] = useState(false);
@@ -249,8 +255,13 @@ export function RestoreTab() {
     // 3x-ui backup is only ever restored onto 3x-ui, HM onto HM, PG onto PG,
     // RB onto RB. Cross-panel restore (migration) is not a bkup feature.
     const own = (item.panel || "").toString() as PanelId;
-    if (["3x-ui", "hmpanel", "pasarguard", "rebecca"].includes(own) && own !== selectedPanel) {
+    if (["3x-ui", "hmpanel", "pasarguard", "rebecca", "custom"].includes(own) && own !== selectedPanel) {
       setSelectedPanel(own);
+    }
+    // prefill the target with the directory this archive was taken from —
+    // restoring it to the same place on the new server is the common case
+    if (own === "custom" && item.sourcePath) {
+      setTargetPath((prev) => prev.trim() || item.sourcePath!);
     }
   }
 
@@ -417,8 +428,56 @@ export function RestoreTab() {
   }
 
   // ── Start restore ──
+  const isCustomRestore = selectedPanel === "custom";
+  const customTargetErr = isCustomRestore ? validateRestoreTargetPath(targetPath) : null;
+
   async function startRestore() {
     if (!selectedBackup || !selectedPanel) return;
+
+    if (selectedPanel === "custom") {
+      const tgt = normalizeRestoreTargetPath(targetPath);
+      const err = validateRestoreTargetPath(tgt);
+      if (err) {
+        toast({ title: t("restore_custom_target"), description: err, variant: "destructive" });
+        return;
+      }
+      setRestoring(true);
+      setStep("progress");
+      try {
+        const res = await fetch("/api/restore/start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sshHost: sshHost.trim(),
+            sshPort: Number(sshPort) || 22,
+            sshUser: sshUser.trim(),
+            sshPassword: authMethod === "password" ? sshPassword : undefined,
+            sshPrivateKey: authMethod === "key" ? sshPrivateKey : undefined,
+            sshPassphrase: authMethod === "key" ? sshPassphrase : undefined,
+            backupId: selectedBackup.id,
+            backupSource: selectedBackup.source,
+            panel: "custom",
+            targetPath: tgt,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          toast({
+            title: data.error === "RESTORE_ALREADY_RUNNING" ? "A restore is already running" : data.error || "Error",
+            variant: "destructive",
+          });
+          setRestoring(false);
+          setStep("confirm");
+          return;
+        }
+        fetchStatus();
+      } catch {
+        toast({ title: "Network error", variant: "destructive" });
+        setRestoring(false);
+        setStep("confirm");
+      }
+      return;
+    }
 
     setRestoring(true);
     setStep("progress");
@@ -473,6 +532,7 @@ export function RestoreTab() {
   function retryJob(job: any) {
     resetWizard();
     setSelectedPanel((job.panel as PanelId) ?? null);
+    if ((job.panel as string) === "custom") setTargetPath("");
     setSshHost(job.sshHost ?? "");
     setSshPort(String(job.sshPort ?? 22));
     setSshUser(job.sshUser || "root");
@@ -489,6 +549,7 @@ export function RestoreTab() {
     setSelectedBackup(null);
     setSelectedPanel(null);
     setInstallNode(false);
+    setTargetPath("");
     setEnableSsl(false);
     setSslMode("none");
     setSslDomain("");
@@ -546,7 +607,7 @@ export function RestoreTab() {
         <ProgressView status={status} onReset={resetWizard} />
       ) : (
         <>
-          <StepIndicator currentStep={step} />
+          <StepIndicator currentStep={step} isCustom={selectedPanel === "custom"} />
 
           {step === "connection" && (
             <ConnectionStep
@@ -569,6 +630,7 @@ export function RestoreTab() {
               onSelect={(p) => {
                 setSelectedPanel(p);
                 setSelectedBackup(null);
+                if (p === "custom") setTargetPath((prev) => prev.trim());
                 if (backups.length === 0) loadBackups();
               }}
               installNode={installNode}
@@ -595,7 +657,7 @@ export function RestoreTab() {
             />
           )}
 
-          {step === "cloudflare" && (
+          {step === "cloudflare" && selectedPanel !== "custom" && (
             <CloudflareStep
               sshHost={sshHost}
               enabled={cfEnabled}
@@ -654,6 +716,10 @@ export function RestoreTab() {
               cfEnabled={cfEnabled}
               cfZoneName={cfSelectedZoneName}
               cfSubEntries={cfSubEntries}
+              isCustom={isCustomRestore}
+              targetPath={targetPath}
+              targetPathError={customTargetErr}
+              onTargetPathChange={setTargetPath}
             />
           )}
 
@@ -662,7 +728,13 @@ export function RestoreTab() {
               <Button
                 variant="ghost"
                 onClick={() => {
-                  if (stepIndex > 0) setStep(STEP_ORDER[Math.max(0, stepIndex - 1)]);
+                  if (stepIndex > 0) {
+                    let prevIdx = stepIndex - 1;
+                    if (selectedPanel === "custom" && STEP_ORDER[prevIdx] === "cloudflare") {
+                      prevIdx -= 1;
+                    }
+                    setStep(STEP_ORDER[Math.max(0, prevIdx)]);
+                  }
                 }}
                 disabled={stepIndex === 0}
                 className="gap-1.5"
@@ -673,7 +745,12 @@ export function RestoreTab() {
               </Button>
 
               {step === "confirm" ? (
-                <Button onClick={startRestore} disabled={!canProceedConnection || !selectedBackup || !selectedPanel} className="gap-1.5" size="sm">
+                <Button
+                  onClick={startRestore}
+                  disabled={!canProceedConnection || !selectedBackup || !selectedPanel || (isCustomRestore && Boolean(customTargetErr))}
+                  className="gap-1.5"
+                  size="sm"
+                >
                   <Rocket className="h-4 w-4" />
                   {t("restore_start")}
                 </Button>
@@ -704,8 +781,14 @@ export function RestoreTab() {
                       return;
                     }
                     if (stepIndex < STEP_ORDER.length - 1) {
-                      setStep(STEP_ORDER[stepIndex + 1]);
-                      if (STEP_ORDER[stepIndex + 1] === "select" && backups.length === 0) loadBackups();
+                      // a custom-path restore has no panel, SSL or Cloudflare —
+                      // jump straight from panel selection to backup selection
+                      let nextIdx = stepIndex + 1;
+                      if (selectedPanel === "custom" && STEP_ORDER[nextIdx] === "cloudflare") {
+                        nextIdx += 1;
+                      }
+                      setStep(STEP_ORDER[nextIdx]);
+                      if (STEP_ORDER[nextIdx] === "select" && backups.length === 0) loadBackups();
                     }
                   }}
                   disabled={
@@ -732,15 +815,16 @@ export function RestoreTab() {
 }
 
 // ── Step Indicator ──
-function StepIndicator({ currentStep }: { currentStep: Step }) {
+function StepIndicator({ currentStep, isCustom }: { currentStep: Step; isCustom?: boolean }) {
   const { t } = useLang();
-  const steps: { key: Step; label: string; icon: React.ReactNode }[] = [
+  const allSteps: { key: Step; label: string; icon: React.ReactNode }[] = [
     { key: "connection", label: t("restore_step_connection"), icon: <Wifi className="h-3.5 w-3.5" /> },
     { key: "panel", label: t("restore_step_panel"), icon: <Boxes className="h-3.5 w-3.5" /> },
     { key: "cloudflare", label: t("restore_step_cloudflare"), icon: <Cloud className="h-3.5 w-3.5" /> },
     { key: "select", label: t("restore_step_select"), icon: <DatabaseBackup className="h-3.5 w-3.5" /> },
     { key: "confirm", label: t("restore_step_confirm"), icon: <CheckCircle2 className="h-3.5 w-3.5" /> },
   ];
+  const steps = isCustom ? allSteps.filter((s) => s.key !== "cloudflare") : allSteps;
   const currentIdx = steps.findIndex((s) => s.key === currentStep);
 
   return (
@@ -902,7 +986,7 @@ function PanelSelectStep({
           {t("restore_select_panel")}
         </CardTitle>
         <CardDescription className="text-xs sm:text-sm">
-          First select the panel type. Then only backups for that panel will be shown — 3X / HM / PG / RB tags.
+          First select the panel type. Then only backups for that panel will be shown — 3X / HM / PG / RB / DIR tags.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -1353,7 +1437,7 @@ function SelectBackupStep({
 }) {
   const { t } = useLang();
   useEffect(() => { if (allBackups.length === 0) onLoad(); }, []);
-  const panelBadge = (panel: string) => panel === "hmpanel" ? "HM" : panel === "pasarguard" ? "PG" : panel === "rebecca" ? "RB" : "3X";
+  const panelBadge = (panel: string) => panel === "hmpanel" ? "HM" : panel === "pasarguard" ? "PG" : panel === "rebecca" ? "RB" : panel === "custom" ? "DIR" : "3X";
   const selectedTag = selectedPanel ? PANEL_OPTIONS.find(p => p.value === selectedPanel)?.tag : null;
 
   return (
@@ -1431,6 +1515,7 @@ function ConfirmStep({
   sshHost, sshPort, sshUser, backup, panel, installNode,
   enableSsl, sslMode, sslDomain, sslDomains, sslIp,
   cfEnabled, cfZoneName, cfSubEntries,
+  isCustom, targetPath, targetPathError, onTargetPathChange,
 }: {
   sshHost: string; sshPort: string; sshUser: string;
   backup: BackupItem | null; panel: PanelId | null;
@@ -1439,6 +1524,10 @@ function ConfirmStep({
   sslMode: "none" | "domain" | "ip" | "custom";
   sslDomain: string; sslDomains: string[]; sslIp: string;
   cfEnabled: boolean; cfZoneName: string; cfSubEntries: CfSubEntry[];
+  isCustom?: boolean;
+  targetPath?: string;
+  targetPathError?: string | null;
+  onTargetPathChange?: (v: string) => void;
 }) {
   const { t } = useLang();
   const panelLabel = panel ? PANEL_OPTIONS.find((p) => p.value === panel)?.labelKey : null;
@@ -1456,6 +1545,29 @@ function ConfirmStep({
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
+        {isCustom && (
+          <div className="w-full space-y-2 rounded-xl border border-primary/30 bg-primary/5 p-3 sm:p-4">
+            <Label htmlFor="custom-target" className="flex items-center gap-1.5 text-xs font-medium sm:text-sm">
+              <Target className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+              {t("restore_custom_target")}
+            </Label>
+            <Input
+              id="custom-target"
+              dir="ltr"
+              value={targetPath ?? ""}
+              onChange={(e) => onTargetPathChange?.(e.target.value)}
+              placeholder={t("restore_custom_target_ph")}
+              className="font-mono text-xs sm:text-sm"
+              aria-invalid={Boolean(targetPathError)}
+            />
+            <p className="text-[10px] leading-relaxed text-muted-foreground sm:text-xs">
+              {targetPathError
+                ? <span className="text-red-600 font-medium">{targetPathError}</span>
+                : t("restore_custom_target_desc")}
+            </p>
+          </div>
+        )}
+
         <div className="grid w-full gap-2.5 sm:gap-3 sm:grid-cols-2">
           <ReviewItem icon={<Server className="h-3.5 w-3.5 sm:h-4 sm:w-4" />} label={t("restore_review_ssh")}>
             <span className="break-all font-mono text-[11px] sm:text-xs" dir="ltr">{sshUser}@{sshHost}:{sshPort}</span>
@@ -1466,23 +1578,39 @@ function ConfirmStep({
           <ReviewItem icon={<Boxes className="h-3.5 w-3.5 sm:h-4 sm:w-4" />} label={t("restore_review_panel")}>
             <span className="flex items-center gap-1.5">{panelLabel ? t(panelLabel) : "—"} <Badge variant="outline" className="text-[8px]">{tag}</Badge></span>
           </ReviewItem>
-          <ReviewItem icon={<ShieldCheck className="h-3.5 w-3.5 sm:h-4 sm:w-4" />} label="SSL Certificate (multi-domain)">
-            <span className="text-[11px] sm:text-xs break-all">
-              {allDomains.length ? `${allDomains.length} domains: ${allDomains.join(", ")}` : !enableSsl || sslMode === "none" ? "None (HTTP)" : sslMode === "domain" ? `Domain: ${sslDomain || "auto"}` : sslMode === "ip" ? `IP: ${sslIp || "auto"}` : "Custom cert"}
-            </span>
-          </ReviewItem>
-          {installNode && (panel === "pasarguard" || panel === "rebecca") && (
+          {isCustom ? (
+            <ReviewItem icon={<FolderOpen className="h-3.5 w-3.5 sm:h-4 sm:w-4" />} label={t("restore_custom_target")}>
+              <span className="block max-w-full truncate font-mono text-[11px] sm:text-xs" dir="ltr" title={normalizeRestoreTargetPath(targetPath ?? "")}>
+                {normalizeRestoreTargetPath(targetPath ?? "") || "—"}
+              </span>
+            </ReviewItem>
+          ) : (
+            <ReviewItem icon={<ShieldCheck className="h-3.5 w-3.5 sm:h-4 sm:w-4" />} label="SSL Certificate (multi-domain)">
+              <span className="text-[11px] sm:text-xs break-all">
+                {allDomains.length ? `${allDomains.length} domains: ${allDomains.join(", ")}` : !enableSsl || sslMode === "none" ? "None (HTTP)" : sslMode === "domain" ? `Domain: ${sslDomain || "auto"}` : sslMode === "ip" ? `IP: ${sslIp || "auto"}` : "Custom cert"}
+              </span>
+            </ReviewItem>
+          )}
+          {!isCustom && installNode && (panel === "pasarguard" || panel === "rebecca") && (
             <ReviewItem icon={<Network className="h-3.5 w-3.5 sm:h-4 sm:w-4" />} label="Node">
               <span className="text-[11px] font-medium text-primary sm:text-xs">Will install node too</span>
             </ReviewItem>
           )}
-          <div className="sm:col-span-2">
-            <ReviewItem icon={<Cloud className="h-3.5 w-3.5 sm:h-4 sm:w-4" />} label="Cloudflare">
-              <span className="text-[11px] sm:text-xs">
-                {cfEnabled ? `Enabled — ${cfZoneName || "no zone"} — ${cfSubEntries.filter((e) => e.status === "done").length}/${cfSubEntries.length} DNS updated to ${sshHost} in Cloudflare` : "Skipped"}
-              </span>
-            </ReviewItem>
-          </div>
+          {isCustom ? (
+            <div className="sm:col-span-2">
+              <ReviewItem icon={<AlertTriangle className="h-3.5 w-3.5 sm:h-4 sm:w-4" />} label={t("restore_custom_target_warning")}>
+                <span className="text-[10px] sm:text-xs">{t("restore_custom_target_warning")}</span>
+              </ReviewItem>
+            </div>
+          ) : (
+            <div className="sm:col-span-2">
+              <ReviewItem icon={<Cloud className="h-3.5 w-3.5 sm:h-4 sm:w-4" />} label="Cloudflare">
+                <span className="text-[11px] sm:text-xs">
+                  {cfEnabled ? `Enabled — ${cfZoneName || "no zone"} — ${cfSubEntries.filter((e) => e.status === "done").length}/${cfSubEntries.length} DNS updated to ${sshHost} in Cloudflare` : "Skipped"}
+                </span>
+              </ReviewItem>
+            </div>
+          )}
         </div>
       </CardContent>
     </Card>
@@ -1686,7 +1814,7 @@ function RestoreHistoryCard({ history, onRefresh, onRetry }: { history: any[]; o
     if (eff === "failed") return <Badge variant="destructive" className="text-[9px] sm:text-[10px]">{t("failed")}</Badge>;
     return <Badge variant="outline" className="text-[9px] sm:text-[10px]">{t("running_now")}</Badge>;
   };
-  const panelBadge = (panel: string) => panel === "hmpanel" ? "HM" : panel === "pasarguard" ? "PG" : panel === "rebecca" ? "RB" : "3X";
+  const panelBadge = (panel: string) => panel === "hmpanel" ? "HM" : panel === "pasarguard" ? "PG" : panel === "rebecca" ? "RB" : panel === "custom" ? "DIR" : "3X";
 
   // "select all" only ticks the rows currently shown (both filters applied)
   const allIds = rows.map((j: any) => j.id);
@@ -1904,8 +2032,10 @@ function RestoreHistoryCard({ history, onRefresh, onRetry }: { history: any[]; o
                                   size="sm"
                                   className="h-7 shrink-0 gap-1 text-[11px]"
                                   onClick={() => {
-                                    navigator.clipboard.writeText(resolveText(job.error, "en"));
-                                    toast({ title: t("copied") });
+                    copyTextToClipboard(resolveText(job.error, "en")).then((ok) => {
+                      if (ok) toast({ title: t("copied") });
+                      else toast({ title: "Failed to copy", variant: "destructive" });
+                    });
                                   }}
                                 >
                                   <Copy className="h-3 w-3" /> {t("copy")}

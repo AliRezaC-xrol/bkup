@@ -383,7 +383,7 @@ async function runCustomBackup(
 
   let run;
   try {
-    run = await db.backupRun.create({ data: { status: "running", trigger, panel: "custom" } });
+    run = await db.backupRun.create({ data: { status: "running", trigger, panel: "custom", sourcePath: entry.path } });
   } catch (e: unknown) {
     const error = e instanceof Error ? e.message : String(e);
     await log("error", bi(`Could not create the custom-path backup run record: ${error}`, `Could not create the custom-path backup run record: ${error}`));
