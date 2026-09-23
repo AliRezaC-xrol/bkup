@@ -10,6 +10,7 @@ import { invalidateSession } from "@/lib/panel-client";
 import { hmInvalidateSession } from "@/lib/hmpanel-client";
 import { log } from "@/lib/logger";
 import { bi, type Bi } from "@/lib/messages";
+import { MAX_PATHS, validateCustomPath } from "@/lib/custom-path-client";
 
 const SECRET_MASKABLE: readonly string[] = SECRET_FIELDS;
 
@@ -36,6 +37,7 @@ export const CONFIG_ALLOWED = new Set([
   "rebeccaUrl",
   "rebeccaUsername",
   "rebeccaPassword",
+  "customPaths",
   "telegramApiBase",
   "telegramBotToken",
   "telegramChatId",
@@ -50,6 +52,49 @@ export function isMasked(v: unknown): boolean {
   return typeof v === "string" && /^•+$/.test(v);
 }
 
+/**
+ * Normalize the custom-paths payload from the UI/import into a clean array.
+ * Accepts a JSON string or an array of {path,label} / plain strings.
+ * Returns Error when the payload is unusable or exceeds the limit.
+ */
+function parseCustomPathsForSave(raw: unknown): { path: string; label: string }[] | Error {
+  let arr: unknown;
+  if (typeof raw === "string") {
+    try {
+      arr = JSON.parse(raw);
+    } catch {
+      return new Error("Custom paths must be a list of directories");
+    }
+  } else {
+    arr = raw;
+  }
+  if (!Array.isArray(arr)) {
+    return new Error("Custom paths must be a list of directories");
+  }
+  if (arr.length > MAX_PATHS) {
+    return new Error(`At most ${MAX_PATHS} custom directories are supported`);
+  }
+  const out: { path: string; label: string }[] = [];
+  for (const v of arr) {
+    if (typeof v === "string") {
+      out.push({ path: v.trim(), label: "" });
+    } else if (v && typeof v === "object" && typeof (v as Record<string, unknown>).path === "string") {
+      const o = v as { path?: string; label?: unknown };
+      out.push({
+        path: String(o.path).trim(),
+        label: typeof o.label === "string" ? o.label.trim().slice(0, 40) : "",
+      });
+    }
+  }
+  // dedupe by path, drop empties, preserve order
+  const seen = new Set<string>();
+  return out.filter((e) => {
+    if (!e.path || seen.has(e.path)) return false;
+    seen.add(e.path);
+    return true;
+  });
+}
+
 /** True when the object carries at least one REAL (unmasked) secret. */
 export function hasRealSecrets(obj: Record<string, unknown>): boolean {
   for (const k of SECRET_MASKABLE) {
@@ -62,7 +107,7 @@ export function hasRealSecrets(obj: Record<string, unknown>): boolean {
 function validateUrl(v: unknown, label: string): Bi | null {
   const url = String(v ?? "").trim();
   if (url && !/^https?:\/\//i.test(url)) {
-    return bi(`The ${label} URL must start with http:// or https://`, `آدرس ${label} باید با http:// یا https:// شروع شود`);
+    return bi(`The ${label} URL must start with http:// or https://`, `The ${label} URL must start with http:// or https://`);
   }
   return null;
 }
@@ -92,7 +137,7 @@ export async function applyConfigPatch(
       return {
         ok: false,
         status: 400,
-        error: bi("The backup interval must be between 10 seconds and 24 hours", "فاصله بکاپ‌گیری باید بین ۱۰ ثانیه و ۲۴ ساعت باشد"),
+        error: bi("The backup interval must be between 10 seconds and 24 hours", "The backup interval must be between 10 seconds and 24 hours"),
       };
     }
     patch.intervalSeconds = Math.floor(n);
@@ -104,7 +149,7 @@ export async function applyConfigPatch(
     patch.tgAutoDeleteKeep = Math.max(0, Math.floor(Number(patch.tgAutoDeleteKeep) || 0));
   }
   if (patch.authMode !== undefined && !["session", "bearer"].includes(String(patch.authMode))) {
-    return { ok: false, status: 400, error: bi("Invalid authentication mode", "حالت احراز هویت نامعتبر است") };
+    return { ok: false, status: 400, error: bi("Invalid authentication mode", "Invalid authentication mode") };
   }
   if (patch.panelUrl !== undefined) {
     const err = validateUrl(patch.panelUrl, "3x-ui panel");
@@ -127,6 +172,23 @@ export async function applyConfigPatch(
     patch.rebeccaUrl = String(patch.rebeccaUrl).trim().replace(/\/+$/, "");
   }
 
+  // custom paths — validated against the real filesystem here so a typo is
+  // caught at SAVE time, not at backup time. The bot's own root directory is
+  // always refused: backing it up would leak every credential into Telegram.
+  if (patch.customPaths !== undefined) {
+    const list = parseCustomPathsForSave(patch.customPaths);
+    if (list instanceof Error) {
+      return { ok: false, status: 400, error: bi(list.message, list.message) };
+    }
+    for (const entry of list) {
+      const problem = validateCustomPath(entry.path, process.cwd());
+      if (problem) {
+        return { ok: false, status: 400, error: problem };
+      }
+    }
+    patch.customPaths = JSON.stringify(list);
+  }
+
   const updated = await saveConfig(patch);
   invalidateSession();
   hmInvalidateSession();
@@ -134,8 +196,8 @@ export async function applyConfigPatch(
   await log(
     "info",
     opts?.source === "import"
-      ? bi("Settings were imported from a file", "تنظیمات از فایل وارد شد")
-      : bi("Settings were updated", "تنظیمات به‌روزرسانی شد")
+      ? bi("Settings were imported from a file", "Settings were imported from a file")
+      : bi("Settings were updated", "Settings were updated")
   );
   return { ok: true, updated };
 }

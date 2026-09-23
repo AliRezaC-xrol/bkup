@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
       applied += 1;
     }
     if (applied === 0 && keptMasked === 0) {
-      const err = bi("No recognizable settings found in this file", "هیچ تنظیمات شناخته‌شده‌ای در این فایل پیدا نشد");
+      const err = bi("No recognizable settings found in this file", "No recognizable settings found in this file");
       return NextResponse.json({ error: err.fa, errorBi: err }, { status: 400 });
     }
 
@@ -54,7 +54,7 @@ export async function POST(req: NextRequest) {
       credentialsInFile: hasRealSecrets(flat),
     });
   } catch {
-    const err = bi("The file could not be read as settings JSON", "فایل به‌عنوان JSON تنظیمات خوانده نشد");
+    const err = bi("The file could not be read as settings JSON", "The file could not be read as settings JSON");
     return NextResponse.json({ error: err.fa, errorBi: err }, { status: 400 });
   }
 }

@@ -1,5 +1,6 @@
 import type { AppConfig } from "@/lib/config-service";
 import { bi, fail, type Bi } from "@/lib/messages";
+import fs from "node:fs";
 
 // Force IPv4-first DNS (broken IPv6 routes on some hosts cause silent
 // "fetch failed") and apply a hard timeout so a stuck connection can never
@@ -58,7 +59,9 @@ function captionFor(fileName: string, size: number, method: string, panel: strin
       ? "PASARGUARD BACKUP"
       : panel === "rebecca"
         ? "REBECCA BACKUP"
-        : "3X-UI PANEL BACKUP";
+        : panel === "custom"
+          ? "CUSTOM PATH BACKUP"
+          : "3X-UI PANEL BACKUP";
   const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Tehran", year: "numeric", month: "2-digit", day: "2-digit",
@@ -74,10 +77,38 @@ function captionFor(fileName: string, size: number, method: string, panel: strin
   ].join("\n");
 }
 
+/**
+ * Backing data for one document upload. A Buffer is used for small payloads
+ * (already in memory); a file path streams the bytes from disk via openAsBlob
+ * so a multi-hundred-MB backup is NEVER fully materialised in RAM twice.
+ */
+export type DocumentSource =
+  | { kind: "buffer"; buf: Buffer }
+  | { kind: "file"; path: string }
+  | { kind: "blob"; blob: Blob };
+
+/**
+ * Resolve a source into a Blob body. File-backed blobs are LAZY — Node reads
+ * straight off disk while the request streams, so the archive is never held
+ * in RAM. Blob.slice() on a lazy blob stays lazy, which is what lets the
+ * multi-part path stream each part instead of cutting buffers in memory.
+ */
+async function toBlob(source: DocumentSource): Promise<Blob> {
+  if (source.kind === "file") {
+    return fs.openAsBlob(source.path, { type: "application/octet-stream" });
+  }
+  if (source.kind === "blob") return source.blob;
+  // copy the view onto a standalone ArrayBuffer: Buffer shares its memory
+  // with the pool, and TS rejects the pooled ArrayBuffer as a BlobPart
+  const view = new Uint8Array(source.buf.byteLength);
+  view.set(source.buf);
+  return new Blob([view], { type: "application/octet-stream" });
+}
+
 /** One sendDocument call — no size check here, callers go through sendBackupDocument. */
 async function sendOneDocument(
   cfg: AppConfig,
-  buf: Buffer,
+  source: DocumentSource,
   fileName: string,
   caption: string
 ): Promise<TgResult<{ messageId: number }>> {
@@ -90,11 +121,7 @@ async function sendOneDocument(
       if (cfg.telegramThreadId.trim()) fd.append("message_thread_id", cfg.telegramThreadId.trim());
       fd.append("caption", caption);
       fd.append("parse_mode", "HTML");
-      fd.append(
-        "document",
-        new Blob([new Uint8Array(buf)], { type: "application/octet-stream" }),
-        fileName
-      );
+      fd.append("document", await toBlob(source), fileName);
 
       const res = await fetch(tgUrl(cfg, "sendDocument"), {
       signal: AbortSignal.timeout(uploadTimeoutMs(cfg)), method: "POST", body: fd });
@@ -147,7 +174,7 @@ function fetchCause(e: unknown): string | null {
   return null;
 }
 
-export type TgPanel = "3x-ui" | "hmpanel" | "pasarguard" | "rebecca";
+export type TgPanel = "3x-ui" | "hmpanel" | "pasarguard" | "rebecca" | "custom";
 
 /** One sendDocument may carry at most 50 MB on the official endpoint — stay below it. */
 const PART_LIMIT = 45 * 1024 * 1024;
@@ -164,6 +191,11 @@ const LOCAL_DOC_LIMIT = 2 * 1024 * 1024 * 1024 - 1024 * 1024;
  * bytes the panel produced — with a plain "cat" rejoin hint per part.
  * Through a local Bot API server ("Telegram API base") files up to 2 GB go
  * out as a single document.
+ *
+ * Sources: an in-memory Buffer (small backups) or a file path (large ones).
+ * Passing a path matters — a 300 MB HMPanel archive delivered as a Buffer
+ * would be copied again into the FormData Blob, and that second copy is what
+ * OOM-killed the service under systemd's MemoryMax on small servers.
  */
 export async function sendBackupDocument(
   cfg: AppConfig,
@@ -172,16 +204,39 @@ export async function sendBackupDocument(
   method: string,
   panel: TgPanel = "3x-ui"
 ): Promise<TgResult<{ messageIds: number[] }>> {
+  return sendBackup(cfg, { kind: "buffer", buf }, buf.length, fileName, method, panel);
+}
+
+/** File-backed variant — the archive is streamed off disk, never fully in RAM. */
+export async function sendBackupFile(
+  cfg: AppConfig,
+  filePath: string,
+  size: number,
+  fileName: string,
+  method: string,
+  panel: TgPanel = "3x-ui"
+): Promise<TgResult<{ messageIds: number[] }>> {
+  return sendBackup(cfg, { kind: "file", path: filePath }, size, fileName, method, panel);
+}
+
+async function sendBackup(
+  cfg: AppConfig,
+  source: DocumentSource,
+  size: number,
+  fileName: string,
+  method: string,
+  panel: TgPanel
+): Promise<TgResult<{ messageIds: number[] }>> {
   if (!cfg.telegramBotToken.trim()) return fail("The Telegram bot token is not configured", "The Telegram bot token is not configured");
   if (!cfg.telegramChatId.trim()) return fail("The Telegram chat ID is not configured", "The Telegram chat ID is not configured");
 
   const limit = isLocalBase(cfg) ? LOCAL_DOC_LIMIT : DOC_LIMIT;
-  if (buf.length <= limit) {
-    const r = await sendOneDocument(cfg, buf, fileName, captionFor(fileName, buf.length, method, panel));
+  if (size <= limit) {
+    const r = await sendOneDocument(cfg, source, fileName, captionFor(fileName, size, method, panel));
     if (!r.ok) return { ok: false, error: r.error, errorBi: r.errorBi };
     return { ok: true, data: { messageIds: [r.data!.messageId] } };
   }
-  if (buf.length > LOCAL_DOC_LIMIT) {
+  if (size > LOCAL_DOC_LIMIT) {
     return fail(
       `Backup size exceeds Telegram 2GB limit and cannot be sent`,
       "The backup exceeds Telegram's 2 GB limit and cannot be delivered"
@@ -189,8 +244,11 @@ export async function sendBackupDocument(
   }
 
   // larger than the official endpoint allows — send the ORIGINAL file as
-  // numbered parts (client-side split, no doomed upload attempt first)
-  const total = Math.ceil(buf.length / PART_LIMIT);
+  // numbered parts (client-side split, no doomed upload attempt first).
+  // The whole archive is opened ONCE as a lazy file-backed Blob; every part
+  // is a slice of it, so a 300 MB backup never costs 300 MB of heap.
+  const whole = await toBlob(source);
+  const total = Math.ceil(size / PART_LIMIT);
   // uniform width for index AND total so shell globs (`cat stem.part*of*`)
   // sort numerically correct even beyond 9 parts (part07 < part10 must hold)
   const digits = Math.max(2, String(total).length);
@@ -200,12 +258,13 @@ export async function sendBackupDocument(
   const ext = dot > 0 ? fileName.slice(dot) : "";
   const messageIds: number[] = [];
   for (let i = 0; i < total; i++) {
-    const part = buf.subarray(i * PART_LIMIT, Math.min((i + 1) * PART_LIMIT, buf.length));
+    const partStart = i * PART_LIMIT;
+    const partEnd = Math.min((i + 1) * PART_LIMIT, size);
     const partName = `${stem}.part${String(i + 1).padStart(digits, "0")}of${width}${ext}`;
     const caption =
-      captionFor(partName, part.length, method, panel) +
+      captionFor(partName, partEnd - partStart, method, panel) +
       `\nPart ${i + 1} of ${total} - rejoin with: cat ${stem}.part*of*${ext} &gt; ${fileName}`;
-    const r = await sendOneDocument(cfg, part, partName, caption);
+    const r = await sendOneDocument(cfg, { kind: "blob", blob: whole.slice(partStart, partEnd) }, partName, caption);
     if (!r.ok) {
       return {
         ok: false,

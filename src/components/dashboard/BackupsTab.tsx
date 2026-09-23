@@ -75,7 +75,7 @@ export function BackupsTab({
   );
 
   const methodLabel = (m: string | null) =>
-    m === "db" ? t("method_db") : m === "json" ? t("method_json") : m === "local" ? t("method_local") : m === "hm-full" ? t("method_hm_full") : m === "pg-full" ? t("method_pg_full") : m === "rb-full" ? t("method_rb_full") : "—";
+    m === "db" ? t("method_db") : m === "json" ? t("method_json") : m === "local" ? t("method_local") : m === "hm-full" ? t("method_hm_full") : m === "pg-full" ? t("method_pg_full") : m === "rb-full" ? t("method_rb_full") : m === "custom-full" ? t("method_custom_full") : "—";
 
   const allSelected = rows.length > 0 && rows.every((r) => selected.has(r.id));
   function toggleRow(id: number, on: boolean) {
@@ -339,7 +339,7 @@ export function BackupsTab({
                     </TableCell>
                     <TableCell>
                       <Badge variant="outline" className="text-[10px]">{methodLabel(r.method)}</Badge>
-                      <Badge variant="outline" className="ms-1 text-[10px] uppercase">{r.panel === "hmpanel" ? "HM" : r.panel === "pasarguard" ? "PG" : r.panel === "rebecca" ? "RB" : "3X"}</Badge>
+                      <Badge variant="outline" className="ms-1 text-[10px] uppercase">{r.panel === "hmpanel" ? "HM" : r.panel === "pasarguard" ? "PG" : r.panel === "rebecca" ? "RB" : r.panel === "custom" ? "DIR" : "3X"}</Badge>
                     </TableCell>
                     <TableCell className="text-xs tabular-nums">{formatBytes(r.fileSize)}</TableCell>
                     <TableCell className="text-xs tabular-nums">{formatDuration(r.durationMs)}</TableCell>

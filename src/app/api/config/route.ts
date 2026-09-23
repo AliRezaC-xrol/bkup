@@ -29,7 +29,7 @@ export async function PUT(req: NextRequest) {
       {
         ...failMsg(bi(
           e instanceof Error ? e.message : "Unknown error while saving settings",
-          e instanceof Error ? e.message : "خطای ناشناخته هنگام ذخیره تنظیمات"
+          e instanceof Error ? e.message : "Unknown error while saving settings"
         )),
       },
       { status: 500 }

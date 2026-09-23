@@ -1,7 +1,9 @@
 import axios, { type AxiosInstance } from "axios";
+import path from "node:path";
 import { sharedHttpAgent, sharedHttpsAgent } from "@/lib/http-agents";
 import type { AppConfig } from "@/lib/config-service";
 import { bi, fail, type Bi } from "@/lib/messages";
+import { streamDownload } from "@/lib/stream-download";
 
 /**
  * 3x-ui panel API client.
@@ -147,43 +149,35 @@ function authHeaders(cfg: AppConfig, session: PanelSession): Record<string, stri
   return session.cookie ? { Cookie: session.cookie } : {};
 }
 
-/** Download the raw panel database file. Returns binary Buffer. */
+/** Download the raw panel database file. Streams to disk; returns the path. */
 export async function getDb(
   cfg: AppConfig,
-  session: PanelSession
-): Promise<PanelRequestResult<{ buf: Buffer; filename: string }>> {
+  session: PanelSession,
+  destDir: string,
+  destName: string
+): Promise<PanelRequestResult<{ filePath: string; fileName: string; size: number }>> {
   const base = buildBaseUrl(cfg);
   const ax = axiosFor(cfg, 60000);
-  try {
-    const res = await ax.get(`${base}/panel/api/server/getDb`, {
-      headers: authHeaders(cfg, session),
-      responseType: "arraybuffer",
-    });
-    if (res.status === 401 || res.status === 404) {
-      return { ...fail(`Invalid authentication (HTTP ${res.status})`, `Invalid authentication (HTTP ${res.status})`), status: res.status };
-    }
-    if (res.status !== 200) {
-      return { ...fail(`Database download failed (HTTP ${res.status})`, `Database download failed (HTTP ${res.status})`), status: res.status };
-    }
-    const buf = Buffer.from(res.data);
-    // Some panels return JSON errors with 200 — detect and reject
-    const ct = String(res.headers["content-type"] ?? "");
-    if (ct.includes("application/json") || (buf.length > 0 && buf[0] === 0x7b && buf[1] === 0x22)) {
+  const destPath = path.join(destDir, destName);
+  const url = `${base}/panel/api/server/getDb`;
+  const res = await streamDownload(ax, url, destPath, { headers: authHeaders(cfg, session) });
+
+  if (!res.ok) {
+    // a JSON error body arrives as 200 + JSON — detect and reject it
+    const body = res.errorBody ?? "";
+    if (body.startsWith("{")) {
       let msg = bi("The panel answered with JSON instead of the database file", "The panel answered with JSON instead of the database file");
       try {
-        const j = JSON.parse(buf.toString("utf8"));
+        const j = JSON.parse(body) as { msg?: string };
         if (j?.msg) msg = bi(String(j.msg), String(j.msg));
-      } catch { /* ignore */ }
+      } catch { /* keep the generic message */ }
       return { ok: false, error: msg.fa, errorBi: msg };
     }
-    if (buf.length === 0) return fail("The database file was empty", "The database file was empty");
-    const cd = String(res.headers["content-disposition"] ?? "");
-    const m = cd.match(/filename\s*=\s*"?([^";]+)"?/i);
-    return { ok: true, data: { buf, filename: m?.[1] ?? "x-ui.db" } };
-  } catch (e: unknown) {
-    const m = errMsg(e);
-    return fail(`Database download error: ${m.en}`, `Database download error: ${m.en}`);
+    const detail = body || res.error || "download failed";
+    return { ...fail(`Database download error: ${detail}`, `Database download error: ${detail}`) };
   }
+
+  return { ok: true, data: { filePath: res.data!.filePath, fileName: res.data!.fileName, size: res.data!.size } };
 }
 
 /** Fetch full inbounds + panel settings and build a JSON config backup. */

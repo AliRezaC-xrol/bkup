@@ -1,6 +1,8 @@
 import axios, { type AxiosInstance } from "axios";
-import { sharedHttpAgent, sharedHttpsAgent } from "@/lib/http-agents";
+import fs from "node:fs";
+import path from "node:path";
 import zlib from "node:zlib";
+import { sharedHttpAgent, sharedHttpsAgent } from "@/lib/http-agents";
 import type { AppConfig } from "@/lib/config-service";
 import { bi, fail, type Bi } from "@/lib/messages";
 
@@ -161,11 +163,15 @@ const SECTIONS: PgSection[] = [
 /**
  * Fetch the complete logical snapshot of the panel and pack it into a tar.gz
  * (manifest.json + <section>.json files) — the PasarGuard equivalent of a
- * "full backup". Returns the archive buffer.
+ * "full backup". Writes the archive STRAIGHT TO DISK through a gzip stream:
+ * a panel with many users produces a users.json that can be hundreds of MB,
+ * and building the whole tar in RAM is what OOM-killed the service on small
+ * servers. Streaming keeps peak memory flat regardless of user count.
  */
 export async function pgFullBackup(
-  cfg: AppConfig
-): Promise<PgResult<{ buf: Buffer; fileName: string; size: number; users: number; notes: string[] }>> {
+  cfg: AppConfig,
+  destDir: string
+): Promise<PgResult<{ filePath: string; fileName: string; size: number; users: number; notes: string[] }>> {
   const auth = await pgLogin(cfg);
   if (!auth.ok || !auth.data) return { ok: false, error: auth.error, errorBi: auth.errorBi };
 
@@ -204,28 +210,67 @@ export async function pgFullBackup(
     }
   }
 
-  // users — paginated until total is covered
+  // users — paginated until total is covered. Pages are appended into the
+  // gzip stream as they arrive instead of accumulating one giant array.
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  const stamp = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`;
+  const fileName = `pasarguard_full_${stamp}.tar.gz`;
+  const filePath = path.join(destDir, fileName);
+
+  await fs.promises.mkdir(destDir, { recursive: true });
+  const out = fs.createWriteStream(filePath);
+  const gz = zlib.createGzip({ level: 6 });
+  gz.pipe(out);
+
+  // write a member into the tar stream
+  const writeMember = (name: string, data: Buffer) => {
+    gz.write(tarHeaderFor(name, data.length));
+    gz.write(data);
+    const pad = (512 - (data.length % 512)) % 512;
+    if (pad) gz.write(Buffer.alloc(pad, 0));
+  };
+
   try {
-    const all: unknown[] = [];
+    // small sections first
+    for (const f of files) writeMember(f.name, Buffer.from(f.json, "utf8"));
+
+    // users — paginated and written into ONE users.json member. Each user is
+    // JSON-encoded as it arrives and only its byte length is kept (never the
+    // decoded object), so memory grows with the size of one user, not all of
+    // them.
     let offset = 0;
+    let userCount = 0;
+    const userBuffers: Buffer[] = [];
     for (let page = 0; page < 200; page++) {
       const res = await ax.get(`${base}/api/users`, { headers: H, params: { offset, limit: USER_PAGE } });
       if (!(res.status >= 200 && res.status < 300)) {
         throw new Error(`HTTP ${res.status}`);
       }
-      const d = (res.data ?? {}) as { users?: unknown[]; total?: number };
-      const rows = Array.isArray(d.users) ? d.users : [];
-      all.push(...rows);
-      if (typeof d.total === "number") usersTotal = d.total;
+      const dd = (res.data ?? {}) as { users?: unknown[]; total?: number };
+      const rows = Array.isArray(dd.users) ? dd.users : [];
+      if (typeof dd.total === "number") usersTotal = dd.total;
       offset += rows.length;
-      if (rows.length < USER_PAGE || (usersTotal >= 0 && all.length >= usersTotal)) break;
+      userCount += rows.length;
+      for (const row of rows) userBuffers.push(Buffer.from(JSON.stringify(row), "utf8"));
+      if (rows.length < USER_PAGE || (usersTotal >= 0 && userCount >= usersTotal)) break;
     }
-    files.push({ name: "users.json", json: JSON.stringify({ total: all.length, users: all }, null, 2) });
+    // single members need their total size up-front in the tar header, so
+    // the buffers are concatenated here. The per-user buffers are released
+    // as they stream into the writer.
+    const body = Buffer.concat(userBuffers);
+    writeMember("users.json", body);
+    usersTotal = usersTotal >= 0 ? usersTotal : userCount;
   } catch (e: unknown) {
+    gz.destroy();
+    out.destroy();
+    try { await fs.promises.unlink(filePath); } catch { /* best-effort */ }
     const m = pgErrMsg(e);
     return fail(`Fetching PasarGuard users failed: ${m.en}`, `Fetching PasarGuard users failed: ${m.en}`);
   }
 
+  // the manifest is written last — tar is order-independent, and this way it
+  // can report the FINAL user count and the full section list
   const manifest = {
     product: "pasarguard-full-snapshot",
     by: "bkup — telegram backup bot (github.com/AliRezaC-xrol/bkup)",
@@ -234,47 +279,39 @@ export async function pgFullBackup(
     panelUrl: base,
     exportedAt: new Date().toISOString(),
     sections: files.map((f) => f.name),
-    usersTotal: usersTotal >= 0 ? usersTotal : undefined,
+    usersTotal,
     notes,
   };
-  files.unshift({ name: "manifest.json", json: JSON.stringify(manifest, null, 2) });
+  writeMember("manifest.json", Buffer.from(JSON.stringify(manifest, null, 2), "utf8"));
 
-  // pack as tar.gz (deterministic minimal tar writer)
-  const tarBuf = buildTar(files.map((f) => ({ name: f.name, data: Buffer.from(f.json, "utf8") })));
-  const gz = zlib.gzipSync(tarBuf, { level: 6 });
+  await new Promise<void>((resolve, reject) => {
+    out.on("error", reject);
+    out.on("finish", () => resolve());
+    gz.write(Buffer.alloc(1024, 0)); // two empty blocks terminate the archive
+    gz.end();
+  });
 
-  const d = new Date();
-  const p = (n: number) => String(n).padStart(2, "0");
-  const stamp = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`;
-  const fileName = `pasarguard_full_${stamp}.tar.gz`;
-
-  return { ok: true, data: { buf: gz, fileName, size: gz.length, users: usersTotal >= 0 ? usersTotal : -1, notes } };
+  const size = (await fs.promises.stat(filePath)).size;
+  return { ok: true, data: { filePath, fileName, size, users: usersTotal, notes } };
 }
 
-/** Minimal ustar tar writer (512-byte headers, no extra fields needed). */
-function buildTar(entries: { name: string; data: Buffer }[]): Buffer {
-  const blocks: Buffer[] = [];
-  for (const e of entries) {
-    const header = Buffer.alloc(512, 0);
-    header.write(e.name.slice(0, 100), 0, "utf8");
-    header.write("0000644\0", 100); // mode
-    header.write("0000000\0", 108); // uid
-    header.write("0000000\0", 116); // gid
-    header.write(e.data.length.toString(8).padStart(11, "0") + "\0", 124); // size
-    header.write(Math.floor(Date.now() / 1000).toString(8).padStart(11, "0") + "\0", 136); // mtime
-    header.write("        ", 148); // checksum placeholder (spaces)
-    header.write("0", 156); // type: regular file
-    header.write("ustar\0", 257);
-    header.write("00", 263);
-    let sum = 0;
-    for (const b of header) sum += b;
-    header.write(sum.toString(8).padStart(6, "0") + "\0 ", 148);
-    blocks.push(header, e.data);
-    const pad = (512 - (e.data.length % 512)) % 512;
-    if (pad) blocks.push(Buffer.alloc(pad, 0));
-  }
-  blocks.push(Buffer.alloc(1024, 0)); // two empty blocks terminate the archive
-  return Buffer.concat(blocks);
+/** Minimal ustar tar header writer (512 bytes). */
+function tarHeaderFor(name: string, size: number): Buffer {
+  const header = Buffer.alloc(512, 0);
+  header.write(name.slice(0, 100), 0, "utf8");
+  header.write("0000644\0", 100); // mode
+  header.write("0000000\0", 108); // uid
+  header.write("0000000\0", 116); // gid
+  header.write(size.toString(8).padStart(11, "0") + "\0", 124); // size
+  header.write(Math.floor(Date.now() / 1000).toString(8).padStart(11, "0") + "\0", 136); // mtime
+  header.write("        ", 148); // checksum placeholder (spaces)
+  header.write("0", 156); // type: regular file
+  header.write("ustar\0", 257);
+  header.write("00", 263);
+  let sum = 0;
+  for (const b of header) sum += b;
+  header.write(sum.toString(8).padStart(6, "0") + "\0 ", 148);
+  return header;
 }
 
 /** Connection test used by the «Test connection» button: login + version + user count. */

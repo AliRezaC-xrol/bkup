@@ -1,7 +1,9 @@
 import axios, { type AxiosInstance } from "axios";
+import path from "node:path";
 import { sharedHttpAgent, sharedHttpsAgent } from "@/lib/http-agents";
 import type { AppConfig } from "@/lib/config-service";
 import { bi, fail, type Bi } from "@/lib/messages";
+import { streamDownload, type StreamResult } from "@/lib/stream-download";
 
 /**
  * HMPanel (neoauroraproject/hmpanel) API client.
@@ -232,10 +234,18 @@ export async function hmLogin(
   };
 }
 
-/** Create a full backup archive on the HMPanel host and download it. */
+/**
+ * Create a full backup archive on the HMPanel host and download it.
+ *
+ * The archive streams straight to disk — a real full backup (database +
+ * uploads/) can be hundreds of MB, and buffering it in RAM is what used to
+ * OOM-kill the service under systemd's MemoryMax. The file path is handed to
+ * the Telegram layer, which streams it back off disk.
+ */
 export async function hmFullBackup(
-  cfg: AppConfig
-): Promise<HmResult<{ buf: Buffer; fileName: string; size: number; premium: boolean }>> {
+  cfg: AppConfig,
+  destDir: string
+): Promise<HmResult<{ filePath: string; fileName: string; size: number; premium: boolean }>> {
   let sess = await hmLogin(cfg);
   if (!sess.ok || !sess.data) return { ok: false, error: sess.error, errorBi: sess.errorBi };
 
@@ -287,46 +297,45 @@ export async function hmFullBackup(
   const id = String(createRes.data?.id ?? createRes.data?.file ?? "");
   if (!id) return fail("The HMPanel response had no backup file id", "The HMPanel response had no backup file id");
 
-  // 2) download the archive (?token= works for file streams — official jwt strategy)
+  // 2) download the archive (?token= works for file streams — official jwt
+  //    strategy). Streams to disk: a full backup includes uploads/ and can
+  //    be hundreds of MB — buffering it would OOM the service.
+  // The id doubles as the file name — keep only the base name so a panel
+  // response can never write outside the staging directory.
+  const baseName = path.basename(id);
+  const fileName = baseName.endsWith(".tar.gz") ? baseName : `${baseName}.tar.gz`;
+  const destPath = path.join(destDir, fileName);
   const dax = axiosFor(cfg, DOWNLOAD_TIMEOUT_MS);
-  try {
-    const dl = await dax.get(`${sess.data.base}/backups/${encodeURIComponent(id)}/download`, {
-      params: { token: sess.data.token },
-      responseType: "arraybuffer",
-    });
-    if (dl.status === 401 || dl.status === 403) {
-      // Token may have expired between creation and download — re-login once
-      hmInvalidateSession();
-      sess = await hmLogin(cfg, true);
-      if (!sess.ok || !sess.data) return { ok: false, error: sess.error, errorBi: sess.errorBi };
-      try {
-        const dl2 = await dax.get(`${sess.data.base}/backups/${encodeURIComponent(id)}/download`, {
-          params: { token: sess.data.token },
-          responseType: "arraybuffer",
-        });
-        if (dl2.status >= 300) {
-          return fail(`Downloading the backup file failed (HTTP ${dl2.status})`, `Downloading the backup file failed (HTTP ${dl2.status})`);
-        }
-        const buf = Buffer.from(dl2.data);
-        if (buf.length === 0) return fail("The backup file was empty", "The backup file was empty");
-        const fileName = id.endsWith(".tar.gz") ? id : `${id}.tar.gz`;
-        return { ok: true, data: { buf, fileName, size: buf.length, premium: Boolean(sess.data.premium) } };
-      } catch (e2: unknown) {
-        const m2 = hmErrMsg(e2);
-        return fail(`Backup download error after re-login: ${m2.en}`, `Backup download error after re-login: ${m2.en}`);
-      }
-    }
-    if (dl.status >= 300) {
-      return fail(`Downloading the backup file failed (HTTP ${dl.status})`, `Downloading the backup file failed (HTTP ${dl.status})`);
-    }
-    const buf = Buffer.from(dl.data);
-    if (buf.length === 0) return fail("The backup file was empty", "The backup file was empty");
-    const fileName = id.endsWith(".tar.gz") ? id : `${id}.tar.gz`;
-    return { ok: true, data: { buf, fileName, size: buf.length, premium: Boolean(sess.data.premium) } };
-  } catch (e: unknown) {
-    const m = hmErrMsg(e);
-    return fail(`Backup download error: ${m.en}`, `Backup download error: ${m.en}`);
+  const dlUrl = `${sess.data.base}/backups/${encodeURIComponent(id)}/download`;
+
+  const tryDownload = async (token: string): Promise<StreamResult> =>
+    streamDownload(dax, dlUrl, destPath, { params: { token } });
+
+  let res = await tryDownload(sess.data.token);
+  if (!res.ok && (res.errorBody === "Unauthorized" || res.error === "Unauthorized")) {
+    // token may have expired between creation and download — re-login once
+    hmInvalidateSession();
+    sess = await hmLogin(cfg, true);
+    if (!sess.ok || !sess.data) return { ok: false, error: sess.error, errorBi: sess.errorBi };
+    res = await tryDownload(sess.data.token);
   }
+  if (!res.ok) {
+    const detail = res.errorBody || res.error || "download failed";
+    return fail(
+      `Backup download error: ${detail}`,
+      `Backup download error: ${detail}`
+    );
+  }
+
+  return {
+    ok: true,
+    data: {
+      filePath: res.data!.filePath,
+      fileName: res.data!.fileName,
+      size: res.data!.size,
+      premium: Boolean(sess.data.premium),
+    },
+  };
 }
 
 /** Connection test used by the «Test connection» button: detect base → login → report version. */

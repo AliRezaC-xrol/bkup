@@ -38,6 +38,9 @@ model BackupConfig {
   rebeccaUrl       String   @default("")
   rebeccaUsername  String   @default("")
   rebeccaPassword  String   @default("")
+  // ── Custom paths — arbitrary directories on THIS server backed up as
+  //    tar.gz alongside the panel backups (e.g. /opt/myapp, /etc/nginx) ──
+  customPaths      String   @default("[]") // JSON array of absolute paths
   // Telegram (shared destination for BOTH panels)
   telegramApiBase  String   @default("https://api.telegram.org")
   telegramBotToken String   @default("")
@@ -74,10 +77,11 @@ model BackupRun {
   status        String // running | success | failed
   trigger       String // auto | manual
   panel         String    @default("3x-ui") // 3x-ui | hmpanel | pasarguard — which panel this run belongs to
-  method        String? // db | json | local | hm-full | pg-full
+  method        String? // db | json | local | hm-full | pg-full | custom-full
   fileName      String?
   filePath      String?
   fileSize      Int?
+  sourcePath    String? // custom-path backups: the directory this archive was taken from
   tgMessageId   Int?
   tgMessageIds  String? // JSON array — ALL message ids (multi-part sends)
   tgDeleted     Boolean  @default(false)
