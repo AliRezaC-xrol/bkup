@@ -5,12 +5,12 @@ services:
     container_name: bkup
     restart: unless-stopped
     ports:
-      - "3999:3000" # رابط وب — روی http://SERVER_IP:3999 در دسترس است
+      - "3999:3000" # web panel — reachable at http://SERVER_IP:3999
     environment:
       - TZ=Asia/Tehran
       - DATABASE_URL=file:/app/data/prod.db
       - BACKUP_DIR=/app/data/backups
     volumes:
       - ./data:/app/data
-      # برای حالت بکاپ «لوکال» وقتی پنل 3x-ui روی همین سرور است، این خط را از کامنت خارج کنید:
+      # For "local" backup mode when the 3x-ui panel runs on this same server, uncomment this line:
       # - /etc/x-ui:/host-xui:ro

@@ -146,6 +146,13 @@ export function isCliAuthorized(req: Request): boolean {
     path.join(process.cwd(), ".cli-secret"), // secret files:
     "/opt/auto-backup-xui/.cli-secret",
     path.join(process.cwd(), "..", ".cli-secret"),
+    // the standalone server runs with cwd <app>/.next/standalone (systemd
+    // WorkingDirectory) while install.sh writes the secret at <app>/.cli-secret
+    path.join(process.cwd(), "..", "..", ".cli-secret"),
+    // the installer records the real app dir in .env (any custom location)
+    process.env.BKUP_APP_DIR || process.env.ABX_APP_DIR
+      ? path.join(process.env.BKUP_APP_DIR || process.env.ABX_APP_DIR || "", ".cli-secret")
+      : "",
   ];
   const provided = req.headers.get("x-cli-secret") || "";
   if (!provided || provided.length < 16) return false;

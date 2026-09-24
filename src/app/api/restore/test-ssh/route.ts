@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireAuth } from "@/lib/auth";
+import { requireAuthOrCli } from "@/lib/auth";
 import { SshClient, SshError } from "@/lib/restore-ssh";
 
 export const runtime = "nodejs";
@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
  * Body: { sshHost, sshPort, sshUser, sshPassword?, sshPrivateKey?, sshPassphrase? }
  */
 export async function POST(req: NextRequest) {
-  const denied = await requireAuth();
+  const denied = await requireAuthOrCli(req);
   if (denied) return denied;
 
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;

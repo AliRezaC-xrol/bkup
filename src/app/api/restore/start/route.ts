@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireAuth } from "@/lib/auth";
+import { requireAuthOrCli } from "@/lib/auth";
 import { startRestore, startCustomRestore, type RestoreRequest, type CustomRestoreRequest, type PanelId } from "@/lib/restore-service";
 import { normalizeRestoreTargetPath, validateRestoreTargetPath } from "@/lib/restore-target-path";
 
@@ -14,7 +14,7 @@ export const dynamic = "force-dynamic";
  * }
  */
 export async function POST(req: NextRequest) {
-  const denied = await requireAuth();
+  const denied = await requireAuthOrCli(req);
   if (denied) return denied;
 
   const body = (await req.json().catch(() => ({}))) as Partial<RestoreRequest>;

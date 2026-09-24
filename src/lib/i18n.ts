@@ -305,6 +305,7 @@ export const dict = {
   logs_search: "Search messages…",
   logs_level_all: "All",
   logs_copy: "Copy shown",
+  logs_copied: "Copied!",
   logs_download: "Download .log",
   logs_jump_bottom: "Jump to latest",
   logs_follow_on: "Following",

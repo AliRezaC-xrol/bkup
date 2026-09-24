@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireAuth } from "@/lib/auth";
+import { requireAuthOrCli } from "@/lib/auth";
 import { getRestoreHistory } from "@/lib/restore-service";
 import { db } from "@/lib/db";
 
@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 
 /** GET /api/restore/history — past restore jobs (newest first). */
 export async function GET(req: NextRequest) {
-  const denied = await requireAuth();
+  const denied = await requireAuthOrCli(req);
   if (denied) return denied;
   const limit = Number(req.nextUrl.searchParams.get("limit")) || 50;
   const rows = await getRestoreHistory(limit);
@@ -17,7 +17,7 @@ export async function GET(req: NextRequest) {
 
 /** DELETE /api/restore/history — delete single, multiple or all */
 export async function DELETE(req: NextRequest) {
-  const denied = await requireAuth();
+  const denied = await requireAuthOrCli(req);
   if (denied) return denied;
 
   try {
