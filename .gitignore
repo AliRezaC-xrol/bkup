@@ -71,3 +71,6 @@ tool-results/
 prisma/data/
 data/
 *.db
+
+# custom-path test build output
+/.test-build/

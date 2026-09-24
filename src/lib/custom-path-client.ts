@@ -18,6 +18,31 @@ import { bi, fail, type Bi } from "@/lib/messages";
  * the backups themselves) is ALWAYS refused, as are paths outside the root.
  */
 
+/**
+ * System files that must NEVER be packaged and uploaded, even when the admin
+ * points a custom path at a system directory (e.g. `/etc/nginx` or a home
+ * directory). Telegram is not a secret store: /etc/shadow, sudoers, private
+ * host keys and user private keys would leak full server access.
+ * Project files such as `/opt/myapp/.env` are deliberately NOT in this list —
+ * backing those up is the whole point of the feature.
+ */
+function isSystemSecret(absolute: string): boolean {
+  const base = path.basename(absolute);
+  const parent = path.basename(path.dirname(absolute));
+  const grand = path.basename(path.dirname(path.dirname(absolute)));
+  // any private SSH key of any user (never the .pub half)
+  if (parent === ".ssh" && base.startsWith("id_") && !base.endsWith(".pub")) return true;
+  if (parent === ".ssh" && base === "authorized_keys") return false; // not a secret, keep it
+  // credential stores
+  if (base === ".git-credentials" || base === ".netrc" || base === "credentials") {
+    if (base !== "credentials" || grand === ".aws" || parent === ".aws") return true;
+  }
+  // classic shadow files and sudoers — only where they actually live
+  if ((parent === "etc") && (base === "shadow" || base === "gshadow" || base === "sudoers")) return true;
+  if (parent === "sudoers.d" && grand === "etc") return true;
+  return false;
+}
+
 export interface CustomResult<T = unknown> {
   ok: boolean;
   data?: T;
@@ -166,6 +191,7 @@ export async function customPathBackup(
 
   let fileCount = 0;
   let totalBytes = 0;
+  let skippedSecrets = 0;
   // hard ceiling so a runaway directory cannot fill the disk
   const MAX_FILES = 20000;
   const MAX_BYTES = 8 * 1024 * 1024 * 1024; // 8 GB
@@ -192,6 +218,11 @@ export async function customPathBackup(
           try { target = await fs.promises.readlink(full); } catch { continue; }
           writeSymlink(rel, target);
           fileCount++;
+          continue;
+        }
+        if (isSystemSecret(full)) {
+          // never archive /etc/shadow, sudoers, id_rsa, .git-credentials…
+          skippedSecrets++;
           continue;
         }
         if (ent.isDirectory()) {
@@ -245,6 +276,7 @@ export async function customPathBackup(
         exportedAt: new Date().toISOString(),
         files: fileCount,
         bytes: totalBytes,
+        skippedSecrets,
       }, null, 2),
       "utf8"
     ));

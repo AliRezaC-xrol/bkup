@@ -8,7 +8,7 @@
 export const dict = {
   appName: "bkup",
   appBrand: "bkup",
-  appTagline: "Backup & Restore for 3x-ui, HM Panel, PasarGuard, Rebecca",
+  appTagline: "Backup & Restore for 3x-ui, HM Panel, PasarGuard, Rebecca & Custom Paths",
 
   // nav
   nav_dashboard: "Dashboard",

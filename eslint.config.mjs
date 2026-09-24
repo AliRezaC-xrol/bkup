@@ -7,6 +7,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
+  ignores: [
+    ".next/**",
+    "node_modules/**",
+    ".test-build/**",
+    "db/**",
+    "backups/**",
+    "data/**",
+  ],
   rules: {
     // TypeScript rules
     "@typescript-eslint/no-explicit-any": "off",

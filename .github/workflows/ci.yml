@@ -24,6 +24,9 @@ jobs:
       - name: Generate Prisma client
         run: bunx prisma generate
 
+      - name: Custom-path backup test
+        run: bun run test:custom-paths
+
       - name: Shell script syntax check
         run: |
           FAIL=0

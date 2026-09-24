@@ -174,8 +174,12 @@ Run `bkup` on the server:
 | **Stop panel** | stop the web panel service |
 | **Restart panel** | restart the web panel service |
 | **Update** | install the latest release in place, data preserved |
-| **Custom-path restore** | restore a custom path (DIR) backup onto a server over SSH |
 | **Uninstall** | remove the service and the application |
+
+> Backups, settings **and custom-path restores** live in the web panel
+> (**Restore → Custom path**): pick the archive, enter the target server, port
+> and destination directory, and bkup unpacks it over SSH. The terminal menu is
+> a focused service console only.
 
 ## License
 

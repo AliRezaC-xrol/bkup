@@ -315,7 +315,50 @@ if (resvRes.ok && resvRes.data) {
 }
 
 // ---------------------------------------------------------------------------
-// 8. cleanup
+// 8. system secrets are never archived (Telegram is not a secret store)
+// ---------------------------------------------------------------------------
+console.log("\n== system secrets are skipped ==");
+const secRoot = fs.mkdtempSync(path.join(os.tmpdir(), "bkup-secret-"));
+fs.mkdirSync(path.join(secRoot, "etc", "ssh"), { recursive: true });
+fs.mkdirSync(path.join(secRoot, ".ssh"), { recursive: true });
+fs.mkdirSync(path.join(secRoot, "app"), { recursive: true });
+fs.writeFileSync(path.join(secRoot, "etc", "shadow"), "root:$6$deadbeef\n");
+fs.writeFileSync(path.join(secRoot, "etc", "hosts"), "127.0.0.1 localhost\n");
+fs.writeFileSync(path.join(secRoot, ".ssh", "id_rsa"), "-----BEGIN OPENSSH PRIVATE KEY-----\n");
+fs.writeFileSync(path.join(secRoot, ".ssh", "id_rsa.pub"), "ssh-rsa AAAA\n");
+fs.writeFileSync(path.join(secRoot, "app", ".env"), "TOKEN=keep-me\n");
+const secDest = fs.mkdtempSync(path.join(os.tmpdir(), "bkup-secret-dest-"));
+const secRes = await customPathBackup(fakeCfg, { path: secRoot, label: "sec" }, secDest, ROOT);
+check(secRes.ok === true, "backup of a directory containing secrets reports ok");
+if (secRes.ok && secRes.data) {
+  const secExtract = fs.mkdtempSync(path.join(os.tmpdir(), "bkup-secret-extract-"));
+  spawnSync("tar", ["-xzf", posixPath(secRes.data.filePath), "-C", posixPath(secExtract)]);
+  const names = [];
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const f = path.join(d, e.name);
+      if (e.isDirectory()) walk(f);
+      else names.push(path.relative(secExtract, f).split(path.sep).join("/"));
+    }
+  };
+  walk(secExtract);
+  check(!names.includes("etc/shadow"), "etc/shadow is NOT in the archive");
+  check(!names.includes(".ssh/id_rsa"), "a private SSH key is NOT in the archive");
+  check(names.includes("etc/hosts"), "ordinary files next to it ARE in the archive");
+  check(names.includes(".ssh/id_rsa.pub"), "the public half of the key IS kept");
+  check(names.includes("app/.env"), "a project .env is still backed up (not a system secret)");
+  let skipCount = -1;
+  try {
+    skipCount = JSON.parse(fs.readFileSync(path.join(secExtract, "backup-manifest.json"), "utf8")).skippedSecrets;
+  } catch { /* handled by the check below */ }
+  check(skipCount === 2, `manifest reports the 2 skipped secrets (got ${skipCount})`);
+  fs.rmSync(secExtract, { recursive: true, force: true });
+}
+fs.rmSync(secRoot, { recursive: true, force: true });
+fs.rmSync(secDest, { recursive: true, force: true });
+
+// ---------------------------------------------------------------------------
+// 9. cleanup
 // ---------------------------------------------------------------------------
 fs.rmSync(src, { recursive: true, force: true });
 fs.rmSync(dest, { recursive: true, force: true });
