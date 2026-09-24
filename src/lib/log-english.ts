@@ -51,7 +51,7 @@ const MAP: Record<string, string> = {
   "تلاش ناموفق برای ورود به پنل وب": "A failed sign-in attempt on the web panel",
   "تنظیمات HMPanel از نسخه قبلی به کارت مستقل پنل منتقل شد": "HMPanel settings were migrated from the previous version to the dedicated panel card",
   "تنظیمات از فایل وارد شد": "Settings were imported from a file",
-  "تنظیمات بهروزرسانی شد": "Settings were updated",
+  "تنظیمات بهروزرسانی شد": "Settings updated successfully",
   "تنظیمات در فایلی ذخیره شد (همراه اعتبارنامهها)": "Settings were exported to a file (with credentials)",
   "تنظیمات در فایلی ذخیره شد": "Settings were exported to a file",
   "توکن API را وارد کنید": "Enter the API token",

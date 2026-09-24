@@ -130,7 +130,7 @@ export async function customPathBackup(
   const gz = zlib.createGzip({ level: 6 });
   gz.pipe(out);
 
-  const header = (name: string, size: number, type: string, mode = 0o644) => {
+  const header = (name: string, size: number, type: string, mode = 0o644, linkname = "") => {
     const h = Buffer.alloc(512, 0);
     h.write(name.slice(0, 100), 0, "utf8");
     h.write((mode & 0o7777).toString(8).padStart(7, "0") + "\0", 100); // mode
@@ -140,6 +140,7 @@ export async function customPathBackup(
     h.write(Math.floor(Date.now() / 1000).toString(8).padStart(11, "0") + "\0", 136);
     h.write("        ", 148); // checksum placeholder
     h.write(type, 156); // "0" regular file, "2" symlink, "5" directory
+    if (linkname) h.write(linkname.slice(0, 100), 157, "utf8"); // symlink target
     h.write("ustar\0", 257);
     h.write("00", 263);
     let sum = 0;
@@ -155,13 +156,12 @@ export async function customPathBackup(
     if (pad) gz.write(Buffer.alloc(pad, 0));
   };
 
-  /** A symlink header: the link target goes in the 157-byte linkname field. */
+  /** A symlink header: ustar stores the link target in the 100-byte linkname
+   *  field (offset 157) and the entry has NO data — size MUST be 0. Writing
+   *  the target as data produced an invalid member that GNU tar refused
+   *  ("Unexpected EOF"), so symlinks silently vanished on restore. */
   const writeSymlink = (name: string, target: string) => {
-    const linkTarget = target.slice(0, 155);
-    gz.write(header(name, linkTarget.length, "2", 0o777));
-    gz.write(Buffer.from(linkTarget, "utf8"));
-    const pad = (512 - (linkTarget.length % 512)) % 512;
-    if (pad) gz.write(Buffer.alloc(pad, 0));
+    gz.write(header(name, 0, "2", 0o777, target));
   };
 
   let fileCount = 0;
@@ -195,7 +195,12 @@ export async function customPathBackup(
           continue;
         }
         if (ent.isDirectory()) {
-          gz.write(header(rel + "/", 0, "5", 0o755));
+          // record the directory's real mode too — a hardcoded 0755 would
+          // silently open a private directory (e.g. 0700) back to the world
+          // on restore, which is exactly what "permissions preserved" must not do
+          let dirMode = 0o755;
+          try { dirMode = (await fs.promises.stat(full)).mode & 0o7777; } catch { /* fall back to 0755 */ }
+          gz.write(header(rel + "/", 0, "5", dirMode));
           stack.push(full);
           continue;
         }

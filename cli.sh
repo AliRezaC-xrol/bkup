@@ -5,6 +5,7 @@
 #  updates and uninstall. Everything else lives in the web panel.
 #
 #  v1.3.0: memory-safe streamed backups (single-panel runs no longer OOM),
+#          custom-path restore over SSH from the CLI too (menu item 12).
 #  custom-path backups, English-only logs.
 #  v1.2.0: pairs with the backup/restore correctness release — every
 #  panel's backup is its own complete file and restores onto its own
@@ -275,6 +276,18 @@ svc_control_flow() {
   fi
 }
 
+restore_custom_flow() {
+  if ! command -v node >/dev/null 2>&1; then
+    echo -e "${R}✗ node not found — cannot run the restore wizard${N}"
+    return
+  fi
+  if ! curl -sf -o /dev/null --max-time 3 "http://127.0.0.1:${PORT}/api/auth/state"; then
+    echo -e "${R}✗ the bkup web service is not running — start it first (menu item 8)${N}"
+    return
+  fi
+  node "$APP_DIR/scripts/cli/restore-custom.mjs"
+}
+
 logs_flow() {
   if has_systemd; then
     journalctl -u "$SERVICE" -f --no-pager
@@ -344,9 +357,10 @@ menu() {
   ${B}9)${N}  Stop web panel service
   ${B}10)${N} Restart web panel service
   ${B}11)${N} Uninstall
+  ${B}12)${N} Restore custom-path backup over SSH
   ${B}0)${N}  Exit
 
-  ${D}backups & settings → web panel (option 2)${N}
+  ${D}backups & settings → web panel (option 2) · custom-path restore → item 12${N}
 MENU
     echo ""
     read -rp "$(echo -e "${B}bkup${N} > ")" choice
@@ -362,6 +376,7 @@ MENU
       9) svc_control_flow stop; pause ;;
       10) svc_control_flow restart; pause ;;
       11) uninstall_flow; [ -f "$APP_DIR/cli.sh" ] || exit 0; pause ;;
+      12) restore_custom_flow; pause ;;
       0|"q"|"Q") exit 0 ;;
       *) ;;
     esac

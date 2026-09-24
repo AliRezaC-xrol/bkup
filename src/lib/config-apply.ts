@@ -197,7 +197,7 @@ export async function applyConfigPatch(
     "info",
     opts?.source === "import"
       ? bi("Settings were imported from a file", "Settings were imported from a file")
-      : bi("Settings were updated", "Settings were updated")
+      : bi("Settings updated successfully", "Settings updated successfully")
   );
   return { ok: true, updated };
 }

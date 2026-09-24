@@ -133,6 +133,13 @@ Notes:
 - The uploaded archive is removed from the target server when the restore
   finishes, whether it succeeded or failed.
 
+**From the terminal:** run `bkup` on the server and pick **item 12 —
+Restore custom-path backup over SSH**. An interactive wizard lists the
+custom-path archives, asks for the SSH details and target directory, and
+watches the restore step by step (with an option to cancel). It uses the
+same engine and validation as the panel flow, and everything it prints is
+also written to the English-only log.
+
 ## Restore Backup to a Server
 
 The **Restore** section lets you restore a backup directly to a server over **SSH**.
@@ -167,6 +174,7 @@ Run `bkup` on the server:
 | **Stop panel** | stop the web panel service |
 | **Restart panel** | restart the web panel service |
 | **Update** | install the latest release in place, data preserved |
+| **Custom-path restore** | restore a custom path (DIR) backup onto a server over SSH |
 | **Uninstall** | remove the service and the application |
 
 ## License

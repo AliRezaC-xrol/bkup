@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
-import { requireAuth } from "@/lib/auth";
+import { NextRequest, NextResponse } from "next/server";
+import { requireAuthOrCli } from "@/lib/auth";
 import { readRestoreState, requestCancelRestore } from "@/lib/restore-service";
 import { db } from "@/lib/db";
 import fs from "node:fs";
@@ -7,8 +7,8 @@ import path from "node:path";
 
 export const dynamic = "force-dynamic";
 
-export async function POST() {
-  const denied = await requireAuth();
+export async function POST(req: NextRequest) {
+  const denied = await requireAuthOrCli(req);
   if (denied) return denied;
 
   try {

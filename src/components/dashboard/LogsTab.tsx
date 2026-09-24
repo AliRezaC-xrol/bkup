@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
-  Trash2, Radio, Search, Copy, Download, ArrowDownToLine, Pause, Play, SearchX,
+  Trash2, Radio, Search, Copy, Check, Download, ArrowDownToLine, Pause, Play, SearchX,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useLang } from "@/components/dashboard/lang";
@@ -51,6 +51,8 @@ export function LogsTab({
   const [level, setLevel] = useState<"all" | (typeof LEVELS)[number]>("all");
   const [query, setQuery] = useState("");
   const [follow, setFollow] = useState(true); // stick to bottom while new rows arrive
+  const [copied, setCopied] = useState(false); // transient "Copied!" button feedback
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const counts = useMemo(() => {
     const c: Record<string, number> = { info: 0, success: 0, warn: 0, error: 0 };
@@ -73,6 +75,10 @@ export function LogsTab({
     if (el && follow) el.scrollTop = el.scrollHeight;
   }, [shown.length, follow]);
 
+  useEffect(() => () => {
+    if (copiedTimer.current) clearTimeout(copiedTimer.current);
+  }, []);
+
   const time = (ts: string) =>
     new Intl.DateTimeFormat("en-GB", {
       timeZone: "Asia/Tehran",
@@ -92,6 +98,10 @@ export function LogsTab({
     const ok = await copyTextToClipboard(shownText());
     if (ok) {
       toast({ title: t("copied") });
+      // visual confirmation on the button itself, not only a toast
+      setCopied(true);
+      if (copiedTimer.current) clearTimeout(copiedTimer.current);
+      copiedTimer.current = setTimeout(() => setCopied(false), 2000);
     } else {
       toast({
         title: t("error"),
@@ -138,9 +148,15 @@ export function LogsTab({
           </Badge>
         </div>
         <div className="flex items-center gap-1.5">
-          <Button variant="outline" size="sm" onClick={copyShown} disabled={shown.length === 0} className="gap-1.5">
-            <Copy className="h-3.5 w-3.5" />
-            {t("logs_copy")}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={copyShown}
+            disabled={shown.length === 0}
+            className={`gap-1.5 transition-colors ${copied ? "border-emerald-600/50 text-emerald-600" : ""}`}
+          >
+            {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+            {copied ? t("logs_copied") : t("logs_copy")}
           </Button>
           <Button variant="outline" size="sm" onClick={downloadShown} disabled={shown.length === 0} className="gap-1.5">
             <Download className="h-3.5 w-3.5" />
