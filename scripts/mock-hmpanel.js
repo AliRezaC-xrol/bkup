@@ -5,10 +5,16 @@
  *   POST /api/auth/login                {username,password} -> { accessToken, refreshToken, admin }
  *   GET  /api/health                    (Bearer)            -> { status: "ok" }
  *   POST /api/backups                   (Bearer) {"type":"full"} -> { id, file, type, size }
+ *   GET  /api/backups?limit=N           (Bearer)            -> [{ id, file, size, createdAt }] (newest first)
  *   GET  /api/backups/:id/download      (Bearer|?token=)    -> tar.gz bytes
+ *   DELETE /api/backups/:id             (Bearer)            -> { deleted: true }
  *
  * Wrong credentials -> 401. Wrong/absent token on backups -> 401.
  * The generated "full backup" is a small gzip tarball with a manifest inside.
+ *
+ * ENV: HM_OLD_BACKUPS=<n> pre-seeds n OLD archives (the real panel keeps every
+ * archive it ever made under /opt/hmpanel/backups/ and never deletes one — the
+ * seeding reproduces that state so the cleanup path can be tested).
  */
 const http = require("node:http");
 const zlib = require("node:zlib");
@@ -19,7 +25,26 @@ const PASS = "hm-secret-123";
 const TOKEN = "HM-MOCK-ACCESS-TOKEN";
 
 const backups = new Map(); // id -> Buffer
+const meta = new Map(); // id -> { createdAt, size, type }
 let counter = 0;
+
+function archiveId(type, when) {
+  const stamp = new Date(when).toISOString().replace(/[:.]/g, "-");
+  return `backup_${type}_${stamp}_${counter}.tar.gz`;
+}
+
+function store(id, buf, when, type = "full") {
+  backups.set(id, buf);
+  meta.set(id, { createdAt: new Date(when).toISOString(), size: buf.length, type });
+}
+
+// ── seed: archives left behind by earlier runs (the "disk fills up" state) ──
+const SEED = Number(process.env.HM_OLD_BACKUPS || 0);
+for (let i = SEED; i >= 1; i--) {
+  counter += 1;
+  const when = Date.now() - i * 3600 * 1000; // one per hour, older first
+  store(archiveId("full", when), tarGzFake(), when);
+}
 
 function tarGzFake() {
   // build a tiny deterministic payload that looks like an archive
@@ -94,13 +119,47 @@ const server = http.createServer(async (req, res) => {
     let type = "full";
     try { type = JSON.parse(raw.toString("utf8") || "{}").type || "full"; } catch { /* ignore */ }
     counter += 1;
-    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const id = `backup_${type}_${stamp}_${counter}.tar.gz`;
+    const now = Date.now();
+    const id = archiveId(type, now);
     const buf = tarGzFake();
-    backups.set(id, buf);
+    store(id, buf, now, type);
     console.log(`[MOCK-HM] created ${id} (${buf.length} bytes)`);
     res.writeHead(201, { "Content-Type": "application/json" });
     return res.end(JSON.stringify({ id, file: id, type, size: buf.length }));
+  }
+
+  // list (newest first, like the real NestJS service)
+  if (req.method === "GET" && url.pathname === "/api/backups") {
+    if (!authOk(req, url)) {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ message: "Unauthorized", statusCode: 401 }));
+    }
+    const limit = Number(url.searchParams.get("limit") || 50);
+    const rows = [...meta.entries()]
+      .map(([id, m]) => ({ id, file: id, type: m.type, size: m.size, createdAt: m.createdAt }))
+      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+      .slice(0, limit);
+    res.writeHead(200, { "Content-Type": "application/json" });
+    return res.end(JSON.stringify(rows));
+  }
+
+  // delete one archive
+  const del = url.pathname.match(/^\/api\/backups\/([^/]+)$/);
+  if (req.method === "DELETE" && del) {
+    if (!authOk(req, url)) {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ message: "Unauthorized", statusCode: 401 }));
+    }
+    const id = decodeURIComponent(del[1]);
+    const had = backups.delete(id);
+    meta.delete(id);
+    console.log(`[MOCK-HM] deleted ${id} (existed: ${had})`);
+    if (!had) {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ message: "Backup file not found", statusCode: 404 }));
+    }
+    res.writeHead(200, { "Content-Type": "application/json" });
+    return res.end(JSON.stringify({ deleted: true, id }));
   }
 
   const dl = url.pathname.match(/^\/api\/backups\/([^/]+)\/download$/);

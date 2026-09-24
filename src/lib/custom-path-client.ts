@@ -4,6 +4,7 @@ import zlib from "node:zlib";
 import crypto from "node:crypto";
 import type { AppConfig } from "@/lib/config-service";
 import { bi, fail, type Bi } from "@/lib/messages";
+import { REFUSED_SYSTEM_ROOTS } from "@/lib/restore-target-path";
 
 /**
  * Custom-path backups — arbitrary DIRECTORIES ON THIS SERVER, packaged as a
@@ -78,19 +79,43 @@ export function parseCustomPaths(raw: string): CustomPath[] {
 }
 
 /**
- * Paths the bot must NEVER offer to back up — they hold the bot's own
- * secrets (the .env with tokens, the .cli-secret, the SQLite database with
- * password hashes and every panel credential) or its own output. Backing
- * them up would leak all of that into a Telegram chat.
+ * Paths the bot must NEVER offer to back up — either a system directory
+ * (/opt, /root, /etc, …: backing those up means packaging the whole operating
+ * system, and it is exactly what the restore side refuses as a target), or a
+ * directory that holds the bot's own secrets (the .env with tokens, the
+ * .cli-secret, the SQLite database with password hashes and every panel
+ * credential). Backing the latter up would leak all of it into a Telegram chat.
+ *
+ * The system-root half is intentionally shared with the restore side so the
+ * two can never drift apart again (issue #11).
  */
 function isForbidden(rootDir: string, target: string): boolean {
   const resolved = path.resolve(target);
+  // ── system roots (issue #11) ──
+  // The backup side used to accept `/opt` and `/root` while the restore side
+  // refused them: the two lists disagreed. Both directions now share ONE list
+  // (REFUSED_SYSTEM_ROOTS) and ONE rule — the system directory ITSELF is never
+  // a valid target, an application directory INSIDE it is (/opt/myapp stays
+  // fully supported, it is the whole point of the feature).
+  if (isSystemRoot(resolved)) return true;
   if (resolved === rootDir) return true;
   if (resolved.startsWith(rootDir + path.sep)) return true;
   // the app's own secrets and data, wherever they ended up
   const banned = [".env", ".cli-secret", ".github-token"];
   if (banned.includes(path.basename(resolved))) return true;
   return false;
+}
+
+/**
+ * True for a system directory itself (/opt, /root, /etc, /usr, /var, …).
+ *
+ * Exact match only — deliberately the SAME rule the restore side applies via
+ * REFUSED_SYSTEM_ROOTS, so a path accepted when backing up is also accepted
+ * when restoring (and vice versa). Refusing every *child* of these roots would
+ * make /opt/myapp — the documented use case of this feature — impossible.
+ */
+function isSystemRoot(resolved: string): boolean {
+  return REFUSED_SYSTEM_ROOTS.includes(resolved);
 }
 
 /**
@@ -108,6 +133,14 @@ export function validateCustomPath(
   }
   if (p.includes("..")) {
     return bi("The path must not contain ..", "The path must not contain ..");
+  }
+  // System directory itself — same rule (and same list) as the restore side.
+  const normalized = path.normalize(p);
+  if (isSystemRoot(normalized)) {
+    return bi(
+      `System directory ${normalized} cannot be backed up — back up the application directory inside it (for example ${normalized === "/" ? "/" : normalized + "/"}myapp)`,
+      `System directory ${normalized} cannot be backed up — back up the application directory inside it (for example ${normalized === "/" ? "/" : normalized + "/"}myapp)`
+    );
   }
   if (isForbidden(rootDir, p)) {
     return bi(
@@ -176,7 +209,11 @@ export async function customPathBackup(
     .update(path.resolve(entry.path))
     .digest("hex")
     .slice(0, 8);
-  const fileName = `custom_${slug.replace(/[^a-zA-Z0-9._-]+/g, "_")}_${uniq}_${stamp}.tar.gz`;
+  // The `bkup-custom_` prefix is what makes the file name UNMISTAKABLE: the
+  // label is user-chosen, so `custom_pasarguard_<hash>_…` was read back as a
+  // PasarGuard archive by detectPanel() and a directory restore was offered as
+  // a panel restore (issue #10). "bkup-" cannot come from any panel.
+  const fileName = `bkup-custom_${slug.replace(/[^a-zA-Z0-9._-]+/g, "_")}_${uniq}_${stamp}.tar.gz`;
   const filePath = path.join(destDir, fileName);
 
   await fs.promises.mkdir(destDir, { recursive: true });

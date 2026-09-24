@@ -17,20 +17,38 @@ export function stripPartFromName(name: string): string {
   return stripped || name;
 }
 
+/** Every value detectPanel may return — "custom" is NOT a panel: it is one of
+ *  bkup's own directory archives and is restored by unpacking, never by
+ *  importing into a panel database. */
+export type DetectedPanel = "3x-ui" | "hmpanel" | "pasarguard" | "rebecca" | "custom";
+
 /**
  * Best-effort panel hint parsed from the file name.
  *
- * Must recognise the REAL file names each panel produces — bkup never renames
- * a backup, so the name is whatever the source panel called it:
+ * Must recognise the REAL file names each type produces — bkup never renames a
+ * panel backup, so the name is whatever the source panel called it:
  *   3x-ui:      x-ui-backup-YYYYMMDD-HHMMSS.db        (panel's own database)
  *   HMPanel:    backup_full_<timestamp>.tar.gz        (panel's official archive id)
  *   PasarGuard: pasarguard_full_<timestamp>.tar.gz    (bkup full snapshot)
  *   Rebecca:    rebecca-backup-<ts>.rbbackup          (panel's official export)
+ *   custom dir: bkup-custom_<label>_<hash>_<stamp>.tar.gz   (bkup custom path)
+ *               custom_<label>_<hash>_<stamp>.tar.gz        (pre-1.3.1 name)
  * Getting this wrong once meant a reassembled HMPanel archive was labelled
  * "3x-ui" and the restore tried to push it into x-ui.db — a broken restore.
+ *
+ * Issue #10: the SAME mistake happened the other way round for custom-path
+ * archives. Their name embeds the user's label, so `custom_pasarguard_<hash>_…`
+ * matched the pasarguard rule and a directory archive was offered as a panel
+ * restore. The custom prefix is therefore checked FIRST — it is bkup's own
+ * naming, so no panel can ever produce it, and everything after it (including
+ * a panel name inside the label) is just decoration.
  */
-export function detectPanel(name: string): string {
+export function detectPanel(name: string): DetectedPanel {
   const n = (name.split(/[\\/]/).pop() || name).toLowerCase();
+
+  // ── CUSTOM FIRST — bkup's own directory archives ──
+  if (n.startsWith("bkup-custom_") || n.startsWith("custom_")) return "custom";
+
   if (
     n.includes("hmpanel") ||
     n.startsWith("hm-") ||

@@ -72,5 +72,6 @@ prisma/data/
 data/
 *.db
 
-# custom-path test build output
+# test build output (custom-path and panel-client suites)
 /.test-build/
+/.test-build-panels/

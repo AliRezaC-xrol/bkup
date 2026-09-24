@@ -149,13 +149,17 @@ function authHeaders(cfg: AppConfig, session: PanelSession): Record<string, stri
   return session.cookie ? { Cookie: session.cookie } : {};
 }
 
-/** Download the raw panel database file. Streams to disk; returns the path. */
+/** Download the raw panel database file. Streams to disk; returns the path.
+ *
+ * The HTTP status travels back with the result (issue #6): backup-service
+ * retries ONCE with a fresh login when the panel answers 401/404 — without the
+ * status that retry was dead code and an expired session failed the run. */
 export async function getDb(
   cfg: AppConfig,
   session: PanelSession,
   destDir: string,
   destName: string
-): Promise<PanelRequestResult<{ filePath: string; fileName: string; size: number }>> {
+): Promise<PanelRequestResult<{ filePath: string; fileName: string; size: number; status?: number }>> {
   const base = buildBaseUrl(cfg);
   const ax = axiosFor(cfg, 60000);
   const destPath = path.join(destDir, destName);
@@ -163,6 +167,17 @@ export async function getDb(
   const res = await streamDownload(ax, url, destPath, { headers: authHeaders(cfg, session) });
 
   if (!res.ok) {
+    // 401/404 = the session is gone (panel restarted, cookie expired, base
+    // path changed). Reported as its own case so the caller's one-shot
+    // re-login + retry can key off the status.
+    if (res.status === 401 || res.status === 404) {
+      return {
+        ok: false,
+        status: res.status,
+        error: "Session expired",
+        errorBi: bi("Session expired", "Session expired"),
+      };
+    }
     // a JSON error body arrives as 200 + JSON — detect and reject it
     const body = res.errorBody ?? "";
     if (body.startsWith("{")) {
@@ -171,13 +186,22 @@ export async function getDb(
         const j = JSON.parse(body) as { msg?: string };
         if (j?.msg) msg = bi(String(j.msg), String(j.msg));
       } catch { /* keep the generic message */ }
-      return { ok: false, error: msg.fa, errorBi: msg };
+      return { ok: false, status: res.status, error: msg.fa, errorBi: msg };
     }
     const detail = body || res.error || "download failed";
-    return { ...fail(`Database download error: ${detail}`, `Database download error: ${detail}`) };
+    return {
+      ok: false,
+      status: res.status,
+      error: `Database download error: ${detail}`,
+      errorBi: bi(`Database download error: ${detail}`, `Database download error: ${detail}`),
+    };
   }
 
-  return { ok: true, data: { filePath: res.data!.filePath, fileName: res.data!.fileName, size: res.data!.size } };
+  return {
+    ok: true,
+    status: res.status,
+    data: { filePath: res.data!.filePath, fileName: res.data!.fileName, size: res.data!.size },
+  };
 }
 
 /** Fetch full inbounds + panel settings and build a JSON config backup. */

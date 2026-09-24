@@ -42,6 +42,12 @@ const REQ_TIMEOUT_MS = 30 * 1000;
 const SNAPSHOT_TIMEOUT_MS = 10 * 60 * 1000;
 const USER_PAGE = 200; // users per page during the snapshot
 
+// users.json framing — the archive member MUST be one valid JSON array, see
+// the note inside pgFullBackup (issue: restores brought back no users at all).
+const JSON_ARRAY_OPEN = Buffer.from("[\n", "utf8");
+const JSON_COMMA = Buffer.from(",\n", "utf8");
+const JSON_ARRAY_CLOSE = Buffer.from("\n]\n", "utf8");
+
 function axiosFor(cfg: AppConfig, timeout = REQ_TIMEOUT_MS): AxiosInstance {
   return axios.create({
     timeout,
@@ -235,13 +241,23 @@ export async function pgFullBackup(
     // small sections first
     for (const f of files) writeMember(f.name, Buffer.from(f.json, "utf8"));
 
-    // users — paginated and written into ONE users.json member. Each user is
-    // JSON-encoded as it arrives and only its byte length is kept (never the
-    // decoded object), so memory grows with the size of one user, not all of
-    // them.
+    // users — paginated and written into ONE users.json member, as a REAL
+    // JSON ARRAY.
+    //
+    // Before 1.3.1 the per-user objects were concatenated raw, which produced
+    // `{...}{...}{...}` — NOT valid JSON. The restore side (restorePassarguard
+    // Json) reads the member with JSON.parse and silently skips a section it
+    // cannot parse, so every PasarGuard restore came back with ZERO users while
+    // still reporting success. The rows are therefore wrapped in `[ … ]` and
+    // separated by commas (the layout the restore side expects).
+    //
+    // Memory: each row is JSON-encoded to bytes the moment it arrives and the
+    // decoded object is dropped again, so peak RAM stays proportional to the
+    // encoded size — never to a tree of JS objects (that is what used to OOM
+    // the service on panels with tens of thousands of users).
     let offset = 0;
     let userCount = 0;
-    const userBuffers: Buffer[] = [];
+    const userChunks: Buffer[] = [];
     for (let page = 0; page < 200; page++) {
       const res = await ax.get(`${base}/api/users`, { headers: H, params: { offset, limit: USER_PAGE } });
       if (!(res.status >= 200 && res.status < 300)) {
@@ -252,13 +268,16 @@ export async function pgFullBackup(
       if (typeof dd.total === "number") usersTotal = dd.total;
       offset += rows.length;
       userCount += rows.length;
-      for (const row of rows) userBuffers.push(Buffer.from(JSON.stringify(row), "utf8"));
+      for (const row of rows) {
+        if (userChunks.length) userChunks.push(JSON_COMMA);
+        userChunks.push(Buffer.from(JSON.stringify(row), "utf8"));
+      }
       if (rows.length < USER_PAGE || (usersTotal >= 0 && userCount >= usersTotal)) break;
     }
-    // single members need their total size up-front in the tar header, so
-    // the buffers are concatenated here. The per-user buffers are released
-    // as they stream into the writer.
-    const body = Buffer.concat(userBuffers);
+    // A single member needs its total size up-front in the tar header, so the
+    // pieces are joined here — with the array framing that makes it valid JSON.
+    // (`[` + rows separated by `,` + `]`; an empty panel yields a valid `[]`.)
+    const body = Buffer.concat([JSON_ARRAY_OPEN, ...userChunks, JSON_ARRAY_CLOSE]);
     writeMember("users.json", body);
     usersTotal = usersTotal >= 0 ? usersTotal : userCount;
   } catch (e: unknown) {

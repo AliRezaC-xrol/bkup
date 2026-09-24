@@ -320,12 +320,33 @@ export async function hmFullBackup(
     res = await tryDownload(sess.data.token);
   }
   if (!res.ok) {
+    // The archive we just created stays on the panel host — keep the newest
+    // few and drop the rest so a failing download can never fill the disk
+    // (issue #8), then report the download error.
+    await hmPruneRemoteBackups(ax, sess.data.base, auth(sess.data));
     const detail = res.errorBody || res.error || "download failed";
     return fail(
       `Backup download error: ${detail}`,
       `Backup download error: ${detail}`
     );
   }
+
+  // ── Remote cleanup (issue #8) ───────────────────────────────────────────
+  // HMPanel stores every archive it creates under /opt/hmpanel/backups/ and
+  // NEVER deletes them: after a few weeks of scheduled backups the panel host
+  // runs out of disk and its own containers start failing. The archive is now
+  // on OUR disk (and on its way to Telegram), so the copy on the panel is
+  // deleted as soon as the download succeeded — and any older leftovers are
+  // pruned down to the newest HM_REMOTE_KEEP. Both steps are strictly
+  // best-effort: a panel build without the DELETE endpoint must never fail a
+  // backup that has already succeeded.
+  try {
+    await ax.delete(`${sess.data.base}/backups/${encodeURIComponent(id)}`, {
+      headers: auth(sess.data),
+      timeout: 30000,
+    });
+  } catch { /* best-effort — the prune below still runs */ }
+  await hmPruneRemoteBackups(ax, sess.data.base, auth(sess.data), id);
 
   return {
     ok: true,
@@ -336,6 +357,93 @@ export async function hmFullBackup(
       premium: Boolean(sess.data.premium),
     },
   };
+}
+
+/** How many archives are kept ON the HMPanel host (older ones are pruned). */
+const HM_REMOTE_KEEP = 3;
+
+/**
+ * Delete every archive on the panel host except the newest `keep` ones.
+ * Never throws: called on the success path (housekeeping) and on the failure
+ * path (so a broken download cannot leave the panel's disk full).
+ * `currentId` is the archive of this very run — never counted as "an old one".
+ */
+async function hmPruneRemoteBackups(
+  ax: AxiosInstance,
+  base: string,
+  headers: Record<string, string>,
+  currentId = ""
+): Promise<void> {
+  try {
+    const listRes = await ax.get(`${base}/backups`, {
+      headers,
+      params: { limit: 50 },
+      timeout: 30000,
+    });
+    if (listRes.status !== 200) return;
+    const rows = hmBackupList(listRes.data);
+    if (rows.length <= HM_REMOTE_KEEP) return;
+
+    // Newest first. The panel usually answers newest-first, but that is not
+    // guaranteed, and deleting the wrong end would throw away the freshest
+    // archives — so sort by the timestamp the panel reports (falling back to
+    // a YYYY-MM-DD… substring of the file name, then to the given order).
+    const sortable = rows.some((r) => r.stamp > 0);
+    const ordered = sortable
+      ? [...rows].sort((a, b) => (b.stamp || 0) - (a.stamp || 0))
+      : rows;
+
+    let deleted = 0;
+    for (const row of ordered.slice(HM_REMOTE_KEEP)) {
+      if (deleted >= 50) break; // never hammer the API in one pass
+      if (currentId && row.id === currentId) continue; // this run's own file
+      try {
+        await ax.delete(`${base}/backups/${encodeURIComponent(row.id)}`, {
+          headers,
+          timeout: 30000,
+        });
+        deleted++;
+      } catch { /* one file we cannot delete never stops the prune */ }
+    }
+  } catch { /* listing unsupported/failed — cleanup is best-effort */ }
+}
+
+/** Tolerate every list shape seen in NestJS APIs: `[…]`, `{items: […]}`, `{data: […]}`… */
+function hmBackupList(data: unknown): { id: string; stamp: number }[] {
+  let arr: unknown[] = [];
+  if (Array.isArray(data)) arr = data;
+  else if (data && typeof data === "object") {
+    const o = data as Record<string, unknown>;
+    for (const key of ["items", "data", "backups", "files", "rows", "result"]) {
+      if (Array.isArray(o[key])) {
+        arr = o[key] as unknown[];
+        break;
+      }
+    }
+  }
+  const out: { id: string; stamp: number }[] = [];
+  for (const raw of arr) {
+    if (typeof raw === "string") {
+      out.push({ id: raw, stamp: stampOf(raw) });
+      continue;
+    }
+    if (!raw || typeof raw !== "object") continue;
+    const o = raw as Record<string, unknown>;
+    const id = typeof o.id === "string" ? o.id : typeof o.file === "string" ? o.file : "";
+    if (!id) continue;
+    const when = o.createdAt ?? o.created_at ?? o.created ?? o.mtime ?? o.date;
+    const parsed = typeof when === "string" ? Date.parse(when) : typeof when === "number" ? when : NaN;
+    out.push({ id, stamp: Number.isFinite(parsed) ? parsed : stampOf(id) });
+  }
+  return out;
+}
+
+/** Best-effort timestamp out of an archive name (…2026-09-24T09-25-00-123Z). */
+function stampOf(name: string): number {
+  const m = name.match(/(\d{4})-(\d{2})-(\d{2})[T_-](\d{2})[-:](\d{2})[-:](\d{2})/);
+  if (!m) return 0;
+  const t = Date.parse(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}Z`);
+  return Number.isFinite(t) ? t : 0;
 }
 
 /** Connection test used by the «Test connection» button: detect base → login → report version. */

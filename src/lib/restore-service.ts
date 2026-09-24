@@ -2101,9 +2101,17 @@ async function restoreRebecca(ssh: SshClient, remoteBackupPath: string, backupNa
 }
 
 /** A custom-path (directory) archive — panel "custom" or a custom_* file name.
- *  Restored by unpacking into a directory, never by the panel restore flow. */
+ *  Restored by unpacking into a directory, never by the panel restore flow.
+ *  Both the 1.3.1 prefix (`bkup-custom_`) and the older `custom_` prefix are
+ *  recognised, so archives created before the rename keep restoring as
+ *  directories instead of being offered as a panel import (issue #10). */
 function isCustomBackup(b: { fileName: string; panel: string }): boolean {
-  return String(b.panel) === "custom" || (b.fileName || "").startsWith("custom_");
+  const name = (b.fileName || "").toLowerCase();
+  return (
+    String(b.panel) === "custom" ||
+    name.startsWith("bkup-custom_") ||
+    name.startsWith("custom_")
+  );
 }
 
 async function resolveBackup(

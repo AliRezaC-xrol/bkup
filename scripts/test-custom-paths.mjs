@@ -47,6 +47,7 @@ fs.writeFileSync(
       path.join(ROOT, "src/lib/custom-path-client.ts"),
       path.join(ROOT, "src/lib/messages.ts"),
       path.join(ROOT, "src/lib/restore-target-path.ts"),
+      path.join(ROOT, "src/lib/reassembly.ts"),
     ],
   }, null, 2)
 );
@@ -57,11 +58,15 @@ if (tsc.status !== 0) {
 }
 
 // tsc does not rewrite the "@/" path alias at emit — point the emitted
-// require at the sibling file we compiled alongside it
-const emitted = path.join(OUT, "lib/custom-path-client.js");
-let code = fs.readFileSync(emitted, "utf8");
-code = code.replace(/require\("@\/lib\/messages"\)/g, 'require("./messages.js")');
-fs.writeFileSync(emitted, code);
+// require at the sibling file we compiled alongside it (every "@/lib/x" import
+// of every emitted module — the guard now shares REFUSED_SYSTEM_ROOTS with the
+// restore side, so custom-path-client.js imports restore-target-path too)
+for (const file of fs.readdirSync(path.join(OUT, "lib"))) {
+  if (!file.endsWith(".js")) continue;
+  const p = path.join(OUT, "lib", file);
+  const code = fs.readFileSync(p, "utf8").replace(/require\("@\/lib\/([\w.-]+)"\)/g, 'require("./$1.js")');
+  fs.writeFileSync(p, code);
+}
 
 const { customPathBackup, validateCustomPath, parseCustomPaths } = await import(
   pathToFileURL(path.join(OUT, "lib/custom-path-client.js")).href
@@ -69,6 +74,7 @@ const { customPathBackup, validateCustomPath, parseCustomPaths } = await import(
 const { validateRestoreTargetPath, normalizeRestoreTargetPath } = await import(
   pathToFileURL(path.join(OUT, "lib/restore-target-path.js")).href
 );
+const { detectPanel } = await import(pathToFileURL(path.join(OUT, "lib/reassembly.js")).href);
 
 let failures = 0;
 function check(cond, msg) {
@@ -126,7 +132,12 @@ if (!res.ok || !res.data) {
 const { filePath, fileName, size, files } = res.data;
 console.log(`  archive: ${fileName}  ${(size / 1048576).toFixed(1)} MB  ${files} files`);
 
-check(fileName.startsWith("custom_test-app_") && fileName.endsWith(".tar.gz"), "file name follows custom_<label>_<stamp>.tar.gz");
+check(fileName.startsWith("bkup-custom_test-app_") && fileName.endsWith(".tar.gz"), "file name follows bkup-custom_<label>_<hash>_<stamp>.tar.gz");
+// issue #10: the label is user-chosen, so it may contain a panel name — the
+// archive must still be read back as a DIRECTORY backup, never as that panel
+check(detectPanel(fileName) === "custom", "a custom archive is detected as \"custom\"");
+check(detectPanel("bkup-custom_pasarguard_a1b2c3d4_2026-09-24_092500.tar.gz") === "custom", "…even when the label says \"pasarguard\"");
+check(detectPanel("custom_rebecca_a1b2c3d4_2026-09-24_092500.tar.gz") === "custom", "…and for pre-1.3.1 custom_ names too");
 check(fs.existsSync(filePath), "archive exists on disk");
 check(size > 0, "archive is non-empty");
 
@@ -184,6 +195,28 @@ check(validateCustomPath(path.join(ROOT, "src"), ROOT) !== null, "a directory IN
 check(validateCustomPath(path.join(ROOT, "package.json"), ROOT) !== null, "a file (not a directory) rejected");
 check(validateCustomPath(path.join(os.tmpdir(), "bkup-does-not-exist-xyz"), ROOT) !== null, "missing directory rejected");
 check(validateCustomPath(src, ROOT) === null, "a real external directory accepted");
+
+// ---------------------------------------------------------------------------
+// 3b. issue #11 — the backup side must refuse exactly what the restore side
+//     refuses (a system directory ITSELF), while a directory INSIDE it stays
+//     a perfectly valid backup source (that is the feature's whole use case).
+// ---------------------------------------------------------------------------
+console.log("\n== validateCustomPath: system roots (must match the restore side) ==");
+for (const root of ["/", "/etc", "/home", "/lib", "/opt", "/root", "/srv", "/tmp", "/usr", "/var"]) {
+  const err = validateCustomPath(root, ROOT);
+  check(err !== null && /System directory/.test(err.en), `system directory ${root} itself rejected by the system-root rule`);
+}
+// /opt/app does not exist on a test machine, so it can only be asserted NOT to
+// be refused by the system-root rule — a real one stays a valid backup source.
+const optApp = validateCustomPath("/opt/app", ROOT);
+check(optApp === null || !/System directory/.test(optApp.en), "/opt/app is not refused by the system-root rule");
+check(validateCustomPath(src, ROOT) === null, `${src} — a real directory INSIDE the system root /tmp — is accepted`);
+// the guard must never disagree with the restore-side list
+const { REFUSED_SYSTEM_ROOTS } = await import(pathToFileURL(path.join(OUT, "lib/restore-target-path.js")).href);
+check(
+  REFUSED_SYSTEM_ROOTS.every((r) => validateCustomPath(r, ROOT) !== null),
+  "every path in REFUSED_SYSTEM_ROOTS is refused by validateCustomPath too"
+);
 
 // ---------------------------------------------------------------------------
 // 4. parseCustomPaths resilience

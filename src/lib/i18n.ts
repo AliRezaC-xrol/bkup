@@ -223,7 +223,7 @@ export const dict = {
   custom_label_label: "Label",
   custom_label_ph: "label (optional)",
   custom_remove: "Remove",
-  custom_path_hint: "An absolute path on this server. It is packed as a tar.gz each cycle and sent to the same Telegram chat. Custom paths can be used alone: turn every panel off and only these directories are backed up.",
+  custom_path_hint: "An absolute path on this server. It is packed as a tar.gz each cycle and sent to the same Telegram chat. Custom paths can be used alone: turn every panel off and only these directories are backed up. A system directory itself (/opt, /etc, /root…) is refused — point at the application folder inside it, e.g. /opt/myapp.",
   custom_empty: "No custom paths configured — add one above",
   custom_bad_path: "Directory not found on this server",
   custom_forbidden: "This directory holds the bot itself and cannot be backed up",

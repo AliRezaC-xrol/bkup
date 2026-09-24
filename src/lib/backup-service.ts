@@ -237,7 +237,10 @@ async function runPanelBackup(
 
       const dbName = timestampName("x-ui", "db");
       let dbRes = await getDb(cfg, sess.data!, stagingDir, dbName);
-      // One retry with a fresh session on auth failure
+      // One retry with a fresh session on auth failure. This only works now
+      // that getDb/streamDownload propagate the HTTP status (issue #6): a dead
+      // session makes the panel answer 401 and the run used to fail here even
+      // though a single re-login would have fixed it.
       if (!dbRes.ok && (dbRes.status === 401 || dbRes.status === 404)) {
         invalidateSession();
         const relogin = await login(cfg, true);

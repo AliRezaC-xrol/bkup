@@ -11,6 +11,7 @@ const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
     ".next/**",
     "node_modules/**",
     ".test-build/**",
+    ".test-build-panels/**",
     "db/**",
     "backups/**",
     "data/**",

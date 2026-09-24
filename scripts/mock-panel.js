@@ -70,6 +70,15 @@ const server = http.createServer((req, res) => {
 
   // eslint-disable-next-line no-unreachable
 
+  // A panel that answers **200** with a JSON error body instead of an HTTP
+  // error for a dead session — regression cover for the "the panel answered
+  // with an error message instead of the backup file" gate in stream-download.
+  if (path === "/panel/api/server/getDb" && cookies.includes("3x-ui=expired-json")) {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ success: false, msg: "not logged in" }));
+    return;
+  }
+
   // everything below requires the session cookie
   if (!cookies.includes("3x-ui=mock-session-cookie-xyz")) {
     res.writeHead(401, { "Content-Type": "application/json" });

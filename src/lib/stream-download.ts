@@ -26,6 +26,17 @@ export interface StreamedFile {
 export interface StreamResult {
   ok: boolean;
   data?: StreamedFile;
+  /**
+   * HTTP status of the response — set on EVERY return that got a response.
+   *
+   * Issue #6: the callers (`getDb`, the HMPanel download) retry ONCE with a
+   * fresh login when the panel answers 401/404, because that is how an expired
+   * session shows up on 3x-ui. streamDownload used to throw the status away,
+   * so `res.status` was always `undefined` and that retry could never fire —
+   * a session that expired mid-backup failed the whole run instead of
+   * re-logging in. The status is now propagated (a transport error has none).
+   */
+  status?: number;
   /** set when a JSON/HTML error body was captured instead of a file */
   errorBody?: string;
   error?: string;
@@ -53,12 +64,15 @@ export async function streamDownload(
       maxRedirects: 5,
     });
   } catch (e: unknown) {
+    // transport-level failure — there is no HTTP response, so no status
     return { ok: false, ...errBi(e) };
   }
 
-  if (res.status < 200 || res.status >= 300) {
+  const status = res.status;
+
+  if (status < 200 || status >= 300) {
     const body = await drainStream(res.data);
-    return { ok: false, errorBody: body };
+    return { ok: false, status, errorBody: body };
   }
 
   // the destination filename comes from the panel's own response — a hostile
@@ -68,6 +82,7 @@ export async function streamDownload(
   if (!safe) {
     return {
       ok: false,
+      status,
       error: "The panel returned an unsafe backup file name",
       errorBi: bi("The panel returned an unsafe backup file name", "The panel returned an unsafe backup file name"),
     };
@@ -96,16 +111,65 @@ export async function streamDownload(
     // mistake for a real backup
     try { await fs.promises.unlink(safe); } catch { /* already gone */ }
     const r = errBi(e);
-    return { ok: false, error: r.error, errorBi: r.errorBi };
+    return { ok: false, status, error: r.error, errorBi: r.errorBi };
   }
 
   if (aborted || bytes === 0) {
     try { await fs.promises.unlink(safe); } catch { /* best-effort */ }
-    return { ok: false, error: "The backup file was empty", errorBi: bi("The backup file was empty", "The backup file was empty") };
+    return { ok: false, status, error: "The backup file was empty", errorBi: bi("The backup file was empty", "The backup file was empty") };
+  }
+
+  // A panel whose session died very often answers 200 — not 401 — with a JSON
+  // error object or an HTML login page instead of the file. Both stream to
+  // disk happily (they are non-empty!), so without this gate the caller would
+  // stage an "error page" as a backup. Detect it from the content-type and
+  // from the first bytes on disk, then report it as a failed download that
+  // still carries its status — together with the 401/404 path in the callers
+  // this is what makes the "re-login and retry once" logic actually trigger.
+  const bodyKind = await sniffErrorBody(safe);
+  const ctype = String(res.headers?.["content-type"] ?? "").toLowerCase();
+  const looksError =
+    bodyKind !== null ||
+    (ctype.includes("application/json") && !ctype.includes("octet-stream")) ||
+    ctype.includes("text/html");
+  if (looksError) {
+    // keep a short excerpt of the panel's own message for the caller
+    let body = "";
+    if (bytes <= 512 * 1024) {
+      try {
+        body = (await fs.promises.readFile(safe, "utf8")).trim().slice(0, 500);
+      } catch { /* unreadable — the generic message below still applies */ }
+    }
+    try { await fs.promises.unlink(safe); } catch { /* best-effort */ }
+    const msg = "The panel answered with an error message instead of the backup file";
+    return { ok: false, status, errorBody: body, error: msg, errorBi: bi(msg, msg) };
   }
 
   const fileName = path.basename(safe);
-  return { ok: true, data: { filePath: safe, fileName, size: bytes } };
+  return { ok: true, status, data: { filePath: safe, fileName, size: bytes } };
+}
+
+/**
+ * Peek at the first bytes of the freshly written file and report whether they
+ * are an error document rather than a real archive: `{`/`[` (a JSON envelope)
+ * or `<` (an HTML page). Only the first 64 bytes are read, so this is O(1)
+ * even for a multi-GB archive.
+ */
+async function sniffErrorBody(filePath: string): Promise<string | null> {
+  try {
+    const fd = await fs.promises.open(filePath, "r");
+    try {
+      const head = Buffer.alloc(64);
+      const { bytesRead } = await fd.read(head, 0, 64, 0);
+      if (bytesRead === 0) return null;
+      const first = head.subarray(0, bytesRead).toString("utf8").trimStart()[0];
+      return first === "{" || first === "[" || first === "<" ? "sniffed" : null;
+    } finally {
+      await fd.close();
+    }
+  } catch {
+    return null;
+  }
 }
 
 /**

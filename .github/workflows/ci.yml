@@ -27,6 +27,9 @@ jobs:
       - name: Custom-path backup test
         run: bun run test:custom-paths
 
+      - name: Panel-client regression test (#6 retry, #8 cleanup, PG users.json)
+        run: bun run test:panel-fixes
+
       - name: Shell script syntax check
         run: |
           FAIL=0
