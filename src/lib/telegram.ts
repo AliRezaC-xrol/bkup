@@ -93,9 +93,29 @@ export type DocumentSource =
  * in RAM. Blob.slice() on a lazy blob stays lazy, which is what lets the
  * multi-part path stream each part instead of cutting buffers in memory.
  */
+/**
+ * fs.openAsBlob() landed in Node 19.8 and is implemented by Bun, but the
+ * @types/node resolved in CI (18.x, pulled in through @types/ssh2) does not
+ * declare it. Reading it through this narrow cast keeps `tsc --noEmit` green
+ * on every @types/node version while preserving the lazy, streaming body:
+ * the archive is read straight off disk during the request and is never
+ * materialised in RAM.
+ */
+const openAsBlob = (fs as unknown as {
+  openAsBlob?: (path: string, options?: { type?: string }) => Promise<Blob>;
+}).openAsBlob;
+
 async function toBlob(source: DocumentSource): Promise<Blob> {
   if (source.kind === "file") {
-    return fs.openAsBlob(source.path, { type: "application/octet-stream" });
+    if (typeof openAsBlob === "function") {
+      return openAsBlob(source.path, { type: "application/octet-stream" });
+    }
+    // Legacy runtime without openAsBlob (Node < 19.8). bkup installs Node 20+,
+    // so this is a safety net only — read the file lazily in chunks is not
+    // possible without the API, so buffer it and warn loudly.
+    console.warn("[telegram] fs.openAsBlob unavailable — falling back to a buffered read; upgrade to Node 20+");
+    const buf = await fs.promises.readFile(source.path);
+    return new Blob([new Uint8Array(buf)], { type: "application/octet-stream" });
   }
   if (source.kind === "blob") return source.blob;
   // copy the view onto a standalone ArrayBuffer: Buffer shares its memory
