@@ -12,7 +12,7 @@ import {
   OFFICIAL_NODE_INSTALL_URLS,
 } from "@/lib/restore-config";
 import type { RestoreConfig } from "@prisma/client";
-import { normalizeRestoreTargetPath, validateRestoreTargetPath } from "@/lib/restore-target-path";
+import { normalizeRestoreTargetPath, validateRestoreTargetPath, validateRestoreOriginPath } from "@/lib/restore-target-path";
 
 export type PanelId = "3x-ui" | "hmpanel" | "pasarguard" | "rebecca";
 export type SslMode = "none" | "domain" | "ip" | "custom";
@@ -66,7 +66,13 @@ export interface RestoreState {
 
 /** A custom-path restore: extract a directory archive onto a server over SSH.
  *  No panel is installed and no panel data is touched — the archive is unpacked
- *  into `targetPath` and verified against its manifest. */
+ *  into the directory it was TAKEN FROM and verified against its manifest.
+ *
+ *  `targetPath` only carries a meaning for archives with no recorded origin
+ *  (an archive reassembled from Telegram parts, or a row created by an older
+ *  version). Whenever bkup knows the original directory, that directory WINS:
+ *  a directory backup restores back to where it came from, exactly like the
+ *  panel backups restore onto their own panel. */
 export interface CustomRestoreRequest {
   sshHost: string;
   sshPort: number;
@@ -76,7 +82,7 @@ export interface CustomRestoreRequest {
   sshPassphrase?: string;
   backupId: number;
   backupSource: "backup-run" | "reassembled";
-  targetPath: string;
+  targetPath?: string;
 }
 
 function dataDir(): string {
@@ -2103,7 +2109,7 @@ function isCustomBackup(b: { fileName: string; panel: string }): boolean {
 async function resolveBackup(
   backupId: number,
   source: "backup-run" | "reassembled"
-): Promise<{ filePath: string; fileName: string; panel: PanelId }> {
+): Promise<{ filePath: string; fileName: string; panel: PanelId; sourcePath: string | null }> {
   if (source === "backup-run") {
     const row = await db.backupRun.findUnique({ where: { id: backupId } });
     if (!row || !row.filePath) throw new Error("BACKUP_NOT_FOUND");
@@ -2111,6 +2117,8 @@ async function resolveBackup(
       filePath: row.filePath,
       fileName: row.fileName || path.basename(row.filePath),
       panel: row.panel as PanelId,
+      // the directory a custom backup was taken from — the restore target
+      sourcePath: row.sourcePath ?? null,
     };
   } else {
     const row = await db.reassembledBackup.findUnique({ where: { id: backupId } });
@@ -2119,6 +2127,8 @@ async function resolveBackup(
       filePath: row.filePath,
       fileName: row.name,
       panel: (row.panel || "3x-ui") as PanelId,
+      // a reassembled archive carries no origin — the caller supplies the path
+      sourcePath: null,
     };
   }
 }
@@ -2667,10 +2677,7 @@ export async function startCustomRestore(
     return { ok: false, error: "RESTORE_ALREADY_RUNNING" };
   }
 
-  const targetErr = validateRestoreTargetPath(req.targetPath);
-  if (targetErr) return { ok: false, error: targetErr };
-
-  let backup: { filePath: string; fileName: string; panel: string };
+  let backup: { filePath: string; fileName: string; panel: string; sourcePath: string | null };
   try {
     backup = await resolveBackup(req.backupId, req.backupSource);
   } catch {
@@ -2683,6 +2690,37 @@ export async function startCustomRestore(
   if (!fs.existsSync(backup.filePath)) {
     return { ok: false, error: "BACKUP_FILE_MISSING" };
   }
+
+  // The archive goes back to the directory it was taken from. That origin is
+  // recorded by bkup when the backup runs and is authoritative — the client
+  // cannot redirect it somewhere else.
+  const origin = (backup.sourcePath ?? "").trim();
+  let targetPath: string;
+  if (origin) {
+    const originErr = validateRestoreOriginPath(origin);
+    if (originErr) return { ok: false, error: "BACKUP_ORIGIN_INVALID" };
+    targetPath = normalizeRestoreTargetPath(origin);
+  } else {
+    // no origin on record (archive reassembled from parts, or an older row):
+    // the requested directory is the only usable target, so it is validated
+    // with the full public rules (depth check included)
+    targetPath = normalizeRestoreTargetPath(String(req.targetPath ?? ""));
+    const targetErr = validateRestoreTargetPath(targetPath);
+    if (targetErr) return { ok: false, error: targetErr };
+  }
+  const effective: CustomRestoreRequest = { ...req, targetPath };
+
+  await log(
+    "info",
+    bi(
+      origin
+        ? `[Restore:custom] restored to the directory this backup was taken from: ${targetPath} (${backup.fileName})`
+        : `[Restore:custom] this archive carries no recorded origin — restoring into the requested directory: ${targetPath} (${backup.fileName})`,
+      origin
+        ? `[Restore:custom] restored to the directory this backup was taken from: ${targetPath} (${backup.fileName})`
+        : `[Restore:custom] this archive carries no recorded origin — restoring into the requested directory: ${targetPath} (${backup.fileName})`
+    )
+  );
 
   const job = await db.restoreJob.create({
     data: {
@@ -2710,7 +2748,7 @@ export async function startCustomRestore(
   writeStateFile(state);
   g.__restoreRunning = true;
 
-  runCustomRestoreAsync(req, backup, state).catch((e) => {
+  runCustomRestoreAsync(effective, backup, state).catch((e) => {
     console.error("[restore:custom] unhandled error:", e);
   });
 
@@ -2723,7 +2761,7 @@ async function runCustomRestoreAsync(
   state: RestoreState
 ): Promise<void> {
   const ssh = new SshClient(dataDir());
-  const target = normalizeRestoreTargetPath(req.targetPath);
+  const target = normalizeRestoreTargetPath(String(req.targetPath ?? ""));
   // an hour is generous: a big archive over a slow link is legitimately slow,
   // and tar of a few hundred thousand small files is not instant either
   const LONG: SshExecOptions = { timeout: 3600000 };

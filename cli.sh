@@ -4,7 +4,7 @@
 #  Focused CLI: status, web-panel URL, password, port, logs,
 #  updates and uninstall. Everything else lives in the web panel.
 #
-#  v1.3.1: custom-path restore lives in the WEB PANEL only (Restore tab) —
+#  v1.3.0: custom-path restore lives in the WEB PANEL only (Restore tab) —
 #          the terminal menu stays a focused service console.
 #  v1.3.0: memory-safe streamed backups (single-panel runs no longer OOM),
 #          custom-path backups, English-only logs.

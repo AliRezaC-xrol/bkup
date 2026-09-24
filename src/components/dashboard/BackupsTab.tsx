@@ -11,7 +11,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Download, Trash2, RefreshCw, Inbox, ShieldCheck, ShieldAlert, ShieldX, FileDown, Search, X } from "lucide-react";
+import { Download, Trash2, RefreshCw, Inbox, ShieldCheck, ShieldAlert, ShieldX, FileDown, Search, X, AlertTriangle } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
@@ -331,6 +331,13 @@ export function BackupsTab({
                             </span>
                           );
                         })()
+                      ) : r.error && r.status === "success" ? (
+                        // a successful-but-incomplete custom-path archive — the
+                        // row is usable, the note must still be impossible to miss
+                        <span className="mt-0.5 inline-flex items-center gap-1 rounded bg-amber-500/10 px-1 py-0.5 text-[11px] font-medium text-amber-700" title={resolveText(r.error, "en")}>
+                          <AlertTriangle className="h-3 w-3 shrink-0" />
+                          {resolveText(r.error, "en")}
+                        </span>
                       ) : r.error && (
                         <span className="block truncate text-[11px] text-red-600" title={resolveText(r.error, "en")}>
                           {t("error_msg")}: {resolveText(r.error, "en")}

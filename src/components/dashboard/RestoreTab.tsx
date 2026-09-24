@@ -21,7 +21,7 @@ import {
   Cloud, Plus, Trash2, Copy, ExternalLink, Shield, Link2, Combine, FileDown, FolderOpen, Target,
 } from "lucide-react";
 import { resolveText } from "@/lib/messages";
-import { validateRestoreTargetPath, normalizeRestoreTargetPath } from "@/lib/restore-target-path";
+import { validateRestoreTargetPath, validateRestoreOriginPath, normalizeRestoreTargetPath } from "@/lib/restore-target-path";
 import { copyTextToClipboard } from "@/lib/copy-text";
 import { useToast } from "@/hooks/use-toast";
 import { useLang } from "@/components/dashboard/lang";
@@ -258,10 +258,10 @@ export function RestoreTab() {
     if (["3x-ui", "hmpanel", "pasarguard", "rebecca", "custom"].includes(own) && own !== selectedPanel) {
       setSelectedPanel(own);
     }
-    // prefill the target with the directory this archive was taken from —
-    // restoring it to the same place on the new server is the common case
-    if (own === "custom" && item.sourcePath) {
-      setTargetPath((prev) => prev.trim() || item.sourcePath!);
+    // a directory backup restores into the directory it was taken from — the
+    // field is filled from the backup itself (and locked in the confirm step)
+    if (own === "custom") {
+      setTargetPath(item.sourcePath ?? "");
     }
   }
 
@@ -429,14 +429,21 @@ export function RestoreTab() {
 
   // ── Start restore ──
   const isCustomRestore = selectedPanel === "custom";
-  const customTargetErr = isCustomRestore ? validateRestoreTargetPath(targetPath) : null;
+  // when the backup knows the directory it came from, that directory is the
+  // target — it cannot be edited (the API enforces the same rule)
+  const targetLocked = isCustomRestore && Boolean(selectedBackup?.sourcePath);
+  const customTargetErr = !isCustomRestore
+    ? null
+    : targetLocked
+      ? validateRestoreOriginPath(targetPath)
+      : validateRestoreTargetPath(targetPath);
 
   async function startRestore() {
     if (!selectedBackup || !selectedPanel) return;
 
     if (selectedPanel === "custom") {
       const tgt = normalizeRestoreTargetPath(targetPath);
-      const err = validateRestoreTargetPath(tgt);
+      const err = targetLocked ? validateRestoreOriginPath(tgt) : validateRestoreTargetPath(tgt);
       if (err) {
         toast({ title: t("restore_custom_target"), description: err, variant: "destructive" });
         return;
@@ -719,6 +726,7 @@ export function RestoreTab() {
               isCustom={isCustomRestore}
               targetPath={targetPath}
               targetPathError={customTargetErr}
+              targetLocked={targetLocked}
               onTargetPathChange={setTargetPath}
             />
           )}
@@ -1515,7 +1523,7 @@ function ConfirmStep({
   sshHost, sshPort, sshUser, backup, panel, installNode,
   enableSsl, sslMode, sslDomain, sslDomains, sslIp,
   cfEnabled, cfZoneName, cfSubEntries,
-  isCustom, targetPath, targetPathError, onTargetPathChange,
+  isCustom, targetPath, targetPathError, targetLocked, onTargetPathChange,
 }: {
   sshHost: string; sshPort: string; sshUser: string;
   backup: BackupItem | null; panel: PanelId | null;
@@ -1527,6 +1535,8 @@ function ConfirmStep({
   isCustom?: boolean;
   targetPath?: string;
   targetPathError?: string | null;
+  /** the target is the directory this backup was taken from — not editable */
+  targetLocked?: boolean;
   onTargetPathChange?: (v: string) => void;
 }) {
   const { t } = useLang();
@@ -1551,19 +1561,26 @@ function ConfirmStep({
               <Target className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
               {t("restore_custom_target")}
             </Label>
-            <Input
-              id="custom-target"
-              dir="ltr"
-              value={targetPath ?? ""}
-              onChange={(e) => onTargetPathChange?.(e.target.value)}
-              placeholder={t("restore_custom_target_ph")}
-              className="font-mono text-xs sm:text-sm"
-              aria-invalid={Boolean(targetPathError)}
-            />
+            <div className="flex items-center gap-2">
+              <Input
+                id="custom-target"
+                dir="ltr"
+                value={targetPath ?? ""}
+                onChange={(e) => onTargetPathChange?.(e.target.value)}
+                placeholder={t("restore_custom_target_ph")}
+                className="font-mono text-xs sm:text-sm"
+                readOnly={Boolean(targetLocked)}
+                aria-invalid={Boolean(targetPathError)}
+                aria-readonly={Boolean(targetLocked)}
+              />
+              {targetLocked && <Lock className="h-4 w-4 shrink-0 text-muted-foreground" />}
+            </div>
             <p className="text-[10px] leading-relaxed text-muted-foreground sm:text-xs">
               {targetPathError
                 ? <span className="text-red-600 font-medium">{targetPathError}</span>
-                : t("restore_custom_target_desc")}
+                : targetLocked
+                  ? t("restore_custom_target_origin")
+                  : t("restore_custom_target_desc")}
             </p>
           </div>
         )}

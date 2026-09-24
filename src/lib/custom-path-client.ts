@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
+import crypto from "node:crypto";
 import type { AppConfig } from "@/lib/config-service";
 import { bi, fail, type Bi } from "@/lib/messages";
 
@@ -129,25 +130,53 @@ export function validateCustomPath(
  * Back up one custom directory to destDir as a tar.gz.
  * Streams to disk — a directory can hold any amount of data, and buffering
  * it would OOM the service exactly like the panel backups used to.
+ *
+ * The result reports whether the archive is COMPLETE (`truncated: false`).
+ * A directory that hit the file/size ceiling or holds sub-directories the
+ * service cannot read produces a correct-but-incomplete archive: it is still
+ * a real backup, but the caller MUST surface the warning, otherwise a restore
+ * silently brings back less than the source directory held.
  */
 export async function customPathBackup(
   cfg: AppConfig,
   entry: CustomPath,
   destDir: string,
   rootDir: string
-): Promise<CustomResult<{ filePath: string; fileName: string; size: number; files: number }>> {
+): Promise<CustomResult<{
+  filePath: string;
+  fileName: string;
+  size: number;
+  files: number;
+  truncated: boolean;
+  skippedByLimit: number;
+  unreadableDirs: number;
+}>> {
   const problem = validateCustomPath(entry.path, rootDir);
   if (problem) return { ok: false, error: problem.en, errorBi: problem };
 
+  // second-precision stamps collide when two cycles run inside the same second
+  // (two history rows, one file — the earlier row's download/restore then hands
+  // back the newer content). Milliseconds keep every archive its own file.
   const stamp = new Date()
     .toISOString()
     .replace(/[:.]/g, "-")
-    .replace(/^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2}).*$/, "$1_$2$3$4");
+    .replace(/^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3}).*$/, "$1_$2$3$4$5");
   const slug =
     entry.label ||
     path.basename(entry.path).replace(/[^a-zA-Z0-9._-]+/g, "_") ||
     "custom";
-  const fileName = `custom_${slug.replace(/[^a-zA-Z0-9._-]+/g, "_")}_${stamp}.tar.gz`;
+  // Two DIFFERENT directories can share a label or a folder name (/opt/app and
+  // /srv/app). Without a discriminator both archives would get the SAME file
+  // name in the same second: the second one overwrote the first on disk while
+  // both history rows claimed a file — and a restore then unpacked the wrong
+  // directory. A short hash of the absolute source path keeps the name unique
+  // per directory and stable across cycles.
+  const uniq = crypto
+    .createHash("sha1")
+    .update(path.resolve(entry.path))
+    .digest("hex")
+    .slice(0, 8);
+  const fileName = `custom_${slug.replace(/[^a-zA-Z0-9._-]+/g, "_")}_${uniq}_${stamp}.tar.gz`;
   const filePath = path.join(destDir, fileName);
 
   await fs.promises.mkdir(destDir, { recursive: true });
@@ -192,23 +221,29 @@ export async function customPathBackup(
   let fileCount = 0;
   let totalBytes = 0;
   let skippedSecrets = 0;
+  // completeness accounting — see the CustomResult contract above
+  let skippedByLimit = 0;
+  let unreadableDirs = 0;
+  let hitLimit = false;
   // hard ceiling so a runaway directory cannot fill the disk
   const MAX_FILES = 20000;
   const MAX_BYTES = 8 * 1024 * 1024 * 1024; // 8 GB
 
   try {
     const stack: string[] = [entry.path];
-    while (stack.length) {
+    while (stack.length && !hitLimit) {
       const dir = stack.pop()!;
       let entries: fs.Dirent[];
       try {
         entries = await fs.promises.readdir(dir, { withFileTypes: true });
       } catch {
-        // unreadable subdirectory — skip it, keep the rest of the backup
+        // unreadable subdirectory — skip it, keep the rest of the backup.
+        // Counted so the caller can warn instead of reporting a clean backup.
+        unreadableDirs++;
         continue;
       }
       for (const ent of entries) {
-        if (fileCount >= MAX_FILES) break;
+        if (fileCount >= MAX_FILES) { hitLimit = true; break; }
         const full = path.join(dir, ent.name);
         const rel = path.relative(entry.path, full).split(path.sep).join("/");
         // symlinks are stored as themselves, never followed — following one
@@ -241,7 +276,7 @@ export async function customPathBackup(
         if (rel === "backup-manifest.json") continue;
         try {
           const st = await fs.promises.stat(full);
-          if (totalBytes + st.size > MAX_BYTES) continue;
+          if (totalBytes + st.size > MAX_BYTES) { skippedByLimit++; continue; }
           totalBytes += st.size;
           // stream the file — readFile() would buffer a multi-GB file in RAM
           // and OOM the service exactly the way panel backups used to
@@ -277,6 +312,10 @@ export async function customPathBackup(
         files: fileCount,
         bytes: totalBytes,
         skippedSecrets,
+        // completeness — anything non-zero here means the archive is INCOMPLETE
+        truncated: hitLimit || skippedByLimit > 0 || unreadableDirs > 0,
+        skippedByLimit,
+        unreadableDirs,
       }, null, 2),
       "utf8"
     ));
@@ -296,7 +335,18 @@ export async function customPathBackup(
   });
 
   const size = (await fs.promises.stat(filePath)).size;
-  return { ok: true, data: { filePath, fileName, size, files: fileCount } };
+  return {
+    ok: true,
+    data: {
+      filePath,
+      fileName,
+      size,
+      files: fileCount,
+      truncated: hitLimit || skippedByLimit > 0 || unreadableDirs > 0,
+      skippedByLimit,
+      unreadableDirs,
+    },
+  };
 }
 
 export { MAX_PATHS, MAX_LABEL };

@@ -419,6 +419,7 @@ export const dict = {
   restore_panel_custom_desc: "Restore a custom-path backup archive into a directory on the target server",
   restore_custom_target: "Target directory on the server",
   restore_custom_target_desc: "The archive is extracted into this directory. It must be an absolute path with at least two levels (e.g. /opt/myapp). System directories are refused.",
+  restore_custom_target_origin: "Restored to the directory this backup was taken from. The archive carries its own origin, so the target is locked — pick another backup to restore somewhere else.",
   restore_custom_target_ph: "/opt/myapp",
   restore_custom_target_warning: "Everything the archive contains is extracted over whatever is already in this directory.",
   restore_review_ssh: "Target server",

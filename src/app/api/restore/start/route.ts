@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAuthOrCli } from "@/lib/auth";
 import { startRestore, startCustomRestore, type RestoreRequest, type CustomRestoreRequest, type PanelId } from "@/lib/restore-service";
-import { normalizeRestoreTargetPath, validateRestoreTargetPath } from "@/lib/restore-target-path";
+import { normalizeRestoreTargetPath } from "@/lib/restore-target-path";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -39,12 +39,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "INVALID_PANEL" }, { status: 400 });
   }
 
-  // Custom-path restore: a directory archive is unpacked into targetPath.
+  // Custom-path restore: a directory archive is unpacked back into the
+  // directory it was taken from. That origin is recorded on the backup row and
+  // the service resolves it — `targetPath` is only a fallback for archives with
+  // no recorded origin (reassembled from parts / older rows), so it is not
+  // required here and is validated in the service, against whichever rule fits.
   // No panel install, no SSL, no Cloudflare — those fields are ignored.
   if (panel === "custom") {
     const targetPath = normalizeRestoreTargetPath(String((body as { targetPath?: string }).targetPath ?? ""));
-    const targetErr = validateRestoreTargetPath(targetPath);
-    if (targetErr) return NextResponse.json({ error: targetErr }, { status: 400 });
 
     const result = await startCustomRestore({
       sshHost: host,

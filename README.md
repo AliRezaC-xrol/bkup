@@ -104,7 +104,12 @@ Notes:
 - The directory holding `bkup` itself is protected — it cannot back itself up,
   and files such as `.env` and `.cli-secret` are always excluded.
 - An at-a-glance manifest (`backup-manifest.json`) is written into every
-  archive so its contents can be audited.
+  archive so its contents can be audited — it also carries the source
+  directory, the file/byte count and a `truncated` flag.
+- If a directory is larger than the 20 000-file / 8 GB ceiling, or holds
+  sub-directories the service cannot read, the archive is still delivered but
+  the run logs a **WARNING: the archive is INCOMPLETE** line and the manifest
+  marks it — a short archive is never passed off as a complete one.
 - File permissions (mode bits) are preserved, so a script backed up as
   executable restores as executable.
 
@@ -122,10 +127,12 @@ SSH — the archive is unpacked into a directory of your choice.
 
 Notes:
 
-- The target directory is created if it does not exist (`mkdir -p`); nothing
-  outside it is touched.
-- System directories (`/`, `/etc`, `/usr`, `/root`, …) and single-level paths
-  are refused, both in the panel and again on the server before extraction.
+- The target directory is the **original directory the archive was taken from**
+  (recorded per backup) and is created if it does not exist (`mkdir -p`);
+  nothing outside it is touched. An archive with no recorded origin (one
+  reassembled from Telegram parts) is restored into the directory you enter.
+- System directories (`/`, `/etc`, `/usr`, `/root`, …) are refused, both in the
+  panel and again on the server before extraction.
 - The archive is checked for members that would escape the target directory
   before `tar` runs — an unsafe archive is refused, not extracted.
 - After extraction, the file count is compared with the manifest's count; a
@@ -133,12 +140,15 @@ Notes:
 - The uploaded archive is removed from the target server when the restore
   finishes, whether it succeeded or failed.
 
-**From the terminal:** run `bkup` on the server and pick **item 12 —
-Restore custom-path backup over SSH**. An interactive wizard lists the
-custom-path archives, asks for the SSH details and target directory, and
-watches the restore step by step (with an option to cancel). It uses the
-same engine and validation as the panel flow, and everything it prints is
-also written to the English-only log.
+> **Restored where it came from.** A custom-path archive is always unpacked
+> back into the same directory it was taken from: bkup records the source
+> directory of every custom backup and restores into exactly that path, so a
+> directory backup behaves like a panel backup — it goes home. The target field
+> in the panel is filled from the backup and locked.
+>
+> The terminal menu of `bkup` has no custom-path restore item (item 12 was
+> removed) — directory archives are restored from the **web panel only**
+> (Restore tab).
 
 ## Restore Backup to a Server
 
@@ -174,7 +184,6 @@ Run `bkup` on the server:
 | **Stop panel** | stop the web panel service |
 | **Restart panel** | restart the web panel service |
 | **Update** | install the latest release in place, data preserved |
-| **Custom-path restore** | restore a custom path (DIR) backup onto a server over SSH |
 | **Uninstall** | remove the service and the application |
 
 ## License

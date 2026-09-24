@@ -25,6 +25,7 @@ export interface BackupOutcome {
   tgMessageId?: number;
   error?: string;  // canonical fa text
   errorBi?: Bi;    // bilingual pair for the web panel
+  warning?: string; // non-fatal note (e.g. an incomplete custom-path archive)
   durationMs: number;
 }
 
@@ -45,7 +46,11 @@ export function backupDir(): string {
 function timestampName(prefix: string, ext: string): string {
   const d = new Date();
   const p = (n: number) => String(n).padStart(2, "0");
-  const stamp = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+  const ms = String(d.getMilliseconds()).padStart(3, "0");
+  // milliseconds included: two runs inside the same second would otherwise
+  // produce the SAME file name and the second one would overwrite the first,
+  // leaving two history rows pointing at a single file.
+  const stamp = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}${ms}`;
   return `${prefix}-backup-${stamp}.${ext}`;
 }
 
@@ -72,6 +77,19 @@ export async function runBackup(trigger: "auto" | "manual"): Promise<CycleResult
     return { outcomes: [skip], ok: false, durationMs: 0 };
   }
   g.__xuiRunning = true;
+  try {
+    return await runBackupCycle(trigger);
+  } finally {
+    // The in-flight guard is ALWAYS released, even when the cycle throws
+    // outside a per-panel try/catch (a config read or a log write failing on a
+    // busy SQLite moment). Leaving it set used to block every later cycle with
+    // "the previous run is still in progress" until the service was restarted.
+    g.__xuiRunning = false;
+  }
+}
+
+/** The cycle itself — always invoked through runBackup(), which owns the guard. */
+async function runBackupCycle(trigger: "auto" | "manual"): Promise<CycleResult> {
   const cycleStart = Date.now();
 
   const cfg = await getConfig();
@@ -82,7 +100,6 @@ export async function runBackup(trigger: "auto" | "manual"): Promise<CycleResult
   if (trigger === "auto") {
     const newest = await db.backupRun.findFirst({ where: { trigger: "auto" }, orderBy: { startedAt: "desc" }, select: { startedAt: true } });
     if (newest && Date.now() - new Date(newest.startedAt).getTime() < Math.max(10, cfg.intervalSeconds) * 800) {
-      g.__xuiRunning = false;
       await log("warn", bi("A duplicate backup cycle within the same scheduling window was suppressed", "A duplicate backup cycle within the same scheduling window was suppressed"));
       return { outcomes: [], ok: true, durationMs: 0 };
     }
@@ -97,7 +114,6 @@ export async function runBackup(trigger: "auto" | "manual"): Promise<CycleResult
   for (const _ of customPaths) targets.push("custom");
 
   if (targets.length === 0) {
-    g.__xuiRunning = false;
     await log("warn", bi("Nothing to back up yet — enable a panel connection or add a custom path in Settings", "Nothing to back up yet — enable a panel connection or add a custom path in Settings"));
     return { outcomes: [], ok: false, durationMs: 0 };
   }
@@ -139,7 +155,6 @@ export async function runBackup(trigger: "auto" | "manual"): Promise<CycleResult
     await log("warn", bi(`Orphan-file cleanup hit an error: ${e instanceof Error ? e.message : String(e)}`, `Orphan-file cleanup hit an error: ${e instanceof Error ? e.message : String(e)}`));
   }
 
-  g.__xuiRunning = false;
   const ok = outcomes.length > 0 && outcomes.every((o) => o.status === "success");
   return { outcomes, ok, durationMs: Date.now() - cycleStart };
 }
@@ -401,6 +416,7 @@ async function runCustomBackup(
   }
 
   let outcome: BackupOutcome;
+  let outcomeWarning: string | undefined;
   try {
     const stagingDir = path.join(backupDir(), ".staging");
     fs.mkdirSync(stagingDir, { recursive: true });
@@ -409,12 +425,29 @@ async function runCustomBackup(
     if (!res.ok || !res.data) {
       throwBi(res.error ?? "The custom-path backup failed", res.errorBi?.en ?? res.error ?? "The custom-path backup failed");
     }
-    const { filePath, fileName, size, files } = res.data;
+    const { filePath, fileName, size, files, truncated, skippedByLimit, unreadableDirs } = res.data;
 
     const integrity = await verifyArchiveFile(fileName, filePath);
     if (!integrity.ok) throwBi(integrity.error!, integrity.errorBi!.en);
 
     await log("info", bi(`[Custom:${label}] backup file saved: ${fileName} (${formatSize(size)}, ${files} files)`, `[Custom:${label}] backup file saved: ${fileName} (${formatSize(size)}, ${files} files)`));
+
+    // An archive that hit the file/size ceiling or skipped unreadable
+    // sub-directories is a real backup of what could be read — but it is NOT
+    // a complete copy of the directory. Say so loudly instead of reporting a
+    // plain success: a restore would otherwise come back short with no trace.
+    if (truncated) {
+      const detail = [
+        skippedByLimit > 0 ? `${skippedByLimit} entr${skippedByLimit === 1 ? "y" : "ies"} skipped by the 20000-file / 8 GB ceiling` : "",
+        unreadableDirs > 0 ? `${unreadableDirs} sub-director${unreadableDirs === 1 ? "y" : "ies"} could not be read (permissions?)` : "",
+      ].filter(Boolean).join(", ");
+      const warnBi = bi(
+        `[Custom:${label}] WARNING: the archive is INCOMPLETE — ${detail}`,
+        `[Custom:${label}] WARNING: the archive is INCOMPLETE — ${detail}`
+      );
+      await log("warn", warnBi);
+      outcomeWarning = warnBi.en;
+    }
 
     const tg = await sendBackupFile(cfg, filePath, size, fileName, "custom-full", "custom");
     if (!tg.ok) {
@@ -439,12 +472,21 @@ async function runCustomBackup(
         fileSize: size,
         tgMessageId: tg.data!.messageIds[0],
         tgMessageIds: JSON.stringify(tg.data!.messageIds),
+        // an incomplete-but-real archive: the row stays "success" (it IS a
+        // usable backup) and carries the warning text, which the history view
+        // renders as a warning next to the row instead of hiding it
+        error: truncated
+          ? storeBi(
+              bi(`WARNING: the archive is INCOMPLETE — ${files} files`, `WARNING: the archive is INCOMPLETE — ${files} files`),
+              `WARNING: the archive is INCOMPLETE — ${files} files`
+            )
+          : null,
         durationMs,
       },
     });
 
     try {
-      await enforceLocalRetention(cfg, "custom");
+      await enforceLocalRetention(cfg, "custom", entry.path);
     } catch { /* retention is best-effort */ }
 
     outcome = {
@@ -455,6 +497,7 @@ async function runCustomBackup(
       fileName,
       fileSize: size,
       tgMessageId: tg.data!.messageIds[0],
+      warning: outcomeWarning,
       durationMs,
     };
   } catch (e: unknown) {
@@ -477,8 +520,46 @@ async function cleanupTelegramOld(cfg: Awaited<ReturnType<typeof getConfig>>) {
   const keep = cfg.tgAutoDeleteKeep;
   if (!keep || keep < 1) return;
   for (const panel of ALL_PANELS) {
+    // "custom" is not one panel: every configured directory delivers its own
+    // archive to the same chat. Counting them as one pool meant that with two
+    // paths and keep=1, the message of the path that ran first was deleted in
+    // the very cycle that had just uploaded it. Group per directory instead.
+    const groups = panel === "custom" ? await customSourceGroups() : [null];
+    for (const sourcePath of groups) {
+      await cleanupTelegramGroup(cfg, panel, keep, sourcePath);
+    }
+  }
+}
+
+/** Distinct source directories that have at least one delivered custom backup. */
+async function customSourceGroups(): Promise<string[]> {
+  const rows = await db.backupRun.findMany({
+    where: { panel: "custom", status: "success", tgMessageId: { not: null }, sourcePath: { not: null } },
+    distinct: ["sourcePath"],
+    select: { sourcePath: true },
+  });
+  const groups = rows.map((r) => r.sourcePath!).filter(Boolean);
+  // legacy rows without a recorded source keep the old pooled behaviour
+  const legacy = await db.backupRun.count({ where: { panel: "custom", sourcePath: null } });
+  if (legacy > 0) groups.push("");
+  return groups;
+}
+
+async function cleanupTelegramGroup(
+  cfg: Awaited<ReturnType<typeof getConfig>>,
+  panel: PanelId,
+  keep: number,
+  sourcePath: string | null
+) {
+  {
     const candidates = await db.backupRun.findMany({
-      where: { status: "success", panel, tgMessageId: { not: null }, tgDeleted: false },
+      where: {
+        status: "success",
+        panel,
+        tgMessageId: { not: null },
+        tgDeleted: false,
+        ...(sourcePath === null ? {} : { sourcePath: sourcePath === "" ? null : sourcePath }),
+      },
       orderBy: { startedAt: "desc" },
       skip: keep,
       take: 50,
@@ -519,12 +600,16 @@ async function cleanupTelegramOld(cfg: Awaited<ReturnType<typeof getConfig>>) {
  */
 async function enforceLocalRetention(
   cfg: Awaited<ReturnType<typeof getConfig>>,
-  panel: PanelId
+  panel: PanelId,
+  // Custom-path backups share the panel "custom"; the limit must apply to EACH
+  // configured directory, never to the pool of them — otherwise every cycle
+  // deleted the newest archive of the directory that had run before it.
+  sourcePath?: string
 ): Promise<void> {
   const keep = cfg.localRetention;
   if (!keep || keep < 1) return; // 0 = unlimited
   const runs = await db.backupRun.findMany({
-    where: { panel, filePath: { not: null } },
+    where: { panel, filePath: { not: null }, ...(sourcePath ? { sourcePath } : {}) },
     orderBy: { startedAt: "desc" },
     select: { id: true, filePath: true },
   });
