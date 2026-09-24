@@ -1,66 +1,70 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="480" viewBox="0 0 1200 480" role="img" aria-label="Your panels to bkup, then Telegram backups and server restore">
-  <rect x="1.5" y="1.5" width="1197" height="477" rx="22" fill="#161b22" stroke="#30363d" stroke-width="2"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="540" viewBox="0 0 1200 540" role="img" aria-label="Your panels to bkup, then Telegram backups and server restore">
+  <rect x="1.5" y="1.5" width="1197" height="537" rx="22" fill="#161b22" stroke="#30363d" stroke-width="2"/>
 
-  <!-- Panels -->
-  <rect x="60" y="58" width="250" height="84" rx="14" fill="#1c2128" stroke="#3d444d" stroke-width="2"/>
-  <text x="185" y="109" text-anchor="middle" font-family="Segoe UI,Helvetica,Arial,sans-serif" font-size="26" font-weight="600" fill="#e6edf3">3x-ui</text>
+  <text x="185" y="42" text-anchor="middle" font-family="Segoe UI,Helvetica,Arial,sans-serif" font-size="20" fill="#8b949e">Your panels</text>
 
-  <rect x="60" y="157" width="250" height="84" rx="14" fill="#1c2128" stroke="#3d444d" stroke-width="2"/>
-  <text x="185" y="208" text-anchor="middle" font-family="Segoe UI,Helvetica,Arial,sans-serif" font-size="26" font-weight="600" fill="#e6edf3">HM Panel</text>
+  <rect x="60" y="58" width="250" height="76" rx="14" fill="#1c2128" stroke="#3d444d" stroke-width="2"/>
+  <text x="185" y="105" text-anchor="middle" font-family="Segoe UI,Helvetica,Arial,sans-serif" font-size="26" font-weight="600" fill="#e6edf3">3x-ui</text>
 
-  <rect x="60" y="256" width="250" height="84" rx="14" fill="#1c2128" stroke="#3d444d" stroke-width="2"/>
-  <text x="185" y="307" text-anchor="middle" font-family="Segoe UI,Helvetica,Arial,sans-serif" font-size="26" font-weight="600" fill="#e6edf3">PasarGuard</text>
+  <rect x="60" y="150" width="250" height="76" rx="14" fill="#1c2128" stroke="#3d444d" stroke-width="2"/>
+  <text x="185" y="197" text-anchor="middle" font-family="Segoe UI,Helvetica,Arial,sans-serif" font-size="26" font-weight="600" fill="#e6edf3">HM Panel</text>
 
-  <rect x="60" y="355" width="250" height="84" rx="14" fill="#1c2128" stroke="#3d444d" stroke-width="2"/>
-  <text x="185" y="406" text-anchor="middle" font-family="Segoe UI,Helvetica,Arial,sans-serif" font-size="26" font-weight="600" fill="#e6edf3">Rebecca</text>
+  <rect x="60" y="242" width="250" height="76" rx="14" fill="#1c2128" stroke="#3d444d" stroke-width="2"/>
+  <text x="185" y="289" text-anchor="middle" font-family="Segoe UI,Helvetica,Arial,sans-serif" font-size="26" font-weight="600" fill="#e6edf3">PasarGuard</text>
 
-  <text x="185" y="42" text-anchor="middle" font-family="Segoe UI,Helvetica,Arial,sans-serif" font-size="20" font-weight="400" fill="#8b949e">Your panels</text>
+  <rect x="60" y="334" width="250" height="76" rx="14" fill="#1c2128" stroke="#3d444d" stroke-width="2"/>
+  <text x="185" y="381" text-anchor="middle" font-family="Segoe UI,Helvetica,Arial,sans-serif" font-size="26" font-weight="600" fill="#e6edf3">Rebecca</text>
 
-  <!-- Panels -> bkup -->
-  <line x1="310" y1="100" x2="352" y2="100" stroke="#58a6ff" stroke-width="3"/>
-  <line x1="310" y1="199" x2="352" y2="199" stroke="#58a6ff" stroke-width="3"/>
-  <line x1="310" y1="298" x2="352" y2="298" stroke="#58a6ff" stroke-width="3"/>
-  <line x1="310" y1="397" x2="352" y2="397" stroke="#58a6ff" stroke-width="3"/>
-  <line x1="352" y1="100" x2="352" y2="397" stroke="#58a6ff" stroke-width="3"/>
-  <line x1="352" y1="249" x2="486" y2="249" stroke="#58a6ff" stroke-width="3"/>
-  <polygon points="502,249 486,241 486,257" fill="#58a6ff"/>
-  <text x="427" y="235" text-anchor="middle" font-family="Segoe UI,Helvetica,Arial,sans-serif" font-size="16" font-weight="400" fill="#8b949e">full backup</text>
+  <rect x="60" y="426" width="250" height="76" rx="14" fill="#1c2128" stroke="#3d444d" stroke-width="2"/>
+  <text x="185" y="473" text-anchor="middle" font-family="Segoe UI,Helvetica,Arial,sans-serif" font-size="26" font-weight="600" fill="#e6edf3">Custom Paths</text>
 
-  <!-- bkup -->
-  <rect x="510" y="187" width="220" height="124" rx="18" fill="#1c2128" stroke="#58a6ff" stroke-width="2"/>
-  <text x="620" y="245" text-anchor="middle" font-family="Menlo,Consolas,monospace" font-size="34" font-weight="700" fill="#58a6ff">bkup</text>
-  <text x="620" y="287" text-anchor="middle" font-family="Segoe UI,Helvetica,Arial,sans-serif" font-size="18" font-weight="400" fill="#8b949e">backup &amp; restore</text>
+  <line x1="310" y1="96" x2="352" y2="96" stroke="#58a6ff" stroke-width="3"/>
+  <line x1="310" y1="188" x2="352" y2="188" stroke="#58a6ff" stroke-width="3"/>
+  <line x1="310" y1="280" x2="352" y2="280" stroke="#58a6ff" stroke-width="3"/>
+  <line x1="310" y1="372" x2="352" y2="372" stroke="#58a6ff" stroke-width="3"/>
+  <line x1="310" y1="464" x2="352" y2="464" stroke="#58a6ff" stroke-width="3"/>
 
-  <!-- bkup -> Telegram / Server trunk -->
-  <line x1="738" y1="249" x2="795" y2="249" stroke="#58a6ff" stroke-width="3"/>
+  <line x1="352" y1="94.5" x2="352" y2="465.5" stroke="#58a6ff" stroke-width="3"/>
+  <line x1="352" y1="280" x2="486" y2="280" stroke="#58a6ff" stroke-width="3"/>
 
-  <!-- Backup branch (Telegram) -->
-  <line x1="795" y1="249" x2="795" y2="160" stroke="#58a6ff" stroke-width="3"/>
-  <line x1="795" y1="160" x2="866" y2="160" stroke="#58a6ff" stroke-width="3"/>
-  <!-- Arrowhead with 8px gap from box -->
-  <polygon points="882,160 866,152 866,168" fill="#58a6ff"/>
-  <!-- Label centered above the arrow line -->
-  <text x="830" y="144" text-anchor="middle" font-family="Segoe UI,Helvetica,Arial,sans-serif" font-size="14" font-weight="700" fill="#58a6ff">backup file</text>
+  <polygon points="502,280 486,272 486,288" fill="#58a6ff"/>
 
-  <!-- Restore branch (Server) -->
-  <line x1="795" y1="249" x2="795" y2="350" stroke="#3fb950" stroke-width="3"/>
-  <line x1="795" y1="350" x2="866" y2="350" stroke="#3fb950" stroke-width="3"/>
-  <!-- Arrowhead with 8px gap from box -->
-  <polygon points="882,350 866,342 866,358" fill="#3fb950"/>
-  <!-- Label centered below the arrow line -->
-  <text x="830" y="374" text-anchor="middle" font-family="Segoe UI,Helvetica,Arial,sans-serif" font-size="14" font-weight="700" fill="#3fb950">Full restore</text>
+  <text x="427" y="266" text-anchor="middle" font-family="Segoe UI,Helvetica,Arial,sans-serif" font-size="16" fill="#8b949e">full backup</text>
 
-  <!-- Telegram -->
-  <rect x="890" y="105" width="250" height="110" rx="14" fill="#1c2128" stroke="#3d444d" stroke-width="2"/>
-  <text x="1015" y="154" text-anchor="middle" font-family="Segoe UI,Helvetica,Arial,sans-serif" font-size="26" font-weight="600" fill="#e6edf3">Telegram</text>
-  <text x="1015" y="188" text-anchor="middle" font-family="Segoe UI,Helvetica,Arial,sans-serif" font-size="18" font-weight="400" fill="#8b949e">your chat or channel</text>
+  <rect x="510" y="218" width="220" height="124" rx="18" fill="#1c2128" stroke="#58a6ff" stroke-width="2"/>
 
-  <!-- Server -->
-  <rect x="890" y="295" width="250" height="110" rx="14" fill="#1c2128" stroke="#3d444d" stroke-width="2"/>
-  <text x="1015" y="344" text-anchor="middle" font-family="Segoe UI,Helvetica,Arial,sans-serif" font-size="26" font-weight="600" fill="#e6edf3">Your server</text>
-  <text x="1015" y="378" text-anchor="middle" font-family="Segoe UI,Helvetica,Arial,sans-serif" font-size="18" font-weight="400" fill="#8b949e">restore destination</text>
+  <text x="620" y="276" text-anchor="middle" font-family="Menlo,Consolas,monospace" font-size="34" font-weight="700" fill="#58a6ff">bkup</text>
 
-  <!-- Explanation under server -->
-  <text x="1015" y="430" text-anchor="middle" font-family="Segoe UI,Helvetica,Arial,sans-serif" font-size="14" font-weight="400" fill="#8b949e">bkup connects to your server</text>
-  <text x="1015" y="450" text-anchor="middle" font-family="Segoe UI,Helvetica,Arial,sans-serif" font-size="14" font-weight="400" fill="#8b949e">and restores the backups</text>
+  <text x="620" y="318" text-anchor="middle" font-family="Segoe UI,Helvetica,Arial,sans-serif" font-size="18" fill="#8b949e">backup &amp; restore</text>
+
+  <line x1="730" y1="280" x2="795" y2="280" stroke="#58a6ff" stroke-width="3"/>
+  <line x1="795" y1="281.5" x2="795" y2="183.5" stroke="#58a6ff" stroke-width="3"/>
+  <line x1="795" y1="185" x2="866" y2="185" stroke="#58a6ff" stroke-width="3"/>
+
+  <polygon points="882,185 866,177 866,193" fill="#58a6ff"/>
+
+  <text x="830" y="169" text-anchor="middle" font-family="Segoe UI,Helvetica,Arial,sans-serif" font-size="14" font-weight="700" fill="#58a6ff">backup file</text>
+
+  <line x1="795" y1="281.5" x2="795" y2="376.5" stroke="#3fb950" stroke-width="3"/>
+  <line x1="795" y1="375" x2="866" y2="375" stroke="#3fb950" stroke-width="3"/>
+
+  <polygon points="882,375 866,367 866,383" fill="#3fb950"/>
+
+  <text x="830" y="399" text-anchor="middle" font-family="Segoe UI,Helvetica,Arial,sans-serif" font-size="14" font-weight="700" fill="#3fb950">Full restore</text>
+
+  <rect x="890" y="130" width="250" height="110" rx="14" fill="#1c2128" stroke="#3d444d" stroke-width="2"/>
+
+  <text x="1015" y="179" text-anchor="middle" font-family="Segoe UI,Helvetica,Arial,sans-serif" font-size="26" font-weight="600" fill="#e6edf3">Telegram</text>
+
+  <text x="1015" y="213" text-anchor="middle" font-family="Segoe UI,Helvetica,Arial,sans-serif" font-size="18" fill="#8b949e">your chat or channel</text>
+
+  <rect x="890" y="320" width="250" height="110" rx="14" fill="#1c2128" stroke="#3d444d" stroke-width="2"/>
+
+  <text x="1015" y="369" text-anchor="middle" font-family="Segoe UI,Helvetica,Arial,sans-serif" font-size="26" font-weight="600" fill="#e6edf3">Your server</text>
+
+  <text x="1015" y="403" text-anchor="middle" font-family="Segoe UI,Helvetica,Arial,sans-serif" font-size="18" fill="#8b949e">restore destination</text>
+
+  <text x="1015" y="458" text-anchor="middle" font-family="Segoe UI,Helvetica,Arial,sans-serif" font-size="14" fill="#8b949e">bkup connects to your server</text>
+
+  <text x="1015" y="478" text-anchor="middle" font-family="Segoe UI,Helvetica,Arial,sans-serif" font-size="14" fill="#8b949e">and restores the backups</text>
 </svg>
