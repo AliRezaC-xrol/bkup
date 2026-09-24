@@ -98,8 +98,18 @@ export async function runBackup(trigger: "auto" | "manual"): Promise<CycleResult
 
   if (targets.length === 0) {
     g.__xuiRunning = false;
-    await log("warn", bi("No panel is enabled — first enable a panel connection in Settings", "No panel is enabled — first enable a panel connection in Settings"));
+    await log("warn", bi("Nothing to back up yet — enable a panel connection or add a custom path in Settings", "Nothing to back up yet — enable a panel connection or add a custom path in Settings"));
     return { outcomes: [], ok: false, durationMs: 0 };
+  }
+
+  // Custom-path-only mode is fully supported: with no panel connection enabled
+  // the cycle backs up just the configured directories — no panel is required.
+  const panelTargets = targets.filter((t) => t !== "custom").length;
+  if (panelTargets === 0 && customPaths.length > 0) {
+    await log("info", bi(
+      `Custom-path-only mode — no panel connection is enabled, backing up ${customPaths.length} custom path(s)`,
+      `Custom-path-only mode — no panel connection is enabled, backing up ${customPaths.length} custom path(s)`
+    ));
   }
 
   // the per-entry custom-path runs need their own iterator — a "custom"
