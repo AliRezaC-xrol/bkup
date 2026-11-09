@@ -159,8 +159,12 @@ info "    latest release: ${C}${TAG}${N}  ${D}(this — and only this — will b
 RELEASE_SRC=""
 # Download into a temp dir on the SAME filesystem as APP_DIR so a small
 # tmpfs on /tmp can never be the bottleneck (the v1.3.1 "474MB free" bug).
-if [ -d "$APP_DIR" ] && [ -w "$APP_DIR" ]; then
-  BKUP_INSTALL_TMP="$APP_DIR/.bkup-install-tmp"
+# Keep the staging dir NEXT TO APP_DIR (same filesystem, but not inside it):
+# an older release's cleanup helper must never be able to delete the source
+# we are about to copy. /tmp is only a last resort.
+INSTALL_PARENT="$(dirname "$APP_DIR")"
+if [ -d "$INSTALL_PARENT" ] && [ -w "$INSTALL_PARENT" ]; then
+  BKUP_INSTALL_TMP="$INSTALL_PARENT/.bkup-install-tmp"
 else
   BKUP_INSTALL_TMP="/tmp/bkup-install"
 fi
@@ -197,6 +201,40 @@ fetch_release || die "could not download release ${TAG} from GitHub.
 # output hook so every message goes through the colored installer UI.
 source "$RELEASE_SRC/scripts/lib-dguard.sh" || source ./scripts/lib-dguard.sh
 dg_emit() { info "$*"; }
+
+# This installer may be newer than the release tarball it just downloaded.
+# Never let an older guard library shadow the fixes below.
+dg_avail_mb() {
+  local target="$1"
+  [ -e "$target" ] || target="$(dirname "$target" 2>/dev/null)"
+  [ -e "$target" ] || target="/"
+  local out m
+  for c in "df -Pm" "df -m" "df -BM"; do
+    out="$($c "$target" 2>/dev/null | tail -1)"
+    [ -n "$out" ] || continue
+    m="$(printf '%s' "$out" | awk '{print $4}')"
+    [ -n "$m" ] && [ "$m" -ge 0 ] 2>/dev/null && { printf '%s' "$m"; return 0; }
+  done
+  m="$(df -k "$target" 2>/dev/null | tail -1 | awk '{print int($4/1024)}')"
+  printf '%s' "${m:-0}"
+}
+dg_free_space() {
+  local app="${DG_APP_DIR:-}"
+  dg_say "space-cleanup: removing regenerable caches and stale files…"
+  rm -rf /tmp/bkup-install /tmp/bkup-install.tar.gz \
+         /tmp/abx-update /tmp/abx-update.tar.gz 2>/dev/null || true
+  find /tmp -maxdepth 1 -name 'bkup-package-backup-*.json' -delete 2>/dev/null || true
+  if [ -n "$app" ] && [ -d "$app" ]; then
+    rm -rf "$app/.next/cache" 2>/dev/null || true
+    rm -rf "$app/.scripts-new" 2>/dev/null || true
+    rm -f "$app/.install.sh.new" "$app/.cli.sh.new" 2>/dev/null || true
+  fi
+  if command -v npm >/dev/null 2>&1; then npm cache clean --force >/dev/null 2>&1 || true; fi
+  if command -v bun >/dev/null 2>&1; then bun pm cache rm >/dev/null 2>&1 || true; fi
+  if command -v apt-get >/dev/null 2>&1; then apt-get clean >/dev/null 2>&1 || true; fi
+  if command -v dnf >/dev/null 2>&1; then dnf clean all >/dev/null 2>&1 || true; fi
+  if command -v journalctl >/dev/null 2>&1; then journalctl --vacuum-size=50M >/dev/null 2>&1 || true; fi
+}
 
 # FIRST: reclaim a leftover legacy 2GB /swapfile BEFORE measuring —
 # on servers that ran v1.0–v1.3.0 freeing that file alone often makes
@@ -301,7 +339,6 @@ else
   cp -a "$RELEASE_SRC/." "$APP_DIR/" || die "cannot copy source to ${APP_DIR}"
   ok "source ready: ${TAG}"
 fi
-rm -rf "$BKUP_INSTALL_TMP" "${BKUP_INSTALL_TMP}.tar.gz"
 
 # final guarantee: the code on disk IS the latest release.
 # Force-overwrite package.json (a stale/higher on-disk version must never
@@ -318,6 +355,7 @@ if [ "$INSTALLED_V" != "${TAG#v}" ]; then
 else
   ok "verified: installed code = latest release ${TAG}"
 fi
+rm -rf "$BKUP_INSTALL_TMP" "${BKUP_INSTALL_TMP}.tar.gz"
 
 # ── 3. port ─────────────────────────────────────────────────
 info "[3/8] Web panel port"
@@ -332,7 +370,8 @@ fi
 if [ "${SKIP_QUESTIONS:-0}" != "1" ]; then
   echo -e "    ${B}1)${N} Random port   ${D}(recommended)${N}"
   echo -e "    ${B}2)${N} Custom port"
-  read -rp "    choose [1/2, default 1]: " pchoice
+  pchoice=""
+  [ -t 0 ] && read -rp "    choose [1/2, default 1]: " pchoice
   if [ "$pchoice" = "2" ]; then
     read -rp "    port [10000-65000]: " PORT
     [[ "$PORT" =~ ^[0-9]+$ ]] && [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] || die "invalid port"
@@ -354,13 +393,23 @@ if [ "$PW_SET" != "1" ]; then
   info "[4/8] Web panel password (protects the panel)"
   echo -e "    ${B}1)${N} I will type it"
   echo -e "    ${B}2)${N} Generate a strong random password"
-  read -rp "    choose [1/2, default 1]: " pwchoice
+  pwchoice=""
+  if [ -t 0 ]; then
+    read -rp "    choose [1/2, default 1]: " pwchoice
+  else
+    pwchoice="2"   # non-interactive: generate a strong password
+  fi
   if [ "$pwchoice" = "2" ]; then
     PANEL_PW="$(head -c 16 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 12)"
   else
     while true; do
-      read -rsp "    password (min 4 chars): " PANEL_PW; echo ""
+      read -rsp "    password (min 4 chars): " PANEL_PW || PANEL_PW=""
+      echo ""
       [ "${#PANEL_PW}" -ge 4 ] && break
+      if [ ! -t 0 ]; then
+        PANEL_PW="$(head -c 16 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 12)"
+        break
+      fi
       echo -e "    ${Y}too short, try again${N}"
     done
   fi

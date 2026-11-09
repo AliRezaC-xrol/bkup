@@ -382,10 +382,6 @@ if [ "$USED_PREBUILT" != "1" ]; then
 fi
 rm -f "$PKG_BACKUP"
 
-  exit 1
-fi
-rm -f "$PKG_BACKUP"
-
 # ── Post-build verification: ensure standalone has correct version
 STANDALONE_PKG="$APP_DIR/.next/standalone/package.json"
 if [ -f "$STANDALONE_PKG" ]; then
