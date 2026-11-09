@@ -191,19 +191,37 @@ fetch_release || die "could not download release ${TAG} from GitHub.
 source "$RELEASE_SRC/scripts/lib-dguard.sh" || source ./scripts/lib-dguard.sh
 dg_emit() { info "$*"; }
 
+# FIRST: reclaim a leftover legacy 2GB /swapfile BEFORE measuring —
+# on servers that ran v1.0–v1.3.0 freeing that file alone often makes
+# the disk big enough again (v1.3.1.1: it used to run too late,
+# AFTER the pre-flight check, so such servers were blocked for nothing).
+dg_reclaim_legacy_swap || true
+
 # Pre-flight: measure BEFORE copying anything. On a small root the old
 # behavior kept going until node_modules + the build filled the disk and
 # everything died on ENOSPC. Now we abort cleanly with a readable number.
+NEED_MB="$DG_INSTALL_MIN_MB"
+if [ -f "$APP_DIR/package.json" ]; then
+  # refresh of an existing install reuses node_modules and .next —
+  # the real need is the update-style footprint, not a full fresh one
+  NEED_MB="$DG_UPDATE_MIN_MB"
+  ok "existing install found — refresh mode (needs ${NEED_MB}MB, unchanged install on disk)"
+fi
 AVAIL_ROOT="$(dg_avail_mb "$APP_DIR")"
 AVAIL_TMP="$(dg_avail_mb /tmp)"
 AVAIL_RUN="${AVAIL_ROOT:-0}"; [ -n "$AVAIL_TMP" ] && [ "$AVAIL_TMP" -lt "$AVAIL_RUN" ] 2>/dev/null && AVAIL_RUN="$AVAIL_TMP"
-if [ "${AVAIL_RUN:-0}" -lt "$DG_INSTALL_MIN_MB" ]; then
-  die "Not enough disk space: ${AVAIL_RUN:-0}MB free (need ${DG_INSTALL_MIN_MB}MB).
-    v1.3.1 note: this used to continue and fill the disk (2G swap + node_modules
-    + build artifacts), crashing the server. Free space on the root filesystem
-    and re-run the installer. Nothing was written to your server yet."
+if [ "${AVAIL_RUN:-0}" -lt "$NEED_MB" ]; then
+  die "Not enough disk space: ${AVAIL_RUN:-0}MB free — ${NEED_MB:-2600}MB needed.
+    The installer refuses to continue on purpose: it can NEVER fill your disk
+    (that was the v1.3.0 crash). NOTHING was written to your server yet.
+    Fastest fixes — run any of these, then re-run the installer:
+      swapoff /swapfile 2>/dev/null; rm -f /swapfile; sed -i '/^\\/swapfile /d' /etc/fstab   (frees ~2GB if an old swapfile exists)
+      apt-get clean; journalctl --vacuum-time=1d; rm -rf /tmp/bkup-install /tmp/bkup-install.tar.gz
+      see what is eating the disk:  du -h --max-depth=1 / 2>/dev/null | sort -rh | head -15
+    or install on a filesystem with more room:
+      APP_DIR=/path/to/larger/dir bash install.sh"
 fi
-ok "disk check: ${AVAIL_RUN}MB free (need ${DG_INSTALL_MIN_MB}MB) — root is big enough"
+ok "disk check: ${AVAIL_RUN}MB free (need ${NEED_MB}MB) — root is big enough"
 
 # code-only refresh list — db, backups, .env, secrets, node_modules
 # and .next are NEVER touched on an existing installation
