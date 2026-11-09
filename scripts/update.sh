@@ -332,17 +332,44 @@ if ! dg_report_disk "$APP_DIR" "$DG_UPDATE_MIN_MB" "update build"; then
   exit 1
 fi
 
-say "==> [3/6] Installing dependencies + generating Prisma client…"
-if ! bash "$SCRIPT_DIR/build-native.sh"; then
-  # ── CRITICAL FIX: restore package.json on build failure so next update retries
-  if [ -f "$PKG_BACKUP" ]; then
-    cp -a "$PKG_BACKUP" "$APP_DIR/package.json" 2>/dev/null || true
-    say "    ↩ restored package.json to v$FROM_V (build failed, will retry on next update)"
+say "==> [3/6] Installing dependencies + generating Prisma client..."
+# fast path: pre-built standalone asset from the GitHub release
+PREBUILT_URL=""
+if [ -n "${TAG:-}" ]; then
+  PREBUILT_URL="$(curl -sf "${AUTH[@]}" --max-time 15 "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null | grep -o '"browser_download_url": *"[^"]*bkup-standalone[^"]*"' | head -1 | cut -d'"' -f4)" || PREBUILT_URL=""
+fi
+
+USED_PREBUILT=0
+if [ -n "$PREBUILT_URL" ]; then
+  say "    pre-built release asset found - fast update (no build)"
+  rm -rf "$APP_DIR/.next/standalone"
+  mkdir -p "$APP_DIR/.next/standalone"
+  if curl -fL "${AUTH[@]}" --max-time 600 --retry 2 "$PREBUILT_URL" -o "$APP_DIR/.abx-prebuilt.tar.gz" >/dev/null 2>&1 && [ -s "$APP_DIR/.abx-prebuilt.tar.gz" ] && tar -xzf "$APP_DIR/.abx-prebuilt.tar.gz" -C "$APP_DIR/.next/standalone" 2>/dev/null; then
+    USED_PREBUILT=1
+    cp -a "$APP_DIR/package.json" "$APP_DIR/.next/standalone/package.json" 2>/dev/null || true
   fi
-  write_state error "$FROM_V" "" "build failed"
-  say "[FAIL] build failed — previous version is still running (v$FROM_V)"
-  say "       Fix the build error and run update again. Package.json restored to v$FROM_V so update will retry."
-  rm -f "$PKG_BACKUP"
+  rm -f "$APP_DIR/.abx-prebuilt.tar.gz" 2>/dev/null || true
+fi
+
+if [ "$USED_PREBUILT" != "1" ]; then
+  if [ -n "$PREBUILT_URL" ]; then
+    say "    pre-built asset failed - falling back to source build"
+  fi
+  if ! bash "$SCRIPT_DIR/build-native.sh"; then
+    # CRITICAL FIX: restore package.json on build failure so next update retries
+    if [ -f "$PKG_BACKUP" ]; then
+      cp -a "$PKG_BACKUP" "$APP_DIR/package.json" 2>/dev/null || true
+      say "    restored package.json to v$FROM_V (build failed, will retry on next update)"
+    fi
+    write_state error "$FROM_V" "" "build failed"
+    say "[FAIL] build failed - previous version is still running (v$FROM_V)"
+    say "       Fix the build error and run update again. Package.json restored to v$FROM_V so update will retry."
+    rm -f "$PKG_BACKUP"
+    exit 1
+  fi
+fi
+rm -f "$PKG_BACKUP"
+
   exit 1
 fi
 rm -f "$PKG_BACKUP"

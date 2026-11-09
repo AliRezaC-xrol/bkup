@@ -346,43 +346,62 @@ if [ "$PW_SET" != "1" ]; then
 fi
 
 # ── 5. build ────────────────────────────────────────────────
-info "[5/8] Installing dependencies & building (2–6 min)…"
+info "[5/8] Installing dependencies & building..."
 cd "$APP_DIR" || die "cannot enter ${APP_DIR}"
 mkdir -p db backups data
 
-# ── low-RAM guard swap: ADAPTIVE (v1.3.1) ─────────────────────
-# v1.0–v1.3.0 created a blind 2G /swapfile here. On small disks that
-# swapfile alone filled half the disk and the install died. The guard
-# library now: reclaims an old 2G swapfile, sizes swap = min(1G, 90% RAM,
-# free-disk room), keeps a 600MB disk floor, and cleans itself up on any
-# failure instead of leaving garbage on disk.
-dg_setup_swap
-if [ "$PKG_MGR" = "bun" ]; then
-  bun install --frozen-lockfile >/dev/null 2>&1 || bun install >/dev/null
-  bunx prisma generate >/dev/null
-  DATABASE_URL="file:$APP_DIR/db/custom.db" bunx prisma db push --skip-generate >/dev/null
-  bun run build >/dev/null 2>&1 || die "build failed — run 'bash scripts/build-native.sh' to see the error"
-else
-  npm install --no-audit --no-fund >/dev/null 2>&1 || die "npm install failed"
-  npx prisma generate >/dev/null
-  DATABASE_URL="file:$APP_DIR/db/custom.db" npx prisma db push --skip-generate >/dev/null
-  # --max-old-space-size keeps the Node heap bounded during the build so a
-  # MODEST swap (≤ 1GB) is enough even with 1GB RAM servers.
-  NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=1024" \
-    npm run build >/dev/null 2>&1 || die "build failed — run 'npm run build' to see the error"
+# fast path: pre-built standalone asset from the GitHub release
+PREBUILT_URL=""
+if [ -n "${TAG:-}" ]; then
+  PREBUILT_URL="$(curl -sf "${GH_AUTH[@]}" --max-time 15 "https://api.github.com/repos/${REPO_SLUG}/releases/latest" 2>/dev/null | grep -o '"browser_download_url": *"[^"]*bkup-standalone[^"]*"' | head -1 | cut -d'"' -f4)" || PREBUILT_URL=""
 fi
-rm -rf .next/standalone/public .next/standalone/.next/static
-cp -r public .next/standalone/public
-mkdir -p .next/standalone/.next
-cp -r .next/static .next/standalone/.next/static
+
+USED_PREBUILT=0
+if [ -n "$PREBUILT_URL" ]; then
+  info "    pre-built release asset found - fast install (no build, ~30-60s)"
+  dg_setup_swap
+  rm -rf "$APP_DIR/.next/standalone"
+  mkdir -p "$APP_DIR/.next/standalone"
+  if curl -fL "${GH_AUTH[@]}" --max-time 600 --retry 2 "$PREBUILT_URL" -o "${BKUP_INSTALL_TMP}.prebuilt.tar.gz" >/dev/null 2>&1 && [ -s "${BKUP_INSTALL_TMP}.prebuilt.tar.gz" ] && tar -xzf "${BKUP_INSTALL_TMP}.prebuilt.tar.gz" -C "$APP_DIR/.next/standalone" 2>/dev/null; then
+    USED_PREBUILT=1
+    npx prisma generate >/dev/null 2>&1 || true
+    DATABASE_URL="file:$APP_DIR/db/custom.db" npx prisma db push --skip-generate >/dev/null 2>&1 || true
+  fi
+  rm -f "${BKUP_INSTALL_TMP}.prebuilt.tar.gz" 2>/dev/null || true
+fi
+
+if [ "$USED_PREBUILT" != "1" ]; then
+  if [ -n "$PREBUILT_URL" ]; then
+    echo -e "    ${Y}pre-built asset failed - falling back to source build${N}"
+  fi
+  info "    building from source (2-6 min)..."
+  dg_setup_swap
+  if [ "$PKG_MGR" = "bun" ]; then
+    bun install --frozen-lockfile >/dev/null 2>&1 || bun install >/dev/null
+    bunx prisma generate >/dev/null
+    DATABASE_URL="file:$APP_DIR/db/custom.db" bunx prisma db push --skip-generate >/dev/null
+    bun run build >/dev/null 2>&1 || die "build failed - run 'bash scripts/build-native.sh' to see the error"
+  else
+    npm install --no-audit --no-fund >/dev/null 2>&1 || die "npm install failed"
+    npx prisma generate >/dev/null
+    DATABASE_URL="file:$APP_DIR/db/custom.db" npx prisma db push --skip-generate >/dev/null
+    NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=1024" npm run build >/dev/null 2>&1 || die "build failed - run 'npm run build' in $APP_DIR to see the real error"
+  fi
+  rm -rf .next/standalone/public .next/standalone/.next/static
+  cp -r public .next/standalone/public 2>/dev/null || true
+  mkdir -p .next/standalone/.next
+  cp -r .next/static .next/standalone/.next/static 2>/dev/null || true
+fi
+
 mkdir -p .next/standalone/data
 if [ -d "$APP_DIR/data" ]; then
   cp -a "$APP_DIR/data/." .next/standalone/data/ 2>/dev/null || true
 fi
-# Critical fix: copy package.json into standalone for version fallback
 cp -a "$APP_DIR/package.json" .next/standalone/package.json 2>/dev/null || true
-[ -f .next/standalone/server.js ] || die "build output is incomplete (standalone/server.js missing) — run 'npm run build' in $APP_DIR to see the real error"
+
+[ -f .next/standalone/server.js ] || die "build output is incomplete (standalone/server.js missing)"
 ok "build complete"
+
 
 # ── 6. configuration files ──────────────────────────────────
 info "[6/8] Writing configuration…"
