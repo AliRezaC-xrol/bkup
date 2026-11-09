@@ -40,6 +40,11 @@ jobs:
 
       - name: Package standalone
         run: |
+          # a Next.js standalone bundle does NOT include public/ or .next/static
+          # by itself — the installer expects a complete, runnable tree
+          cp -a public .next/standalone/public
+          mkdir -p .next/standalone/.next
+          cp -a .next/static .next/standalone/.next/static
           cd .next/standalone
           tar -czf ../../bkup-standalone.tar.gz .
 

@@ -260,9 +260,13 @@ if [ -n "${TAG:-}" ]; then
 fi
 
 if [ -n "$PREBUILT_URL_EARLY" ] && [ -d "$APP_DIR" ]; then
-  # Pre-built path skips the build entirely, so node_modules and the old
-  # .next tree are pure dead weight on a full disk — reclaim them now.
-  rm -rf "$APP_DIR/node_modules" "$APP_DIR/.next" 2>/dev/null || true
+  # Pre-built path skips the build, so node_modules and the old .next tree
+  # are pure dead weight — but only reclaim them when space is actually
+  # tight, so an interrupted install never damages a healthy deployment.
+  _avail_now="$(dg_avail_mb "$APP_DIR")"
+  if [ "${_avail_now:-0}" -lt 400 ]; then
+    rm -rf "$APP_DIR/node_modules" "$APP_DIR/.next" 2>/dev/null || true
+  fi
 fi
 
 NEED_MB="$DG_INSTALL_MIN_MB"
@@ -435,6 +439,8 @@ if [ -n "$PREBUILT_URL" ]; then
   mkdir -p "$APP_DIR/.next/standalone"
   if curl -fL "${GH_AUTH[@]}" --max-time 600 --retry 2 "$PREBUILT_URL" 2>/dev/null | tar -xzf - -C "$APP_DIR/.next/standalone" 2>/dev/null; then
     USED_PREBUILT=1
+    # older release assets omitted these; make sure the panel can serve the UI
+    [ -d "$APP_DIR/.next/standalone/public" ] || cp -a "$APP_DIR/public" "$APP_DIR/.next/standalone/public" 2>/dev/null || true
     npx prisma generate >/dev/null 2>&1 || true
     DATABASE_URL="file:$APP_DIR/db/custom.db" npx prisma db push --skip-generate >/dev/null 2>&1 || true
   fi

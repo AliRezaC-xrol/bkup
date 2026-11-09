@@ -358,6 +358,7 @@ if [ -n "$PREBUILT_URL" ]; then
   mkdir -p "$APP_DIR/.next/standalone"
   if curl -fL "${AUTH[@]}" --max-time 600 --retry 2 "$PREBUILT_URL" 2>/dev/null | tar -xzf - -C "$APP_DIR/.next/standalone" 2>/dev/null; then
     USED_PREBUILT=1
+    [ -d "$APP_DIR/.next/standalone/public" ] || cp -a "$APP_DIR/public" "$APP_DIR/.next/standalone/public" 2>/dev/null || true
     cp -a "$APP_DIR/package.json" "$APP_DIR/.next/standalone/package.json" 2>/dev/null || true
   fi
   rm -f "$APP_DIR/.abx-prebuilt.tar.gz" 2>/dev/null || true
