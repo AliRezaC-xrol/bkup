@@ -36,13 +36,19 @@ connection with one click. The backup interval is set in **seconds**.
 - **Memory-Safe Transfers:** Every archive is streamed to disk and uploaded in sliced parts, so even multi-gigabyte backups fit the service memory limit. Backing up a single panel alone never crashes the service.
 - **Web Panel:** Live logs, backup history, Reassemble, Restore.
 
-> **v1.3.0** adds **Custom Paths** backup and **Custom Paths restore** (unpack a
-> directory archive onto a server over SSH), fixes the crash that killed the
-> service when only one panel (e.g. HM Panel) was backed up, fixes the **Copy
-> shown** button in the log panel, and makes every server log and message
-> English — old Persian log rows are translated once at boot. See
+> **v1.3.1** fixes installs on **low-disk servers**: the swap guard no
+> longer creates a blind 2 GB swapfile on small-RAM boxes — swap is now
+> adaptive (max 1 GB, sized by free disk with a 600 MB floor), a disk
+> pre-flight check aborts cleanly when the root filesystem is too small,
+> leftover 2 GB swapfiles from old installs are reclaimed, and swap
+> creation always cleans up after a failure. See
 > [Releases](https://github.com/AliRezaC-xrol/bkup/releases) for the full
 > changelog.
+>
+> **v1.3.0** added **Custom Paths** backup and restore, fixed the crash
+> that killed the service when only one panel was backed up, fixed the
+> **Copy shown** button in the log panel, and made every server log and
+> message English.
 
 ## Install
 

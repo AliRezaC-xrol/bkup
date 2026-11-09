@@ -13,6 +13,18 @@
 #  Re-running it on an existing server UPDATES the code in place
 #  and PRESERVES all data, settings and backups.
 #
+#  v1.3.1 — low-disk servers now install correctly:
+#    · the installer used to create a blind 2 GB /swapfile on every
+#      small-RAM server; on a 4–6 GB disk that ate half the drive and
+#      the build then filled what was left (ENOSPC crash, dead server)
+#    · swap is now ADAPTIVE: min(1 GB, 90% of RAM, free-disk room) with
+#      a hard 600 MB free-disk floor — never more than 1 GB, ever
+#    · a disk PRE-FLIGHT check aborts cleanly (nothing written) when the
+#      root filesystem is too small, instead of filling it and crashing
+#    · a leftover 2 GB swapfile from old installs is reclaimed and the
+#      freed space given back to the disk
+#    · swap creation cleans up after itself on every failure path
+#
 #  v1.3.0 — memory-safe backups + custom paths:
 #    · single-panel backups no longer crash the service: every archive is
 #      STREAMED to disk and uploaded in sliced parts, so a 400MB systemd
@@ -173,6 +185,26 @@ fetch_release() {
 fetch_release || die "could not download release ${TAG} from GitHub.
     Nothing was changed on your server. Check connectivity (or GITHUB_TOKEN) and run again."
 
+# ── disk & swap guard (v1.3.1) ───────────────────────────────
+# Sourced from the release we just verified. Override the lib's default
+# output hook so every message goes through the colored installer UI.
+source "$RELEASE_SRC/scripts/lib-dguard.sh" || source ./scripts/lib-dguard.sh
+dg_emit() { info "$*"; }
+
+# Pre-flight: measure BEFORE copying anything. On a small root the old
+# behavior kept going until node_modules + the build filled the disk and
+# everything died on ENOSPC. Now we abort cleanly with a readable number.
+AVAIL_ROOT="$(dg_avail_mb "$APP_DIR")"
+AVAIL_TMP="$(dg_avail_mb /tmp)"
+AVAIL_RUN="${AVAIL_ROOT:-0}"; [ -n "$AVAIL_TMP" ] && [ "$AVAIL_TMP" -lt "$AVAIL_RUN" ] 2>/dev/null && AVAIL_RUN="$AVAIL_TMP"
+if [ "${AVAIL_RUN:-0}" -lt "$DG_INSTALL_MIN_MB" ]; then
+  die "Not enough disk space: ${AVAIL_RUN:-0}MB free (need ${DG_INSTALL_MIN_MB}MB).
+    v1.3.1 note: this used to continue and fill the disk (2G swap + node_modules
+    + build artifacts), crashing the server. Free space on the root filesystem
+    and re-run the installer. Nothing was written to your server yet."
+fi
+ok "disk check: ${AVAIL_RUN}MB free (need ${DG_INSTALL_MIN_MB}MB) — root is big enough"
+
 # code-only refresh list — db, backups, .env, secrets, node_modules
 # and .next are NEVER touched on an existing installation
 CODE_ITEMS=(src prisma public scripts docs docker .github
@@ -274,15 +306,13 @@ info "[5/8] Installing dependencies & building (2–6 min)…"
 cd "$APP_DIR" || die "cannot enter ${APP_DIR}"
 mkdir -p db backups data
 
-# ── low-RAM guard: swap so the build and the app are never OOM-killed ──
-MEM_MB=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
-if [ "$MEM_MB" -lt 3000 ] && [ -z "$(swapon --noheadings 2>/dev/null)" ]; then
-  info "small-RAM server (${MEM_MB}MB) detected — creating 2G swap (prevents OOM build/service kills)"
-  fallocate -l 2G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
-  chmod 600 /swapfile && mkswap /swapfile >/dev/null 2>&1 && swapon /swapfile >/dev/null 2>&1 || true
-  grep -q "^/swapfile" /etc/fstab 2>/dev/null || echo "/swapfile none swap sw 0 0" >> /etc/fstab
-  ok "swap enabled"
-fi
+# ── low-RAM guard swap: ADAPTIVE (v1.3.1) ─────────────────────
+# v1.0–v1.3.0 created a blind 2G /swapfile here. On small disks that
+# swapfile alone filled half the disk and the install died. The guard
+# library now: reclaims an old 2G swapfile, sizes swap = min(1G, 90% RAM,
+# free-disk room), keeps a 600MB disk floor, and cleans itself up on any
+# failure instead of leaving garbage on disk.
+dg_setup_swap
 if [ "$PKG_MGR" = "bun" ]; then
   bun install --frozen-lockfile >/dev/null 2>&1 || bun install >/dev/null
   bunx prisma generate >/dev/null
@@ -292,7 +322,10 @@ else
   npm install --no-audit --no-fund >/dev/null 2>&1 || die "npm install failed"
   npx prisma generate >/dev/null
   DATABASE_URL="file:$APP_DIR/db/custom.db" npx prisma db push --skip-generate >/dev/null
-  npm run build >/dev/null 2>&1 || die "build failed — run 'npm run build' to see the error"
+  # --max-old-space-size keeps the Node heap bounded during the build so a
+  # MODEST swap (≤ 1GB) is enough even with 1GB RAM servers.
+  NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=1024" \
+    npm run build >/dev/null 2>&1 || die "build failed — run 'npm run build' to see the error"
 fi
 rm -rf .next/standalone/public .next/standalone/.next/static
 cp -r public .next/standalone/public

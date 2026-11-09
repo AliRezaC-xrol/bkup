@@ -43,6 +43,14 @@
 #   - "Already latest" is only decided from the running/last-built version;
 #     if the disk claims newest while the panel runs older, the update RUNS
 #     and converges the installation instead of skipping.
+# Fixes in v1.3.1 (low-disk servers):
+#   - the updater created a blind 2 GB /swapfile on every < 3 GB-RAM server;
+#     on small disks that filled the drive and crashed the server. Swap is
+#     now ADAPTIVE (≤ 1 GB, disk floor respected) via scripts/lib-dguard.sh
+#   - a disk PRE-FLIGHT check aborts the update BEFORE the build when space
+#     is too tight — the running panel keeps serving, nothing breaks
+#   - legacy 2 GB swapfiles from older installs are reclaimed
+#   - npm builds run with a bounded Node heap (--max-old-space-size=1024)
 # =============================================================
 set -uo pipefail
 
@@ -66,6 +74,11 @@ REPO="${GITHUB_REPO:-AliRezaC-xrol/bkup}"
 
 say() { if [ "$WEB_MODE" = "1" ]; then echo "$*"; else echo -e "$*"; fi; }
 ok()  { say "[OK] $*"; }
+
+# ── disk & swap guard (v1.3.1) ───────────────────────────────
+# Adaptive swap sizing + disk pre-flight shared with install.sh.
+source "$SCRIPT_DIR/lib-dguard.sh" || true
+dg_emit() { say "$*"; if [ "$WEB_MODE" = "1" ]; then :; fi; }
 
 write_state() {
   # web app reads $cwd/data → standalone cwd; write both spots
@@ -300,14 +313,20 @@ say "==> [2.5/6] Merging .env with new template (preserving existing values)…"
 merge_env
 say "    .env merged — existing values preserved, missing keys added"
 
-# ── low-RAM guard: swap so the build and the app are never OOM-killed ──
-MEM_MB=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
-if [ "$MEM_MB" -lt 3000 ] && [ -z "$(swapon --noheadings 2>/dev/null)" ]; then
-  say "small-RAM server (${MEM_MB}MB) detected — creating 2G swap (prevents OOM build/service kills)"
-  fallocate -l 2G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
-  chmod 600 /swapfile && mkswap /swapfile >/dev/null 2>&1 && swapon /swapfile >/dev/null 2>&1 || true
-  grep -q "^/swapfile" /etc/fstab 2>/dev/null || echo "/swapfile none swap sw 0 0" >> /etc/fstab
-  ok "swap enabled"
+# ── low-RAM guard swap: ADAPTIVE (v1.3.1) ─────────────────────
+# v1.0–v1.3.0 created a blind 2G /swapfile here and filled small disks.
+# The guard library sizes swap adaptively (≤ 1GB), keeps a 600MB disk
+# floor, reclaims legacy 2G swapfiles and cleans up on failure.
+dg_setup_swap
+
+say "==> [2.6/6] Disk pre-flight check…"
+if ! dg_report_disk "$APP_DIR" "$DG_UPDATE_MIN_MB" "update build"; then
+  write_state error "$FROM_V" "${TAG#v}" "not enough disk space (${DG_UPDATE_MIN_MB}MB needed)"
+  say "[FAIL] update aborted: not enough disk space (need ${DG_UPDATE_MIN_MB}MB)."
+  say "       Nothing was broken — the running panel (v$FROM_V) is untouched and still serving."
+  say "       Free some space (old backups, unused images, logs) and run the update again."
+  rm -f "$PKG_BACKUP" 2>/dev/null
+  exit 1
 fi
 
 say "==> [3/6] Installing dependencies + generating Prisma client…"

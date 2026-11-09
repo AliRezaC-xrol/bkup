@@ -34,7 +34,12 @@ install_deps_clean() {
 }
 
 build_app() {
-  if [ "$PKG_MGR" = "bun" ]; then bun run build; else npm run build; fi
+  # Bound the Node heap during npm builds: the Turbopack/Next build would
+  # otherwise happily take 1.5–2GB, which is what forced the (now capped)
+  # swap so large. The bun branch stays plain — bun already self-limits.
+  if [ "$PKG_MGR" = "bun" ]; then bun run build; else
+    NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=1024" npm run build
+  fi
 }
 
 echo "==> Installing dependencies ($PKG_MGR)…"
