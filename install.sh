@@ -236,6 +236,49 @@ dg_free_space() {
   if command -v journalctl >/dev/null 2>&1; then journalctl --vacuum-size=50M >/dev/null 2>&1 || true; fi
 }
 
+# Resolve the pre-built bundle URL WITHOUT depending on a single API call:
+# the deterministic release URL is tried first (works even when the GitHub
+# API is rate-limited), the API is only a fallback for renamed assets.
+resolve_prebuilt_url() {
+  local u=""
+  if [ -n "${TAG:-}" ]; then
+    u="https://github.com/${REPO_SLUG}/releases/download/${TAG}/bkup-standalone.tar.gz"
+    if curl -fsIL "${GH_AUTH[@]}" --max-time 15 "$u" >/dev/null 2>&1; then
+      printf '%s' "$u"; return 0
+    fi
+    curl -sf "${GH_AUTH[@]}" --max-time 15 \
+      "https://api.github.com/repos/${REPO_SLUG}/releases/latest" 2>/dev/null \
+      | grep -o '"browser_download_url": *"[^"]*bkup-standalone[^"]*"' | head -1 | cut -d'"' -f4
+  fi
+}
+
+# Apply the Prisma schema to the SQLite database. NEVER interactive:
+# the old code ran bare `npx prisma ...` with output hidden — on a fresh
+# install prisma is not in node_modules, so npx printed a hidden
+# "Ok to proceed?" prompt and the installer hung forever (the 20-minute
+# "still installing" report). `--yes` + `</dev/null` + timeout fixes that.
+db_sync() {
+  local dburl="file:$APP_DIR/db/custom.db"
+  mkdir -p "$APP_DIR/db"
+  if [ -x "$APP_DIR/node_modules/.bin/prisma" ]; then
+    DATABASE_URL="$dburl" "$APP_DIR/node_modules/.bin/prisma" \
+      db push --skip-generate --accept-data-loss </dev/null >/dev/null 2>&1 && return 0
+  fi
+  if [ -x "$APP_DIR/.next/standalone/node_modules/.bin/prisma" ]; then
+    DATABASE_URL="$dburl" "$APP_DIR/.next/standalone/node_modules/.bin/prisma" \
+      db push --skip-generate --accept-data-loss </dev/null >/dev/null 2>&1 && return 0
+  fi
+  if command -v timeout >/dev/null 2>&1; then
+    DATABASE_URL="$dburl" timeout 600 npx --yes --package prisma@6 prisma \
+      db push --skip-generate --accept-data-loss </dev/null >/dev/null 2>&1 && return 0
+  else
+    DATABASE_URL="$dburl" npx --yes --package prisma@6 prisma \
+      db push --skip-generate --accept-data-loss </dev/null >/dev/null 2>&1 && return 0
+  fi
+  echo -e "    ${Y}⚠ database schema sync skipped (prisma CLI unavailable) — the panel will retry on first start${N}"
+  return 0
+}
+
 # FIRST: reclaim a leftover legacy 2GB /swapfile BEFORE measuring —
 # on servers that ran v1.0–v1.3.0 freeing that file alone often makes
 # the disk big enough again (v1.3.1.1: it used to run too late,
@@ -253,11 +296,7 @@ dg_free_space
 # Detect a pre-built release asset early so we can (a) lower the disk
 # requirement and (b) reclaim heavy, regenerable build artifacts before
 # measuring (the pre-built path does not need node_modules/.next).
-PREBUILT_URL_EARLY=""
-if [ -n "${TAG:-}" ]; then
-  PREBUILT_URL_EARLY="$(curl -sf "${GH_AUTH[@]}" --max-time 15 "https://api.github.com/repos/${REPO_SLUG}/releases/latest" 2>/dev/null \
-    | grep -o '"browser_download_url": *"[^"]*bkup-standalone[^"]*"' | head -1 | cut -d'"' -f4)" || PREBUILT_URL_EARLY=""
-fi
+PREBUILT_URL_EARLY="$(resolve_prebuilt_url || true)"
 
 if [ -n "$PREBUILT_URL_EARLY" ] && [ -d "$APP_DIR" ]; then
   # Pre-built path skips the build, so node_modules and the old .next tree
@@ -426,43 +465,48 @@ cd "$APP_DIR" || die "cannot enter ${APP_DIR}"
 mkdir -p db backups data
 
 # fast path: pre-built standalone asset from the GitHub release
-PREBUILT_URL=""
-if [ -n "${TAG:-}" ]; then
-  PREBUILT_URL="$(curl -sf "${GH_AUTH[@]}" --max-time 15 "https://api.github.com/repos/${REPO_SLUG}/releases/latest" 2>/dev/null | grep -o '"browser_download_url": *"[^"]*bkup-standalone[^"]*"' | head -1 | cut -d'"' -f4)" || PREBUILT_URL=""
-fi
+PREBUILT_URL="$(resolve_prebuilt_url || true)"
 
 USED_PREBUILT=0
 if [ -n "$PREBUILT_URL" ]; then
-  info "    pre-built release asset found - fast install (no build, ~30-60s)"
+  info "    downloading the pre-built bundle (no compile needed)…"
   dg_setup_swap
   rm -rf "$APP_DIR/.next/standalone"
   mkdir -p "$APP_DIR/.next/standalone"
-  if curl -fL "${GH_AUTH[@]}" --max-time 600 --retry 2 "$PREBUILT_URL" 2>/dev/null | tar -xzf - -C "$APP_DIR/.next/standalone" 2>/dev/null; then
+  if curl -fL "${GH_AUTH[@]}" --max-time 900 --retry 2 "$PREBUILT_URL" \
+       | tar -xzf - -C "$APP_DIR/.next/standalone" 2>/dev/null; then
     USED_PREBUILT=1
     # older release assets omitted these; make sure the panel can serve the UI
     [ -d "$APP_DIR/.next/standalone/public" ] || cp -a "$APP_DIR/public" "$APP_DIR/.next/standalone/public" 2>/dev/null || true
-    npx prisma generate >/dev/null 2>&1 || true
-    DATABASE_URL="file:$APP_DIR/db/custom.db" npx prisma db push --skip-generate >/dev/null 2>&1 || true
+    # the bundle ships a ready-made empty DB → no prisma CLI / network needed
+    if [ ! -s "$APP_DIR/db/custom.db" ] && [ -s "$APP_DIR/.next/standalone/db/custom.db" ]; then
+      cp -a "$APP_DIR/.next/standalone/db/custom.db" "$APP_DIR/db/custom.db" 2>/dev/null || true
+    fi
+    if [ ! -s "$APP_DIR/db/custom.db" ]; then
+      info "    preparing the database…"
+      db_sync
+    fi
   fi
   rm -f "${BKUP_INSTALL_TMP}.prebuilt.tar.gz" 2>/dev/null || true
 fi
 
 if [ "$USED_PREBUILT" != "1" ]; then
   if [ -n "$PREBUILT_URL" ]; then
-    echo -e "    ${Y}pre-built asset failed - falling back to source build${N}"
+    echo -e "    ${Y}pre-built bundle failed — falling back to a source build (3-8 min)${N}"
   fi
-  info "    building from source (2-6 min)..."
+  info "    building from source (3-8 min, progress below)…"
   dg_setup_swap
   if [ "$PKG_MGR" = "bun" ]; then
     bun install --frozen-lockfile >/dev/null 2>&1 || bun install >/dev/null
-    bunx prisma generate >/dev/null
-    DATABASE_URL="file:$APP_DIR/db/custom.db" bunx prisma db push --skip-generate >/dev/null
-    bun run build >/dev/null 2>&1 || die "build failed - run 'bash scripts/build-native.sh' to see the error"
+    bunx prisma generate </dev/null >/dev/null || die "prisma generate failed"
+    db_sync
+    bun run build || die "build failed - run 'bash scripts/build-native.sh' to see the error"
   else
-    npm install --no-audit --no-fund >/dev/null 2>&1 || die "npm install failed"
-    npx prisma generate >/dev/null
-    DATABASE_URL="file:$APP_DIR/db/custom.db" npx prisma db push --skip-generate >/dev/null
-    NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=1024" npm run build >/dev/null 2>&1 || die "build failed - run 'npm run build' in $APP_DIR to see the real error"
+    npm install --no-audit --no-fund --loglevel=error || die "npm install failed"
+    npx --yes prisma generate </dev/null >/dev/null || die "prisma generate failed"
+    db_sync
+    NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--max-old-space-size=1024" npm run build \
+      || die "build failed - run 'npm run build' in $APP_DIR to see the real error"
   fi
   rm -rf .next/standalone/public .next/standalone/.next/static
   cp -r public .next/standalone/public 2>/dev/null || true
@@ -538,9 +582,15 @@ fi
 ok ".env + .cli-secret"
 
 
-# panel password (direct DB write) — only for fresh installs
+# panel password (direct DB write) — only for fresh installs.
+# On the pre-built path there is no $APP_DIR/node_modules, so point Node at
+# the prisma client that ships inside the standalone bundle.
+PW_NODE_PATH="$APP_DIR/node_modules"
+[ -d "$PW_NODE_PATH/@prisma/client" ] || PW_NODE_PATH="$APP_DIR/.next/standalone/node_modules"
 if [ "$PW_SET" != "1" ]; then
-  DATABASE_URL="file:$APP_DIR/db/custom.db" node "$APP_DIR/scripts/cli/set-password.mjs" "$PANEL_PW" >/dev/null \
+  NODE_PATH="$PW_NODE_PATH${NODE_PATH:+:$NODE_PATH}" \
+  DATABASE_URL="file:$APP_DIR/db/custom.db" \
+    node "$APP_DIR/scripts/cli/set-password.mjs" "$PANEL_PW" >/dev/null \
     || die "could not set password"
 fi
 

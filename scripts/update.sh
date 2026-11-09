@@ -318,11 +318,20 @@ say "    .env merged — existing values preserved, missing keys added"
 # v1.0–v1.3.0 created a blind 2G /swapfile here and filled small disks.
 # The guard library sizes swap adaptively (≤ 1GB), keeps a 600MB disk
 # floor, reclaims legacy 2G swapfiles and cleans up on failure.
-# detect pre-built asset early
-PREBUILT_URL=""
-if [ -n "${TAG:-}" ]; then
-  PREBUILT_URL="$(curl -sf "${AUTH[@]}" --max-time 15 "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null | grep -o '"browser_download_url": *"[^"]*bkup-standalone[^"]*"' | head -1 | cut -d'"' -f4)" || PREBUILT_URL=""
-fi
+# detect pre-built asset early (deterministic release URL first — survives
+# GitHub API rate limits)
+resolve_prebuilt_url() {
+  local u=""
+  if [ -n "${TAG:-}" ]; then
+    u="https://github.com/${REPO}/releases/download/${TAG}/bkup-standalone.tar.gz"
+    if curl -fsIL "${AUTH[@]}" --max-time 15 "$u" >/dev/null 2>&1; then
+      printf '%s' "$u"; return 0
+    fi
+    curl -sf "${AUTH[@]}" --max-time 15 "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
+      | grep -o '"browser_download_url": *"[^"]*bkup-standalone[^"]*"' | head -1 | cut -d'"' -f4
+  fi
+}
+PREBUILT_URL="$(resolve_prebuilt_url || true)"
 if [ -n "$PREBUILT_URL" ]; then
   # reclaim heavy regenerable artifacts (update keeps service running, but .next/cache is safe)
   rm -rf "$APP_DIR/.next/cache" 2>/dev/null || true
@@ -346,17 +355,15 @@ fi
 
 say "==> [3/6] Installing dependencies + generating Prisma client..."
 # fast path: pre-built standalone asset from the GitHub release
-PREBUILT_URL=""
-if [ -n "${TAG:-}" ]; then
-  PREBUILT_URL="$(curl -sf "${AUTH[@]}" --max-time 15 "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null | grep -o '"browser_download_url": *"[^"]*bkup-standalone[^"]*"' | head -1 | cut -d'"' -f4)" || PREBUILT_URL=""
-fi
+# (PREBUILT_URL was resolved before the disk pre-flight)
 
 USED_PREBUILT=0
 if [ -n "$PREBUILT_URL" ]; then
-  say "    pre-built release asset found - fast update (no build)"
+  say "    downloading the pre-built bundle (no compile needed)…"
   rm -rf "$APP_DIR/.next/standalone"
   mkdir -p "$APP_DIR/.next/standalone"
-  if curl -fL "${AUTH[@]}" --max-time 600 --retry 2 "$PREBUILT_URL" 2>/dev/null | tar -xzf - -C "$APP_DIR/.next/standalone" 2>/dev/null; then
+  if curl -fL "${AUTH[@]}" --max-time 900 --retry 2 "$PREBUILT_URL" \
+       | tar -xzf - -C "$APP_DIR/.next/standalone" 2>/dev/null; then
     USED_PREBUILT=1
     [ -d "$APP_DIR/.next/standalone/public" ] || cp -a "$APP_DIR/public" "$APP_DIR/.next/standalone/public" 2>/dev/null || true
     cp -a "$APP_DIR/package.json" "$APP_DIR/.next/standalone/package.json" 2>/dev/null || true
@@ -410,9 +417,10 @@ if [ -z "$DB_URL" ]; then
   mkdir -p "$APP_DIR/db"
 fi
 if command -v bun >/dev/null 2>&1; then
-  DATABASE_URL="$DB_URL" bunx prisma db push --skip-generate 2>&1 | tail -2
+  DATABASE_URL="$DB_URL" bunx prisma db push --skip-generate --accept-data-loss </dev/null 2>&1 | tail -2
 else
-  DATABASE_URL="$DB_URL" npx prisma db push --skip-generate 2>&1 | tail -2
+  DATABASE_URL="$DB_URL" npx --yes --package prisma@6 prisma db push \
+    --skip-generate --accept-data-loss </dev/null 2>&1 | tail -2
 fi
 
 say "==> [5/6] Restarting service…"

@@ -4,7 +4,7 @@
  * Usage: node scripts/cli/set-enabled.mjs <on|off>
  */
 import "./_env.mjs"; // loads .env → DATABASE_URL
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient } from "./_prisma.mjs";
 
 const arg = (process.argv[2] || "").toLowerCase();
 if (!["on", "off"].includes(arg)) {

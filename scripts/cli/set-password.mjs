@@ -6,7 +6,7 @@
  */
 import crypto from "node:crypto";
 import "./_env.mjs"; // loads .env → DATABASE_URL
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient } from "./_prisma.mjs";
 
 const password = process.argv[2] || "";
 if (password.length < 4) {

@@ -32,6 +32,14 @@ jobs:
       - name: Generate Prisma client
         run: npx prisma generate
 
+      - name: Create an empty database
+        run: |
+          mkdir -p db
+          # Prisma resolves relative SQLite paths against prisma/schema.prisma,
+          # so use an absolute path here.
+          DATABASE_URL="file:$GITHUB_WORKSPACE/db/custom.db" npx prisma db push --skip-generate --accept-data-loss
+          ls -l db/custom.db
+
       - name: Build (Next.js standalone)
         run: npm run build
 
@@ -45,6 +53,10 @@ jobs:
           cp -a public .next/standalone/public
           mkdir -p .next/standalone/.next
           cp -a .next/static .next/standalone/.next/static
+          # ship the ready-made empty DB so a fresh install needs no prisma CLI
+          test -s db/custom.db
+          mkdir -p .next/standalone/db
+          cp -a db/custom.db .next/standalone/db/custom.db
           cd .next/standalone
           tar -czf ../../bkup-standalone.tar.gz .
 

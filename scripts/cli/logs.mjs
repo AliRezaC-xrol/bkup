@@ -5,7 +5,7 @@
  * Usage: node scripts/cli/logs.mjs [lines]
  */
 import "./_env.mjs";
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient } from "./_prisma.mjs";
 
 const take = Math.max(1, Math.min(Number(process.argv[2]) || 50, 500));
 const db = new PrismaClient();

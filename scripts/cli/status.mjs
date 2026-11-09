@@ -6,7 +6,7 @@
  * Output: single-line JSON
  */
 import "./_env.mjs"; // loads .env → DATABASE_URL (fixes "could not read app database")
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient } from "./_prisma.mjs";
 
 const db = new PrismaClient();
 try {
