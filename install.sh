@@ -237,8 +237,12 @@ elif [ -f "$APP_DIR/package.json" ]; then
 fi
 AVAIL_ROOT="$(dg_avail_mb "$APP_DIR")"
 AVAIL_RUN="${AVAIL_ROOT:-0}"
-if [ -n "$PREBUILT_URL_EARLY" ] && [ "${AVAIL_RUN:-0}" -lt "$NEED_MB" ]; then
-  echo -e "    ${Y}⚠ only ${AVAIL_RUN}MB free — attempting streamed in-place install anyway${N}"
+if [ -n "$PREBUILT_URL_EARLY" ]; then
+  # Pre-built path replaces files in place — never block on the pre-flight
+  # number alone. Only warn.
+  if [ "${AVAIL_RUN:-0}" -lt "$NEED_MB" ]; then
+    echo -e "    ${Y}⚠ only ${AVAIL_RUN}MB free — attempting streamed in-place install anyway${N}"
+  fi
 elif [ "${AVAIL_RUN:-0}" -lt "$NEED_MB" ]; then
   die "Not enough disk space: ${AVAIL_RUN:-0}MB free — ${NEED_MB:-2600}MB needed.
     The installer refuses to continue on purpose: it can NEVER fill your disk
