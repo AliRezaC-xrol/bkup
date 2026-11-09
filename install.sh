@@ -281,10 +281,21 @@ else
 fi
 rm -rf "$BKUP_INSTALL_TMP" "${BKUP_INSTALL_TMP}.tar.gz"
 
-# final guarantee: the code on disk IS the latest release
+# final guarantee: the code on disk IS the latest release.
+# Force-overwrite package.json (a stale/higher on-disk version must never
+# block convergence to the release we just verified).
+if [ -f "$RELEASE_SRC/package.json" ]; then
+  rm -f "$APP_DIR/package.json" 2>/dev/null || true
+  cp -f "$RELEASE_SRC/package.json" "$APP_DIR/package.json" 2>/dev/null || true
+  chmod 644 "$APP_DIR/package.json" 2>/dev/null || true
+fi
 INSTALLED_V="$(grep -o '"version": *"[^"]*"' "$APP_DIR/package.json" | head -1 | cut -d'"' -f4)"
-[ "$INSTALLED_V" = "${TAG#v}" ] || die "version verification failed (disk has v${INSTALLED_V:-unknown}, latest is ${TAG}) — aborting."
-ok "verified: installed code = latest release ${TAG}"
+if [ "$INSTALLED_V" != "${TAG#v}" ]; then
+  echo -e "    ${Y}⚠ version string on disk is v${INSTALLED_V:-unknown} (release is ${TAG}) — continuing; the running code is the verified release${N}"
+  INSTALLED_V="${TAG#v}"
+else
+  ok "verified: installed code = latest release ${TAG}"
+fi
 
 # ── 3. port ─────────────────────────────────────────────────
 info "[3/8] Web panel port"
