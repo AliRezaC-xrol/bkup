@@ -208,7 +208,7 @@ dg_free_space() {
   if [ -n "$app" ] && [ -d "$app" ]; then
     rm -rf "$app/.next/cache" 2>/dev/null || true     # build cache, safest big win
     rm -rf "$app/.scripts-new" 2>/dev/null || true    # half-copied update leftover
-    rm -rf "$app/.bkup-install-tmp" "$app/.abx-update-tmp" 2>/dev/null || true
+    rm -rf "$app/.abx-update-tmp" 2>/dev/null || true # stale update staging (NOT .bkup-install-tmp — that is the live release source)
     rm -f "$app/.install.sh.new" "$app/.cli.sh.new" 2>/dev/null || true
   fi
 
