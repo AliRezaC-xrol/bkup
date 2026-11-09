@@ -157,20 +157,27 @@ TAG="$(latest_tag)"
 info "    latest release: ${C}${TAG}${N}  ${D}(this — and only this — will be installed)${N}"
 
 RELEASE_SRC=""
+# Download into a temp dir on the SAME filesystem as APP_DIR so a small
+# tmpfs on /tmp can never be the bottleneck (the v1.3.1 "474MB free" bug).
+if [ -d "$APP_DIR" ] && [ -w "$APP_DIR" ]; then
+  BKUP_INSTALL_TMP="$APP_DIR/.bkup-install-tmp"
+else
+  BKUP_INSTALL_TMP="/tmp/bkup-install"
+fi
 fetch_release() {
-  rm -rf /tmp/bkup-install /tmp/bkup-install.tar.gz
-  mkdir -p /tmp/bkup-install
+  rm -rf "$BKUP_INSTALL_TMP" "${BKUP_INSTALL_TMP}.tar.gz"
+  mkdir -p "$BKUP_INSTALL_TMP"
   curl -fL "${GH_AUTH[@]}" --max-time 300 --retry 2 \
       "https://github.com/${REPO_SLUG}/archive/refs/tags/${TAG}.tar.gz" \
-      -o /tmp/bkup-install.tar.gz >/dev/null 2>&1 \
+      -o "${BKUP_INSTALL_TMP}.tar.gz" >/dev/null 2>&1 \
     || curl -fL "${GH_AUTH[@]}" --max-time 300 --retry 2 \
       "https://api.github.com/repos/${REPO_SLUG}/tarball/${TAG}" \
-      -o /tmp/bkup-install.tar.gz >/dev/null 2>&1 \
+      -o "${BKUP_INSTALL_TMP}.tar.gz" >/dev/null 2>&1 \
     || return 1
-  [ -s /tmp/bkup-install.tar.gz ] || return 1
-  tar -xzf /tmp/bkup-install.tar.gz -C /tmp/bkup-install 2>/dev/null || return 1
+  [ -s "${BKUP_INSTALL_TMP}.tar.gz" ] || return 1
+  tar -xzf "${BKUP_INSTALL_TMP}.tar.gz" -C "$BKUP_INSTALL_TMP" 2>/dev/null || return 1
   local src
-  src="$(find /tmp/bkup-install -maxdepth 1 -mindepth 1 -type d | head -1)"
+  src="$(find "$BKUP_INSTALL_TMP" -maxdepth 1 -mindepth 1 -type d | head -1)"
   [ -n "$src" ] || return 1
   local got
   got="$(grep -o '"version": *"[^"]*"' "$src/package.json" 2>/dev/null | head -1 | cut -d'"' -f4)"
@@ -213,8 +220,10 @@ if [ -f "$APP_DIR/package.json" ]; then
   ok "existing install found — refresh mode (needs ${NEED_MB}MB, unchanged install on disk)"
 fi
 AVAIL_ROOT="$(dg_avail_mb "$APP_DIR")"
-AVAIL_TMP="$(dg_avail_mb /tmp)"
-AVAIL_RUN="${AVAIL_ROOT:-0}"; [ -n "$AVAIL_TMP" ] && [ "$AVAIL_TMP" -lt "$AVAIL_RUN" ] 2>/dev/null && AVAIL_RUN="$AVAIL_TMP"
+# Only the filesystem that actually holds the install matters: the release
+# tarball is now downloaded onto APP_DIR's filesystem (see fetch_release),
+# so a small /tmp tmpfs must never be able to block the install.
+AVAIL_RUN="${AVAIL_ROOT:-0}"
 if [ "${AVAIL_RUN:-0}" -lt "$NEED_MB" ]; then
   die "Not enough disk space: ${AVAIL_RUN:-0}MB free — ${NEED_MB:-2600}MB needed.
     The installer refuses to continue on purpose: it can NEVER fill your disk
@@ -270,7 +279,7 @@ else
   cp -a "$RELEASE_SRC/." "$APP_DIR/" || die "cannot copy source to ${APP_DIR}"
   ok "source ready: ${TAG}"
 fi
-rm -rf /tmp/bkup-install /tmp/bkup-install.tar.gz
+rm -rf "$BKUP_INSTALL_TMP" "${BKUP_INSTALL_TMP}.tar.gz"
 
 # final guarantee: the code on disk IS the latest release
 INSTALLED_V="$(grep -o '"version": *"[^"]*"' "$APP_DIR/package.json" | head -1 | cut -d'"' -f4)"

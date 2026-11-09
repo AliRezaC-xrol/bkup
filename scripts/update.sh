@@ -225,22 +225,23 @@ fi
 say "    installed: v$FROM_V   latest release: $TAG   → updating"
 
 # download exactly the latest release and verify it before touching anything
-rm -rf /tmp/abx-update /tmp/abx-update.tar.gz
-mkdir -p /tmp/abx-update
+ABX_UPDATE_TMP="$APP_DIR/.abx-update-tmp"
+rm -rf "$ABX_UPDATE_TMP" "${ABX_UPDATE_TMP}.tar.gz"
+mkdir -p "$ABX_UPDATE_TMP"
 curl -fL "${AUTH[@]}" --max-time 300 --retry 2 \
     "https://github.com/${REPO}/archive/refs/tags/${TAG}.tar.gz" \
-    -o /tmp/abx-update.tar.gz >/dev/null 2>&1 \
+    -o "${ABX_UPDATE_TMP}.tar.gz" >/dev/null 2>&1 \
   || curl -fL "${AUTH[@]}" --max-time 300 --retry 2 \
     "https://api.github.com/repos/${REPO}/tarball/${TAG}" \
-    -o /tmp/abx-update.tar.gz >/dev/null 2>&1
+    -o "${ABX_UPDATE_TMP}.tar.gz" >/dev/null 2>&1
 
-if [ -s /tmp/abx-update.tar.gz ] && tar -xzf /tmp/abx-update.tar.gz -C /tmp/abx-update 2>/dev/null; then
-  SRC="$(find /tmp/abx-update -maxdepth 1 -mindepth 1 -type d | head -1)"
+if [ -s "${ABX_UPDATE_TMP}.tar.gz" ] && tar -xzf "${ABX_UPDATE_TMP}.tar.gz" -C "$ABX_UPDATE_TMP" 2>/dev/null; then
+  SRC="$(find "$ABX_UPDATE_TMP" -maxdepth 1 -mindepth 1 -type d | head -1)"
 else
   SRC=""
 fi
 if [ -z "$SRC" ]; then
-  rm -rf /tmp/abx-update /tmp/abx-update.tar.gz
+  rm -rf "$ABX_UPDATE_TMP" "${ABX_UPDATE_TMP}.tar.gz"
   write_state error "$FROM_V" "" "download of ${TAG} failed"
   say "[FAIL] could not download release ${TAG} — running version left untouched"
   exit 1
@@ -295,7 +296,7 @@ for item in src prisma public scripts docs docker .github \
       ;;
   esac
 done
-rm -rf /tmp/abx-update /tmp/abx-update.tar.gz
+rm -rf "$ABX_UPDATE_TMP" "${ABX_UPDATE_TMP}.tar.gz"
 
 NEW_VERSION="$(grep -o '"version": *"[^"]*"' "$APP_DIR/package.json" | head -1 | cut -d'"' -f4)"
 if [ "$NEW_VERSION" != "${TAG#v}" ]; then

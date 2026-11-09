@@ -27,8 +27,8 @@
 #    DG_SWAP_MAX_MB     hard ceiling            (default 1024)
 #    DG_MIN_SWAP_MB     smallest useful swap    (default 256)
 #    DG_DISK_FLOOR_MB   free MB that must remain (default 600)
-#    DG_INSTALL_MIN_MB  install pre-flight need (default 2600)
-#    DG_UPDATE_MIN_MB   update  pre-flight need (default 1800)
+#    DG_INSTALL_MIN_MB  install pre-flight need (default 900)
+#    DG_UPDATE_MIN_MB   update  pre-flight need (default 400)
 #    DG_SWAPFILE        swapfile path           (default /swapfile)
 #    DG_FSTAB           fstab path              (default /etc/fstab)
 #    DG_QUIET           set to 1 to silence dg_say()* messages
@@ -39,8 +39,8 @@ set -uo pipefail 2>/dev/null || set -u
 DG_SWAP_MAX_MB="${DG_SWAP_MAX_MB:-1024}"
 DG_MIN_SWAP_MB="${DG_MIN_SWAP_MB:-256}"
 DG_DISK_FLOOR_MB="${DG_DISK_FLOOR_MB:-600}"
-DG_INSTALL_MIN_MB="${DG_INSTALL_MIN_MB:-2600}"
-DG_UPDATE_MIN_MB="${DG_UPDATE_MIN_MB:-1800}"
+DG_INSTALL_MIN_MB="${DG_INSTALL_MIN_MB:-900}"
+DG_UPDATE_MIN_MB="${DG_UPDATE_MIN_MB:-400}"
 DG_MEM_FILE="${DG_MEM_FILE:-/proc/meminfo}"
 DG_SWAPFILE="${DG_SWAPFILE:-/swapfile}"
 DG_FSTAB="${DG_FSTAB:-/etc/fstab}"
@@ -195,6 +195,7 @@ dg_free_space() {
   if [ -n "$app" ] && [ -d "$app" ]; then
     rm -rf "$app/.next/cache" 2>/dev/null || true     # build cache, safest big win
     rm -rf "$app/.scripts-new" 2>/dev/null || true    # half-copied update leftover
+    rm -rf "$app/.bkup-install-tmp" "$app/.abx-update-tmp" 2>/dev/null || true
     rm -f "$app/.install.sh.new" "$app/.cli.sh.new" 2>/dev/null || true
   fi
 
