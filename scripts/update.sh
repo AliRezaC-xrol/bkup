@@ -318,12 +318,24 @@ say "    .env merged — existing values preserved, missing keys added"
 # v1.0–v1.3.0 created a blind 2G /swapfile here and filled small disks.
 # The guard library sizes swap adaptively (≤ 1GB), keeps a 600MB disk
 # floor, reclaims legacy 2G swapfiles and cleans up on failure.
+# detect pre-built asset early
+PREBUILT_URL=""
+if [ -n "${TAG:-}" ]; then
+  PREBUILT_URL="$(curl -sf "${AUTH[@]}" --max-time 15 "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null | grep -o '"browser_download_url": *"[^"]*bkup-standalone[^"]*"' | head -1 | cut -d'"' -f4)" || PREBUILT_URL=""
+fi
+if [ -n "$PREBUILT_URL" ]; then
+  # reclaim heavy regenerable artifacts (update keeps service running, but .next/cache is safe)
+  rm -rf "$APP_DIR/.next/cache" 2>/dev/null || true
+fi
+
 DG_APP_DIR="$APP_DIR"
 dg_free_space
 dg_setup_swap
 
 say "==> [2.6/6] Disk pre-flight check…"
-if ! dg_report_disk "$APP_DIR" "$DG_UPDATE_MIN_MB" "update build"; then
+if [ -n "$PREBUILT_URL" ]; then
+  say "    pre-built asset available - low disk tolerated (streamed in place)"
+elif ! dg_report_disk "$APP_DIR" "$DG_UPDATE_MIN_MB" "update build"; then
   write_state error "$FROM_V" "${TAG#v}" "not enough disk space (${DG_UPDATE_MIN_MB}MB needed)"
   say "[FAIL] update aborted: not enough disk space (need ${DG_UPDATE_MIN_MB}MB)."
   say "       Nothing was broken — the running panel (v$FROM_V) is untouched and still serving."
@@ -344,7 +356,7 @@ if [ -n "$PREBUILT_URL" ]; then
   say "    pre-built release asset found - fast update (no build)"
   rm -rf "$APP_DIR/.next/standalone"
   mkdir -p "$APP_DIR/.next/standalone"
-  if curl -fL "${AUTH[@]}" --max-time 600 --retry 2 "$PREBUILT_URL" -o "$APP_DIR/.abx-prebuilt.tar.gz" >/dev/null 2>&1 && [ -s "$APP_DIR/.abx-prebuilt.tar.gz" ] && tar -xzf "$APP_DIR/.abx-prebuilt.tar.gz" -C "$APP_DIR/.next/standalone" 2>/dev/null; then
+  if curl -fL "${AUTH[@]}" --max-time 600 --retry 2 "$PREBUILT_URL" 2>/dev/null | tar -xzf - -C "$APP_DIR/.next/standalone" 2>/dev/null; then
     USED_PREBUILT=1
     cp -a "$APP_DIR/package.json" "$APP_DIR/.next/standalone/package.json" 2>/dev/null || true
   fi

@@ -229,15 +229,17 @@ fi
 
 NEED_MB="$DG_INSTALL_MIN_MB"
 if [ -n "$PREBUILT_URL_EARLY" ]; then
-  NEED_MB=250
-  ok "pre-built release asset available — fast path (needs ${NEED_MB}MB)"
+  NEED_MB=50
+  ok "pre-built release asset available — fast path (needs ~${NEED_MB}MB, streamed, no tarball on disk)"
 elif [ -f "$APP_DIR/package.json" ]; then
   NEED_MB="$DG_UPDATE_MIN_MB"
   ok "existing install found — refresh mode (needs ${NEED_MB}MB, unchanged install on disk)"
 fi
 AVAIL_ROOT="$(dg_avail_mb "$APP_DIR")"
 AVAIL_RUN="${AVAIL_ROOT:-0}"
-if [ "${AVAIL_RUN:-0}" -lt "$NEED_MB" ]; then
+if [ -n "$PREBUILT_URL_EARLY" ] && [ "${AVAIL_RUN:-0}" -lt "$NEED_MB" ]; then
+  echo -e "    ${Y}⚠ only ${AVAIL_RUN}MB free — attempting streamed in-place install anyway${N}"
+elif [ "${AVAIL_RUN:-0}" -lt "$NEED_MB" ]; then
   die "Not enough disk space: ${AVAIL_RUN:-0}MB free — ${NEED_MB:-2600}MB needed.
     The installer refuses to continue on purpose: it can NEVER fill your disk
     (that was the v1.3.0 crash). NOTHING was written to your server yet.
@@ -375,7 +377,7 @@ if [ -n "$PREBUILT_URL" ]; then
   dg_setup_swap
   rm -rf "$APP_DIR/.next/standalone"
   mkdir -p "$APP_DIR/.next/standalone"
-  if curl -fL "${GH_AUTH[@]}" --max-time 600 --retry 2 "$PREBUILT_URL" -o "${BKUP_INSTALL_TMP}.prebuilt.tar.gz" >/dev/null 2>&1 && [ -s "${BKUP_INSTALL_TMP}.prebuilt.tar.gz" ] && tar -xzf "${BKUP_INSTALL_TMP}.prebuilt.tar.gz" -C "$APP_DIR/.next/standalone" 2>/dev/null; then
+  if curl -fL "${GH_AUTH[@]}" --max-time 600 --retry 2 "$PREBUILT_URL" 2>/dev/null | tar -xzf - -C "$APP_DIR/.next/standalone" 2>/dev/null; then
     USED_PREBUILT=1
     npx prisma generate >/dev/null 2>&1 || true
     DATABASE_URL="file:$APP_DIR/db/custom.db" npx prisma db push --skip-generate >/dev/null 2>&1 || true
