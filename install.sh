@@ -197,6 +197,11 @@ dg_emit() { info "$*"; }
 # AFTER the pre-flight check, so such servers were blocked for nothing).
 dg_reclaim_legacy_swap || true
 
+# NEXT: free regenerable caches (turbo/npm cache, tmp artifacts, apt cache)
+# — a stale v1.3.0 install often recovers 1–2GB from these alone.
+DG_APP_DIR="$APP_DIR"
+dg_free_space
+
 # Pre-flight: measure BEFORE copying anything. On a small root the old
 # behavior kept going until node_modules + the build filled the disk and
 # everything died on ENOSPC. Now we abort cleanly with a readable number.
@@ -216,9 +221,10 @@ if [ "${AVAIL_RUN:-0}" -lt "$NEED_MB" ]; then
     (that was the v1.3.0 crash). NOTHING was written to your server yet.
     Fastest fixes — run any of these, then re-run the installer:
       swapoff /swapfile 2>/dev/null; rm -f /swapfile; sed -i '/^\\/swapfile /d' /etc/fstab   (frees ~2GB if an old swapfile exists)
-      apt-get clean; journalctl --vacuum-time=1d; rm -rf /tmp/bkup-install /tmp/bkup-install.tar.gz
-      see what is eating the disk:  du -h --max-depth=1 / 2>/dev/null | sort -rh | head -15
-    or install on a filesystem with more room:
+      see what is eating the root disk:  du -h --max-depth=1 / 2>/dev/null | sort -rh | head -15
+      see what is eating the bkup folder:  du -h --max-depth=1 ${APP_DIR} 2>/dev/null | sort -rh | head -10
+          (old backup files below ${APP_DIR}/backups often hold gigabytes:  ls -lh ${APP_DIR}/backups | head )
+      or install on a filesystem with more room:
       APP_DIR=/path/to/larger/dir bash install.sh"
 fi
 ok "disk check: ${AVAIL_RUN}MB free (need ${NEED_MB}MB) — root is big enough"

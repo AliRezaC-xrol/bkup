@@ -169,6 +169,45 @@ _dg_fstab_remove() {
     && mv "${DG_FSTAB}.dg-new" "$DG_FSTAB" 2>/dev/null || true
 }
 
+# ── 7) SAFE SPACE RECOVERY ───────────────────────────────────
+# v1.3.1.1 — small disks with a stale v1.3.0 install sitting on them were
+# still blocked by the pre-flight check: the disk was genuinely nearly full
+# of REGENERABLE stuff (build caches, package-manager caches, installer
+# tarballs, system logs). This function deletes ONLY things that are safe
+# to delete and rebuild themselves:
+#   · stale installer artifacts in /tmp            (ours, dead files)
+#   · .next/cache          — turbopack/webpack build cache, ~hundreds of MB
+#   · .scripts-new/.new    — half-finished previous update leftovers
+#   · npm / bun package caches (downloaded tarballs, refetch on demand)
+#   · apt / dnf package caches, journald logs capped to 50MB
+# It NEVER touches: backups/, db/ (database), .env, secrets, .cli-secret,
+# node_modules, or the running .next/standalone build itself.
+dg_free_space() {
+  local app="${DG_APP_DIR:-}"
+  dg_say "space-cleanup: removing regenerable caches and stale files…"
+
+  # 1) stale installer artifacts (dead files from previous update attempts)
+  rm -rf /tmp/bkup-install /tmp/bkup-install.tar.gz \
+         /tmp/abx-update /tmp/abx-update.tar.gz 2>/dev/null || true
+  find /tmp -maxdepth 1 -name 'bkup-package-backup-*.json' -delete 2>/dev/null || true
+
+  # 2) project-local regenerables
+  if [ -n "$app" ] && [ -d "$app" ]; then
+    rm -rf "$app/.next/cache" 2>/dev/null || true     # build cache, safest big win
+    rm -rf "$app/.scripts-new" 2>/dev/null || true    # half-copied update leftover
+    rm -f "$app/.install.sh.new" "$app/.cli.sh.new" 2>/dev/null || true
+  fi
+
+  # 3) package-manager caches — refetched on demand, zero risk to data
+  if command -v npm >/dev/null 2>&1; then npm cache clean --force >/dev/null 2>&1 || true; fi
+  if command -v bun >/dev/null 2>&1; then bun pm cache rm >/dev/null 2>&1 || true; fi
+
+  # 4) OS-level safe cuts — only when the tool exists on this distro
+  if command -v apt-get >/dev/null 2>&1; then apt-get clean >/dev/null 2>&1 || true; fi
+  if command -v dnf >/dev/null 2>&1; then dnf clean all >/dev/null 2>&1 || true; fi
+  if command -v journalctl >/dev/null 2>&1; then journalctl --vacuum-size=50M >/dev/null 2>&1 || true; fi
+}
+
 # ── 5) TOP-LEVEL ENTRY ───────────────────────────────────────
 # Decide, size, create, enable, persist — and clean up loudly when
 # anything fails. Returns 0 even when skipped (skip ≠ error); only a

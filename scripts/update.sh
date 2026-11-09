@@ -317,6 +317,8 @@ say "    .env merged — existing values preserved, missing keys added"
 # v1.0–v1.3.0 created a blind 2G /swapfile here and filled small disks.
 # The guard library sizes swap adaptively (≤ 1GB), keeps a 600MB disk
 # floor, reclaims legacy 2G swapfiles and cleans up on failure.
+DG_APP_DIR="$APP_DIR"
+dg_free_space
 dg_setup_swap
 
 say "==> [2.6/6] Disk pre-flight check…"

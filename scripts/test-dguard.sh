@@ -246,6 +246,30 @@ T_fstab_remove_targeted() {
 }
 
 # ══════════════════════════════════════════════════════════════
+#  SPACE RECOVERY (dg_free_space) — caches go, data stays
+# ══════════════════════════════════════════════════════════════
+T_freespace_caches_to_data_stays() {
+  TDIR="$(mktemp -d)"
+  DG_APP_DIR="$TDIR/app"
+  mkdir -p "$DG_APP_DIR/.next/cache" "$DG_APP_DIR/node_modules/pkg" \
+           "$DG_APP_DIR/backups" "$DG_APP_DIR/.scripts-new"
+  printf 'x' > "$DG_APP_DIR/.next/cache/junk"
+  printf 'x' > "$DG_APP_DIR/node_modules/pkg/index.js"
+  printf 'backupbytedata' > "$DG_APP_DIR/backups/important.tar.gz"
+  printf 'x' > "$DG_APP_DIR/.scripts-new/leftover"
+  mkdir -p /tmp/bkup-install && printf 'x' > /tmp/bkup-install/stale
+
+  dg_free_space
+
+  assert_file_absent "$DG_APP_DIR/.next/cache" "build cache removed (biggest regenerable)"
+  assert_file_absent "$DG_APP_DIR/.scripts-new" "half-finished update leftovers removed"
+  assert_file_absent "/tmp/bkup-install" "stale installer artifacts removed"
+  [ -f "$DG_APP_DIR/node_modules/pkg/index.js" ]; assert_eq "$?" "0" "node_modules NEVER touched"
+  [ "$(cat "$DG_APP_DIR/backups/important.tar.gz" 2>/dev/null)" = "backupbytedata" ]
+  assert_eq "$?" "0" "backups NEVER touched (intact bytes)"
+}
+
+# ══════════════════════════════════════════════════════════════
 #  RUN
 # ══════════════════════════════════════════════════════════════
 echo "═══ bkup lib-dguard tests ═══"
@@ -255,7 +279,8 @@ for t in T_plan_small_ram T_plan_big_ram T_plan_unknown_ram T_plan_swap_active \
          T_setup_mkswap_fails_cleans_up T_setup_swapon_fails_cleans_up \
          T_reclaim_inactive T_reclaim_active_with_memory T_reclaim_active_low_memory \
          T_reclaim_normal_sized_untouched \
-         T_preflight_ok T_preflight_fail T_fstab_idempotent T_fstab_remove_targeted; do
+         T_preflight_ok T_preflight_fail T_fstab_idempotent T_fstab_remove_targeted \
+         T_freespace_caches_to_data_stays; do
   echo "▶ $t"
   if ( "$t" ); then
     PASS=$((PASS+1))
