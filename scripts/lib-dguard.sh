@@ -65,7 +65,10 @@ _dg_swap_active_mb() {
 
 # ── disk probe: free MB on the filesystem containing $1 ──────
 dg_avail_mb() {
-  df -Pm "$1" 2>/dev/null | awk 'NR==2{print $4}'
+  local target="$1"
+  [ -e "$target" ] || target="$(dirname "$target" 2>/dev/null)"
+  [ -e "$target" ] || target="/"
+  df -Pm "$target" 2>/dev/null | tail -1 | awk '{print $4}'
 }
 
 # Small helper: is $1 a positive integer?

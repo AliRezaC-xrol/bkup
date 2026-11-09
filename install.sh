@@ -212,17 +212,30 @@ dg_free_space
 # Pre-flight: measure BEFORE copying anything. On a small root the old
 # behavior kept going until node_modules + the build filled the disk and
 # everything died on ENOSPC. Now we abort cleanly with a readable number.
+# Detect a pre-built release asset early so we can (a) lower the disk
+# requirement and (b) reclaim heavy, regenerable build artifacts before
+# measuring (the pre-built path does not need node_modules/.next).
+PREBUILT_URL_EARLY=""
+if [ -n "${TAG:-}" ]; then
+  PREBUILT_URL_EARLY="$(curl -sf "${GH_AUTH[@]}" --max-time 15 "https://api.github.com/repos/${REPO_SLUG}/releases/latest" 2>/dev/null \
+    | grep -o '"browser_download_url": *"[^"]*bkup-standalone[^"]*"' | head -1 | cut -d'"' -f4)" || PREBUILT_URL_EARLY=""
+fi
+
+if [ -n "$PREBUILT_URL_EARLY" ] && [ -d "$APP_DIR" ]; then
+  # Pre-built path skips the build entirely, so node_modules and the old
+  # .next tree are pure dead weight on a full disk — reclaim them now.
+  rm -rf "$APP_DIR/node_modules" "$APP_DIR/.next" 2>/dev/null || true
+fi
+
 NEED_MB="$DG_INSTALL_MIN_MB"
-if [ -f "$APP_DIR/package.json" ]; then
-  # refresh of an existing install reuses node_modules and .next —
-  # the real need is the update-style footprint, not a full fresh one
+if [ -n "$PREBUILT_URL_EARLY" ]; then
+  NEED_MB=250
+  ok "pre-built release asset available — fast path (needs ${NEED_MB}MB)"
+elif [ -f "$APP_DIR/package.json" ]; then
   NEED_MB="$DG_UPDATE_MIN_MB"
   ok "existing install found — refresh mode (needs ${NEED_MB}MB, unchanged install on disk)"
 fi
 AVAIL_ROOT="$(dg_avail_mb "$APP_DIR")"
-# Only the filesystem that actually holds the install matters: the release
-# tarball is now downloaded onto APP_DIR's filesystem (see fetch_release),
-# so a small /tmp tmpfs must never be able to block the install.
 AVAIL_RUN="${AVAIL_ROOT:-0}"
 if [ "${AVAIL_RUN:-0}" -lt "$NEED_MB" ]; then
   die "Not enough disk space: ${AVAIL_RUN:-0}MB free — ${NEED_MB:-2600}MB needed.
