@@ -68,7 +68,17 @@ dg_avail_mb() {
   local target="$1"
   [ -e "$target" ] || target="$(dirname "$target" 2>/dev/null)"
   [ -e "$target" ] || target="/"
-  df -Pm "$target" 2>/dev/null | tail -1 | awk '{print $4}'
+  local out m
+  # POSIX (-Pm), GNU (-m / -BM), BusyBox (-m) — parse the Available column
+  # (4th field) of the data line. Falls back to df -k / 1024 if all fail.
+  for c in "df -Pm" "df -m" "df -BM"; do
+    out="$($c "$target" 2>/dev/null | tail -1)"
+    [ -n "$out" ] || continue
+    m="$(printf '%s' "$out" | awk '{print $4}')"
+    [ -n "$m" ] && [ "$m" -ge 0 ] 2>/dev/null && { printf '%s' "$m"; return 0; }
+  done
+  m="$(df -k "$target" 2>/dev/null | tail -1 | awk '{print int($4/1024)}')"
+  printf '%s' "${m:-0}"
 }
 
 # Small helper: is $1 a positive integer?

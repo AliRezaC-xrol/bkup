@@ -237,6 +237,9 @@ elif [ -f "$APP_DIR/package.json" ]; then
 fi
 AVAIL_ROOT="$(dg_avail_mb "$APP_DIR")"
 AVAIL_RUN="${AVAIL_ROOT:-0}"
+if [ "${AVAIL_RUN:-0}" = "0" ] && [ -e "$APP_DIR" ]; then
+  echo -e "    ${D}df reports: $(df -Pm "$APP_DIR" 2>/dev/null | tail -1)${N}"
+fi
 if [ -n "$PREBUILT_URL_EARLY" ]; then
   # Pre-built path replaces files in place — never block on the pre-flight
   # number alone. Only warn.
