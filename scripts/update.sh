@@ -440,8 +440,8 @@ if command -v systemctl >/dev/null 2>&1; then
   fi
 fi
 if [ -n "$SVC" ]; then
-  # ensure the running service gets a sane heap (old installs had 256MB — OOM crash loop)
-  sed -i 's/max-old-space-size=[0-9]*/max-old-space-size=768/' "/etc/systemd/system/${SVC}.service" 2>/dev/null || true
+  # ensure the running service gets a sane heap (stay under systemd MemoryMax)
+  sed -i 's/max-old-space-size=[0-9]*/max-old-space-size=256/' "/etc/systemd/system/${SVC}.service" 2>/dev/null || true
   systemctl daemon-reload >/dev/null 2>&1
   systemctl enable "$SVC" >/dev/null 2>&1
   systemctl restart "$SVC" && say "    systemctl restart ${SVC}: OK"

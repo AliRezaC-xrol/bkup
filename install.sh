@@ -607,7 +607,7 @@ Type=simple
 WorkingDirectory=${APP_DIR}/.next/standalone
 EnvironmentFile=${APP_DIR}/.env
 Environment=NODE_ENV=production
-Environment=NODE_OPTIONS=--max-old-space-size=768
+Environment=NODE_OPTIONS=--max-old-space-size=256
 ExecStart=$(command -v node || echo /usr/bin/node) ${APP_DIR}/.next/standalone/server.js
 Restart=always
 RestartSec=10
