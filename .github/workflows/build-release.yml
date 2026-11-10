@@ -57,14 +57,16 @@ jobs:
           test -s db/custom.db
           mkdir -p .next/standalone/db
           cp -a db/custom.db .next/standalone/db/custom.db
+          # name the artifact after the tag: bkup-v1.3.1.tar.gz
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
           cd .next/standalone
-          tar -czf ../../bkup-standalone.tar.gz .
+          tar -czf "../../bkup-${TAG}.tar.gz" .
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          files: bkup-standalone.tar.gz
+          files: bkup-*.tar.gz
           fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

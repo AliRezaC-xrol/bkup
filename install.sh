@@ -242,13 +242,13 @@ dg_free_space() {
 resolve_prebuilt_url() {
   local u=""
   if [ -n "${TAG:-}" ]; then
-    u="https://github.com/${REPO_SLUG}/releases/download/${TAG}/bkup-standalone.tar.gz"
+    u="https://github.com/${REPO_SLUG}/releases/download/${TAG}/bkup-${TAG}.tar.gz"
     if curl -fsIL "${GH_AUTH[@]}" --max-time 15 "$u" >/dev/null 2>&1; then
       printf '%s' "$u"; return 0
     fi
     curl -sf "${GH_AUTH[@]}" --max-time 15 \
       "https://api.github.com/repos/${REPO_SLUG}/releases/latest" 2>/dev/null \
-      | grep -o '"browser_download_url": *"[^"]*bkup-standalone[^"]*"' | head -1 | cut -d'"' -f4
+      | grep -o '"browser_download_url": *"[^"]*bkup-[^"/]*\.tar\.gz"' | head -1 | cut -d'"' -f4
   fi
 }
 

@@ -323,12 +323,12 @@ say "    .env merged — existing values preserved, missing keys added"
 resolve_prebuilt_url() {
   local u=""
   if [ -n "${TAG:-}" ]; then
-    u="https://github.com/${REPO}/releases/download/${TAG}/bkup-standalone.tar.gz"
+    u="https://github.com/${REPO}/releases/download/${TAG}/bkup-${TAG}.tar.gz"
     if curl -fsIL "${AUTH[@]}" --max-time 15 "$u" >/dev/null 2>&1; then
       printf '%s' "$u"; return 0
     fi
     curl -sf "${AUTH[@]}" --max-time 15 "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
-      | grep -o '"browser_download_url": *"[^"]*bkup-standalone[^"]*"' | head -1 | cut -d'"' -f4
+      | grep -o '"browser_download_url": *"[^"]*bkup-[^"/]*\.tar\.gz"' | head -1 | cut -d'"' -f4
   fi
 }
 PREBUILT_URL="$(resolve_prebuilt_url || true)"
