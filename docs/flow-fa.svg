@@ -1,40 +1,46 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="480" viewBox="0 0 1200 480" role="img" aria-label="پنل‌ها به bkup و سپس تلگرام و سرور">
-  <rect x="1.5" y="1.5" width="1197" height="477" rx="22" fill="#161b22" stroke="#30363d" stroke-width="2"/>
+
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="520" viewBox="0 0 1200 520" role="img" aria-label="پنل‌ها به bkup و سپس تلگرام و سرور">
+  <rect x="1.5" y="1.5" width="1197" height="517" rx="22" fill="#161b22" stroke="#30363d" stroke-width="2"/>
 
   <!-- پنل‌ها -->
-  <rect x="890" y="58" width="250" height="84" rx="14" fill="#1c2128" stroke="#3d444d" stroke-width="2"/>
-  <text x="1015" y="109" text-anchor="middle" font-family="Tahoma,Segoe UI,Vazirmatn,sans-serif" font-size="26" font-weight="600" fill="#e6edf3" direction="rtl" unicode-bidi="plaintext">3x-ui</text>
+  <rect x="890" y="58" width="250" height="70" rx="14" fill="#1c2128" stroke="#3d444d" stroke-width="2"/>
+  <text x="1015" y="101" text-anchor="middle" font-family="Tahoma,Segoe UI,Vazirmatn,sans-serif" font-size="26" font-weight="600" fill="#e6edf3" direction="rtl" unicode-bidi="plaintext">3x-ui</text>
 
-  <rect x="890" y="157" width="250" height="84" rx="14" fill="#1c2128" stroke="#3d444d" stroke-width="2"/>
-  <text x="1015" y="208" text-anchor="middle" font-family="Tahoma,Segoe UI,Vazirmatn,sans-serif" font-size="26" font-weight="600" fill="#e6edf3" direction="rtl" unicode-bidi="plaintext">HM Panel</text>
+  <rect x="890" y="141" width="250" height="70" rx="14" fill="#1c2128" stroke="#3d444d" stroke-width="2"/>
+  <text x="1015" y="184" text-anchor="middle" font-family="Tahoma,Segoe UI,Vazirmatn,sans-serif" font-size="26" font-weight="600" fill="#e6edf3" direction="rtl" unicode-bidi="plaintext">HM Panel</text>
 
-  <rect x="890" y="256" width="250" height="84" rx="14" fill="#1c2128" stroke="#3d444d" stroke-width="2"/>
-  <text x="1015" y="307" text-anchor="middle" font-family="Tahoma,Segoe UI,Vazirmatn,sans-serif" font-size="26" font-weight="600" fill="#e6edf3" direction="rtl" unicode-bidi="plaintext">PasarGuard</text>
+  <rect x="890" y="224" width="250" height="70" rx="14" fill="#1c2128" stroke="#3d444d" stroke-width="2"/>
+  <text x="1015" y="267" text-anchor="middle" font-family="Tahoma,Segoe UI,Vazirmatn,sans-serif" font-size="26" font-weight="600" fill="#e6edf3" direction="rtl" unicode-bidi="plaintext">PasarGuard</text>
 
-  <rect x="890" y="355" width="250" height="84" rx="14" fill="#1c2128" stroke="#3d444d" stroke-width="2"/>
-  <text x="1015" y="406" text-anchor="middle" font-family="Tahoma,Segoe UI,Vazirmatn,sans-serif" font-size="26" font-weight="600" fill="#e6edf3" direction="rtl" unicode-bidi="plaintext">Rebecca</text>
+  <rect x="890" y="307" width="250" height="70" rx="14" fill="#1c2128" stroke="#3d444d" stroke-width="2"/>
+  <text x="1015" y="350" text-anchor="middle" font-family="Tahoma,Segoe UI,Vazirmatn,sans-serif" font-size="26" font-weight="600" fill="#e6edf3" direction="rtl" unicode-bidi="plaintext">Rebecca</text>
+
+  <!-- Custom Paths -->
+  <rect x="890" y="390" width="250" height="70" rx="14" fill="#1c2128" stroke="#3d444d" stroke-width="2"/>
+  <text x="1015" y="433" text-anchor="middle" font-family="Tahoma,Segoe UI,Vazirmatn,sans-serif" font-size="24" font-weight="600" fill="#e6edf3">Custom Paths</text>
 
   <text x="1015" y="42" text-anchor="middle" font-family="Tahoma,Segoe UI,Vazirmatn,sans-serif" font-size="20" font-weight="400" fill="#8b949e" direction="rtl" unicode-bidi="plaintext">پنل‌های شما</text>
 
   <!-- خطوط اتصال پنل‌ها به bkup -->
-  <line x1="890" y1="100" x2="848" y2="100" stroke="#58a6ff" stroke-width="3"/>
-  <line x1="890" y1="199" x2="848" y2="199" stroke="#58a6ff" stroke-width="3"/>
-  <line x1="890" y1="298" x2="848" y2="298" stroke="#58a6ff" stroke-width="3"/>
-  <line x1="890" y1="397" x2="848" y2="397" stroke="#58a6ff" stroke-width="3"/>
-  <line x1="848" y1="100" x2="848" y2="397" stroke="#58a6ff" stroke-width="3"/>
-  <line x1="848" y1="249" x2="714" y2="249" stroke="#58a6ff" stroke-width="3"/>
-  <polygon points="698,249 714,241 714,257" fill="#58a6ff"/>
-  <text x="773" y="233" text-anchor="middle" font-family="Tahoma,Segoe UI,Vazirmatn,sans-serif" font-size="20" font-weight="400" fill="#8b949e" direction="rtl" unicode-bidi="plaintext">بکاپ کامل</text>
+  <line x1="890" y1="93" x2="848" y2="93" stroke="#58a6ff" stroke-width="3"/>
+  <line x1="890" y1="176" x2="848" y2="176" stroke="#58a6ff" stroke-width="3"/>
+  <line x1="890" y1="259" x2="848" y2="259" stroke="#58a6ff" stroke-width="3"/>
+  <line x1="890" y1="342" x2="848" y2="342" stroke="#58a6ff" stroke-width="3"/>
+  <line x1="890" y1="425" x2="848" y2="425" stroke="#58a6ff" stroke-width="3"/>
+  <line x1="848" y1="93" x2="848" y2="425" stroke="#58a6ff" stroke-width="3"/>
+  <line x1="848" y1="259" x2="714" y2="259" stroke="#58a6ff" stroke-width="3"/>
+  <polygon points="698,259 714,251 714,267" fill="#58a6ff"/>
+  <text x="773" y="243" text-anchor="middle" font-family="Tahoma,Segoe UI,Vazirmatn,sans-serif" font-size="20" font-weight="400" fill="#8b949e" direction="rtl" unicode-bidi="plaintext">بکاپ کامل</text>
 
   <!-- bkup -->
-  <rect x="470" y="187" width="220" height="124" rx="18" fill="#1c2128" stroke="#58a6ff" stroke-width="2"/>
-  <text x="580" y="245" text-anchor="middle" font-family="Menlo,Consolas,monospace" font-size="34" font-weight="700" fill="#58a6ff" direction="rtl" unicode-bidi="plaintext">bkup</text>
-  <text x="580" y="287" text-anchor="middle" font-family="Tahoma,Segoe UI,Vazirmatn,sans-serif" font-size="18" font-weight="400" fill="#8b949e" direction="rtl" unicode-bidi="plaintext">بکاپ و بازیابی</text>
+  <rect x="470" y="197" width="220" height="124" rx="18" fill="#1c2128" stroke="#58a6ff" stroke-width="2"/>
+  <text x="580" y="255" text-anchor="middle" font-family="Menlo,Consolas,monospace" font-size="34" font-weight="700" fill="#58a6ff">bkup</text>
+  <text x="580" y="297" text-anchor="middle" font-family="Tahoma,Segoe UI,Vazirmatn,sans-serif" font-size="18" font-weight="400" fill="#8b949e" direction="rtl" unicode-bidi="plaintext">بکاپ و بازیابی</text>
 
   <!-- اتصال bkup به تلگرام و سرور -->
-  <line x1="470" y1="249" x2="400" y2="249" stroke="#58a6ff" stroke-width="3"/>
-  <line x1="400" y1="249" x2="400" y2="160" stroke="#58a6ff" stroke-width="3"/>
-  <line x1="400" y1="249" x2="400" y2="350" stroke="#3fb950" stroke-width="3"/>
+  <line x1="470" y1="259" x2="400" y2="259" stroke="#58a6ff" stroke-width="3"/>
+  <line x1="400" y1="259" x2="400" y2="160" stroke="#58a6ff" stroke-width="3"/>
+  <line x1="400" y1="259" x2="400" y2="350" stroke="#3fb950" stroke-width="3"/>
   <line x1="400" y1="160" x2="334" y2="160" stroke="#58a6ff" stroke-width="3"/>
   <polygon points="318,160 334,152 334,168" fill="#58a6ff"/>
   <line x1="400" y1="350" x2="334" y2="350" stroke="#3fb950" stroke-width="3"/>
