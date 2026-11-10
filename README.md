@@ -147,12 +147,7 @@ Notes:
 > **Restored where it came from.** A custom-path archive is always unpacked
 > back into the same directory it was taken from: bkup records the source
 > directory of every custom backup and restores into exactly that path, so a
-> directory backup behaves like a panel backup — it goes home. The target field
-> in the panel is filled from the backup and locked.
->
-> The terminal menu of `bkup` has no custom-path restore item (item 12 was
-> removed) — directory archives are restored from the **web panel only**
-> (Restore tab).
+> directory backup behaves like a panel backup — it goes home. 
 
 ## Restore Backup to a Server
 
