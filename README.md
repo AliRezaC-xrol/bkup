@@ -46,7 +46,7 @@ connection with one click. The backup interval is set in **seconds**.
 > changelog.
 >
 > **v1.3.0** added **Custom Paths** backup and restore, fixed the crash
-> that killed the service when only one panel was backed up, fixed the
+> that killed the service when only one panel was backed up.
 
 ## Install
 
