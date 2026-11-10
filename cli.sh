@@ -348,7 +348,6 @@ menu() {
   ${B}11)${N} Uninstall
   ${B}0)${N}  Exit
 
-  ${D}backups, settings & custom-path restore → web panel (option 2)${N}
 MENU
     echo ""
     read -rp "$(echo -e "${B}bkup${N} > ")" choice
