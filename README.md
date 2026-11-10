@@ -47,8 +47,6 @@ connection with one click. The backup interval is set in **seconds**.
 >
 > **v1.3.0** added **Custom Paths** backup and restore, fixed the crash
 > that killed the service when only one panel was backed up, fixed the
-> **Copy shown** button in the log panel, and made every server log and
-> message English.
 
 ## Install
 
